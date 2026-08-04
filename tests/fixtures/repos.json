@@ -1,0 +1,16 @@
+{
+  "langgraph": {
+    "name": "langgraph",
+    "license": "MIT",
+    "stars": 38853,
+    "language": "Python",
+    "pushed_at": "2026-08-02"
+  },
+  "crewai": {
+    "name": "crewai",
+    "license": "MIT",
+    "stars": 56603,
+    "language": "Python",
+    "pushed_at": "2026-08-04"
+  }
+}
