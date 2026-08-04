@@ -81,6 +81,10 @@ def test_requires_approval_tool_blocked_even_if_safe(tmp_path: Path) -> None:
     assert result.status == "blocked"
     assert executed == []  # handler 未执行
     assert len(gateway.approvals) == 1
+    # 审计 reason 明确记录拦截原因（防未来拦截分支回归不可见）
+    lines = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    blocked = [line for line in lines if '"tool_blocked"' in line]
+    assert blocked and "dangerous_or_requires_approval_m1" in blocked[-1]
 
 
 def test_tool_error_recorded(tool_gateway: ToolGateway) -> None:

@@ -75,7 +75,7 @@ class ToolGateway:
             )
             return ToolResult(
                 ok=False,
-                error="dangerous tool blocked: approval required (M3)",
+                error="tool blocked: approval required (M3)",
                 status="blocked",
             )
 

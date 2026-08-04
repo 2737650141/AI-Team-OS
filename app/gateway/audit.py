@@ -1,4 +1,8 @@
-"""Audit Log：JSONL 结构化审计日志（R09/R20：密钥与机密脱敏）。"""
+"""Audit Log：JSONL 结构化审计日志（R09/R20：密钥与机密脱敏）。
+
+脱敏为"尽力而为"：覆盖 sk-*/Bearer/AKIA/ghp_/api_key=/password=/PEM 整块等常见形态；
+裸密钥值（无键名前缀）与不完整 PEM（有 BEGIN 无 END）是已知边界，不做全覆盖承诺。
+"""
 
 from __future__ import annotations
 
@@ -12,9 +16,10 @@ _SECRET_RE = re.compile(
     r"|Bearer\s+[A-Za-z0-9._-]{8,}"
     r"|AKIA[0-9A-Z]{16}"
     r"|ghp_[A-Za-z0-9]{36}"
-    r"|api_key[=:]\s*[A-Za-z0-9._-]{8,}"
-    r"|password[=:]\s*[A-Za-z0-9._-]{8,}"
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+    r"|api_key[=:]\s*[\"']?[A-Za-z0-9._-]{8,}"
+    r"|password[=:]\s*[\"']?[A-Za-z0-9._-]{8,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----)",
+    re.DOTALL,
 )
 
 
