@@ -51,8 +51,9 @@ class ToolGateway:
             "ts": _now(),
         }
 
-        # GT-10（M1）：dangerous 必须确定性拦截，handler 永不执行；审批流在 M3 实现
-        if tool.risk_level is RiskLevel.DANGEROUS:
+        # GT-10（M1）：dangerous 或 requires_approval 必须确定性拦截，
+        # handler 永不执行；审批流在 M3 实现
+        if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval:
             self.approvals.append(
                 {
                     "id": uuid.uuid4().hex[:12],
@@ -70,7 +71,7 @@ class ToolGateway:
                 "tool_blocked",
                 task_id=self._task_id,
                 tool=tool_name,
-                reason="dangerous_requires_approval_m1",
+                reason="dangerous_or_requires_approval_m1",
             )
             return ToolResult(
                 ok=False,

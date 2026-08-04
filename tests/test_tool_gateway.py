@@ -52,6 +52,37 @@ def test_idempotency_skips_duplicate(tool_gateway: ToolGateway) -> None:
     assert len(tool_gateway.evidence) == 1
 
 
+def test_requires_approval_tool_blocked_even_if_safe(tmp_path: Path) -> None:
+    """security review：错标 risk_level=SAFE 但 requires_approval=True 的工具同样被拦截。"""
+    from app.tools.spec import RiskLevel, ToolSpec
+
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    gateway = ToolGateway(audit=audit, task_id="t1")
+    executed: list[str] = []
+
+    def handler(path: str, content: str) -> dict:
+        executed.append(path)
+        return {"ok": True}
+
+    gateway.register(
+        ToolSpec(
+            name="mislabeled_tool",
+            description="错标风险的写工具",
+            input_schema={"path": "str", "content": "str"},
+            risk_level=RiskLevel.SAFE,
+            read_only=False,
+            requires_approval=True,
+            handler=handler,
+        )
+    )
+
+    result = gateway.invoke("mislabeled_tool", {"path": "/x", "content": "y"})
+
+    assert result.status == "blocked"
+    assert executed == []  # handler 未执行
+    assert len(gateway.approvals) == 1
+
+
 def test_tool_error_recorded(tool_gateway: ToolGateway) -> None:
     """GT-08 基础：工具失败返回 error 且记录。"""
     result = tool_gateway.invoke("fixture_repo_lookup", {"repo_name": "missing_repo"})

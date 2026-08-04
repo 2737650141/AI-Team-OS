@@ -7,7 +7,15 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-_SECRET_RE = re.compile(r"(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,})")
+_SECRET_RE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{8,}"
+    r"|Bearer\s+[A-Za-z0-9._-]{8,}"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|ghp_[A-Za-z0-9]{36}"
+    r"|api_key[=:]\s*[A-Za-z0-9._-]{8,}"
+    r"|password[=:]\s*[A-Za-z0-9._-]{8,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
+)
 
 
 def redact(text: str) -> str:

@@ -11,6 +11,12 @@ def test_redact_secrets() -> None:
     assert "sk-" not in redact("key=sk-abcDEF1234567890xyz")
     assert "***" in redact("key=sk-abcDEF1234567890xyz")
     assert redact("no secrets here") == "no secrets here"
+    # security review：补充常见密钥形态
+    assert "AKIA" not in redact("aws=AKIA1234567890ABCDEF")
+    assert "ghp_" not in redact("gh=ghp_abcdefghijklmnopqrstuvwxyz0123456789")
+    assert "sk-" not in redact("header api_key=sk-abcdef1234567890")
+    assert "secret" not in redact("db password=supersecretvalue123")
+    assert "PRIVATE KEY" not in redact("-----BEGIN RSA PRIVATE KEY-----\nabc")
 
 
 def test_audit_log_redacts_on_write(tmp_path: Path) -> None:
