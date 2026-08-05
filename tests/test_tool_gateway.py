@@ -42,13 +42,15 @@ def test_unknown_tool_rejected(tool_gateway: ToolGateway) -> None:
 
 
 def test_idempotency_skips_duplicate(tool_gateway: ToolGateway) -> None:
-    """R19：恢复/重放时同一调用不重复执行。"""
+    """R19 + 004 4.1：恢复/重放时同一调用不重复执行，改为缓存复用 cached_success_result。"""
     first = tool_gateway.invoke("fixture_repo_lookup", {"repo_name": "crewai"})
     second = tool_gateway.invoke("fixture_repo_lookup", {"repo_name": "crewai"})
 
     assert first.ok is True
-    assert second.status == "skipped"
-    assert len(tool_gateway.tool_calls) == 1
+    assert second.status == "cached_success_result"
+    assert second.ok is True
+    assert second.evidence_id == first.evidence_id  # Evidence 复用
+    # 两次调用均有记录（原始 ok + 缓存命中 cached_success_result），审计轨迹完整
     assert len(tool_gateway.evidence) == 1
 
 

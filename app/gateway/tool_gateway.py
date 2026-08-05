@@ -52,6 +52,8 @@ class ToolGateway:
         self.tool_calls: list[dict[str, Any]] = list(initial_calls or ())
         self.evidence: list[dict[str, Any]] = list(initial_evidence or ())
         self.approvals: list[dict[str, Any]] = list(initial_approvals or ())
+        # 幂等键 → 成功结果缓存（004 4.x）：命中时复用完整结构化结果，handler 不重复执行
+        self._result_cache: dict[str, dict[str, Any]] = {}
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
 
@@ -87,10 +89,44 @@ class ToolGateway:
             f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)}".encode()
         ).hexdigest()[:16]
         if key in self._seen_keys:
+            hit = self._result_cache.get(key)
+            if hit is None:
+                # 跨进程恢复后缓存为空：从 evidence 记录恢复退化缓存（脱敏摘要 + 证据引用）
+                for e in reversed(self.evidence):
+                    if e.get("idempotency_key") == key:
+                        hit = {
+                            "data": e.get("summary", ""),
+                            "evidence_id": e["id"],
+                            "ts": e.get("ts", ""),
+                            "hash": e.get("content_hash", ""),
+                        }
+                        self._result_cache[key] = hit
+                        break
+            if hit is not None:
+                # 004 4.1：cached_success_result —— 复用已有成功结果，不重复执行副作用
+                record = _new_record(self._task_id, tool_name, args, key, role)
+                record["status"] = "cached_success_result"
+                record["cached_from"] = hit["evidence_id"]
+                record["content_hash"] = hit.get("hash", "")
+                self.tool_calls.append(record)
+                self._audit.entry(
+                    "tool_cached_success", task_id=self._task_id, tool=tool_name, key=key
+                )
+                return ToolResult(
+                    ok=True,
+                    data=hit["data"],
+                    status="cached_success_result",
+                    evidence_id=hit["evidence_id"],
+                    cached_from=hit["evidence_id"],
+                    original_ts=hit.get("ts"),
+                    content_hash=hit.get("hash"),
+                )
             self._audit.entry(
                 "tool_skipped_duplicate", task_id=self._task_id, tool=tool_name, key=key
             )
-            return ToolResult(ok=False, error="duplicate call skipped", status="skipped")
+            return ToolResult(
+                ok=False, error="duplicate call skipped (no cached result)", status="skipped"
+            )
 
         record = _new_record(self._task_id, tool_name, args, key, role)
 
@@ -140,15 +176,25 @@ class ToolGateway:
         record["result_summary"] = redact(str(data))[:200]
         self.tool_calls.append(record)
         evidence_id = uuid.uuid4().hex[:12]
+        ts = _now()
+        content_hash = hashlib.sha256(str(data).encode()).hexdigest()[:16]
         self.evidence.append(
             {
                 "id": evidence_id,
                 "task_id": self._task_id,
                 "tool": tool_name,
                 "summary": redact(str(data))[:200],
-                "ts": _now(),
+                "ts": ts,
+                "idempotency_key": key,
+                "content_hash": content_hash,
             }
         )
+        self._result_cache[key] = {
+            "data": data,
+            "evidence_id": evidence_id,
+            "ts": ts,
+            "hash": content_hash,
+        }
         self._audit.entry(
             "tool_ok", task_id=self._task_id, tool=tool_name, read_only=tool.read_only
         )

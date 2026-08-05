@@ -180,6 +180,25 @@ class FakeReviewer:
                 accepted_claims=[],
                 rejected_claims=[],
             )
+        if (
+            self._scenario == "review_reject_tool_once"
+            and subtask.subtask_id == "s1"
+            and len(subtask.review_history) == 0
+        ):
+            # 004 4.2：工具型子任务首次拒绝一次 → 返工时缓存命中（handler 不重跑）→ 通过
+            return ReviewResult(
+                verdict="reject",
+                issues=[
+                    ReviewIssue(
+                        code="scenario_reject_tool_once",
+                        message="测试场景：工具型首次拒绝",
+                        subtask_id=subtask.subtask_id,
+                    )
+                ],
+                rework_targets=[subtask.subtask_id],
+                accepted_claims=[],
+                rejected_claims=[],
+            )
         claims = subtask.execution_result.claims if subtask.execution_result else []
         return ReviewResult(
             verdict="pass",
