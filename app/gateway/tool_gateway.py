@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.gateway.audit import AuditLog
+from app.gateway.audit import AuditLog, redact
 from app.tools.spec import RiskLevel, ToolResult, ToolSpec
 
 
@@ -45,7 +45,7 @@ class ToolGateway:
         record: dict[str, Any] = {
             "id": uuid.uuid4().hex[:12],
             "tool": tool_name,
-            "args": args,
+            "args": {k: redact(str(v)) for k, v in args.items()},
             "key": key,
             "role": role,
             "ts": _now(),
@@ -54,12 +54,13 @@ class ToolGateway:
         # GT-10（M1）：dangerous 或 requires_approval 必须确定性拦截，
         # handler 永不执行；审批流在 M3 实现
         if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval:
+            self._seen_keys.add(key)  # blocked 同样登记幂等键，避免重复生成 pending approval
             self.approvals.append(
                 {
                     "id": uuid.uuid4().hex[:12],
                     "task_id": self._task_id,
                     "tool": tool_name,
-                    "args_summary": str(args)[:200],
+                    "args_summary": redact(str(args))[:200],
                     "status": "pending",
                     "decided_by": None,
                     "ts": _now(),

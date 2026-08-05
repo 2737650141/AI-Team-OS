@@ -68,7 +68,7 @@ class BudgetController:
             or self._used_cost + cost > self._cost_budget
         ):
             raise BudgetExceeded(
-                "usage", float(self._used_tokens + add_tokens), float(self._token_budget)
+                "usage", float(self._used_tokens), float(self._token_budget)
             )
         self._used_tokens += add_tokens
         self._used_cost += cost

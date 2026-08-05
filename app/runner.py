@@ -64,6 +64,8 @@ def run_task(
         state.current_status = TaskStatus.FAILED
         state.failure_code = FailureCode.BUDGET_EXCEEDED
         state.final_result = str(exc)
+    finally:
+        conn.close()
 
     return RunReport(
         task_id=task_id,

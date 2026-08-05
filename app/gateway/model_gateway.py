@@ -78,8 +78,8 @@ class ModelGateway:
     def chat(
         self, messages: list[dict[str, str]], model: str = "fake", max_tokens: int = 512
     ) -> LLMResponse:
-        # 调用前预算预留：预算不足时不再发起调用（GT-09）；cost 按 provider 单次成本估算
-        estimated_cost = getattr(self._provider, "cost_per_call", 0.0)
+        # 调用前预算预留：预算不足时不再发起调用（GT-09）；cost 经 Provider 接口估算
+        estimated_cost = self._provider.estimate_cost(max_tokens)
         if not self._budget.can_call(
             estimated_input_tokens=max_tokens,
             estimated_output_tokens=max_tokens,

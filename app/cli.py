@@ -22,6 +22,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "run":
+        if args.budget_tokens <= 0 or args.budget_cost <= 0:
+            parser.error("--budget-tokens 与 --budget-cost 必须为正数")
         report = run_task(
             args.goal,
             token_budget=args.budget_tokens,
