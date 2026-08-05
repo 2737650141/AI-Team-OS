@@ -6,10 +6,18 @@ TaskStatusStr / FailureCodeStr 为"字符串 + 枚举成员校验"，未知值�
 
 from __future__ import annotations
 
+import operator
 from enum import Enum
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, Field
+
+from app.core.schemas import (
+    ClarificationRecord,
+    ExecutionResult,
+    ReviewResult,
+    SubtaskSpec,
+)
 
 CHECKPOINT_VERSION = "1.0"
 
@@ -38,6 +46,10 @@ class FailureCode(str, Enum):
     BUDGET_EXCEEDED = "budget_exceeded"
     SCHEMA_INVALID = "schema_invalid"
     TOOL_BLOCKED = "tool_blocked"
+    PLANNING_INVALID = "planning_invalid"
+    REWORK_LIMIT_EXCEEDED = "rework_limit_exceeded"
+    INFORMATION_INSUFFICIENT = "information_insufficient"
+    FINALIZE_CONDITIONS_NOT_MET = "finalize_conditions_not_met"
 
 
 def _validate_status(value: Any) -> str:
@@ -91,6 +103,47 @@ class Approval(BaseModel):
     ts: str
 
 
+class SubtaskState(SubtaskSpec):
+    """子任务状态：spec 字段由 Planner 创建，运行时字段由确定性节点更新（004 四）。"""
+
+    runtime_status: str = "pending"  # pending | running | passed | rejected
+    execution_result: ExecutionResult | None = None
+    evidence_refs: list[str] = Field(default_factory=list)
+    review_history: list[ReviewResult] = Field(default_factory=list)
+    rework_count: int = 0
+
+
+def merge_subtasks(left: list[SubtaskState], right: list[SubtaskState]) -> list[SubtaskState]:
+    """LangGraph 官方 reducer 机制：按 subtask_id 分片合并，并行子任务互不覆盖（004 四/八）。"""
+    merged = {s.subtask_id: s for s in left}
+    for s in right:
+        merged[s.subtask_id] = s
+    return list(merged.values())
+
+
+def _record_id(item: Any) -> Any:
+    return item.get("id") if isinstance(item, dict) else item.id
+
+
+def merge_tool_calls(left: list[Any], right: list[Any]) -> list[Any]:
+    """按记录 id 去重合并：并行 exec 回写全量快照时不重复（004 四：共享列表用官方 reducer）。"""
+    merged = {_record_id(c): c for c in left}
+    for c in right:
+        merged[_record_id(c)] = c
+    return list(merged.values())
+
+
+def merge_evidence(left: list[Any], right: list[Any]) -> list[Any]:
+    merged = {_record_id(e): e for e in left}
+    for e in right:
+        merged[_record_id(e)] = e
+    return list(merged.values())
+
+
+def merge_keys(left: list[str], right: list[str]) -> list[str]:
+    return list(dict.fromkeys([*left, *right]))
+
+
 class TaskState(BaseModel):
     """LangGraph 状态（单一事实源）。"""
 
@@ -108,8 +161,21 @@ class TaskState(BaseModel):
     checkpoint_version: str = CHECKPOINT_VERSION
     failure_code: FailureCodeStr = None
     paused_from_status: TaskStatusStr | None = None
-    idempotency_keys: list[str] = Field(default_factory=list)
-    tool_calls: list[ToolCallRecord] = Field(default_factory=list)
-    evidence: list[Evidence] = Field(default_factory=list)
+    idempotency_keys: Annotated[list[str], merge_keys] = Field(default_factory=list)
+    tool_calls: Annotated[list[ToolCallRecord], merge_tool_calls] = Field(default_factory=list)
+    evidence: Annotated[list[Evidence], merge_evidence] = Field(default_factory=list)
     approvals: list[Approval] = Field(default_factory=list)
     final_result: str | None = None
+    # ===== M2 多智能体字段（004 四） =====
+    clarified_goal: str | None = None
+    clarification_history: Annotated[list[ClarificationRecord], operator.add] = Field(
+        default_factory=list
+    )
+    plan: dict[str, Any] | None = None
+    subtasks: Annotated[list[SubtaskState], merge_subtasks] = Field(default_factory=list)
+    selected_agents: dict[str, str] = Field(default_factory=dict)
+    review_history: Annotated[list[ReviewResult], operator.add] = Field(default_factory=list)
+    rework_count: int = 0
+    final_evidence: list[Evidence] = Field(default_factory=list)
+    current_subtask_id: str | None = None
+    pending_clarification_id: str | None = None

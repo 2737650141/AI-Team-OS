@@ -1,0 +1,103 @@
+"""Agent Registry（004 五）：确定性代码管理，LLM 不得创建新角色或修改工具白名单。"""
+
+from __future__ import annotations
+
+from app.core.schemas import AgentSpec
+
+
+class AgentRegistry:
+    def __init__(self) -> None:
+        self._agents: dict[str, AgentSpec] = {}
+
+    def register(self, spec: AgentSpec) -> None:
+        self._agents[spec.agent_id] = spec
+
+    def get(self, agent_id: str) -> AgentSpec:
+        if agent_id not in self._agents:
+            raise KeyError(f"unknown agent: {agent_id}")
+        return self._agents[agent_id]
+
+    def by_role(self, role_type: str) -> list[AgentSpec]:
+        return [a for a in self._agents.values() if a.role_type == role_type and a.enabled]
+
+    def is_enabled(self, agent_id: str) -> bool:
+        return self.get(agent_id).enabled
+
+    def all(self) -> list[AgentSpec]:
+        return list(self._agents.values())
+
+
+def default_registry() -> AgentRegistry:
+    """预注册五种核心角色类型（004 五）。
+
+    Executor 只注册（enabled=False）：disabled Agent 不可被派发，
+    第一条研究链路仅运行 Supervisor / Planner / Researcher / Reviewer。
+    """
+    registry = AgentRegistry()
+    registry.register(
+        AgentSpec(
+            agent_id="supervisor",
+            role_type="supervisor",
+            display_name="Supervisor",
+            goal="调度任务并保证验收标准达成",
+            instructions=(
+                "确定性调度 + 有限模型决策；不直接调用业务工具；Reviewer 未通过不得完成任务。"
+            ),
+            allowed_tools=[],
+            token_limit=32000,
+            max_tool_calls=0,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            agent_id="planner",
+            role_type="planner",
+            display_name="Planner",
+            goal="把澄清后的目标拆解为结构化计划",
+            instructions="输出 Plan Schema；不调用外部工具；预算分配总和不得超过任务总预算。",
+            allowed_tools=[],
+            token_limit=16000,
+            max_tool_calls=0,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            agent_id="researcher",
+            role_type="researcher",
+            display_name="Researcher",
+            goal="采集事实与证据",
+            instructions=(
+                "只允许只读 Fixture 工具；输出 ResearchReport；"
+                "无 evidence 的 Claim 必须标记未验证；不能直接写 final_result。"
+            ),
+            allowed_tools=["fixture_repo_lookup", "fixture_source_lookup"],
+            token_limit=64000,
+            max_tool_calls=10,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            agent_id="executor",
+            role_type="executor",
+            display_name="Executor",
+            goal="执行已批准的实施性工作（M2 不执行写操作）",
+            instructions="M2 只注册不执行；disabled 不可被派发。",
+            allowed_tools=[],
+            token_limit=64000,
+            max_tool_calls=0,
+            enabled=False,
+        )
+    )
+    registry.register(
+        AgentSpec(
+            agent_id="reviewer",
+            role_type="reviewer",
+            display_name="Reviewer",
+            goal="独立审查产物",
+            instructions="确定性检查先行；LLM 评审不得把确定性失败改为通过。",
+            allowed_tools=[],
+            token_limit=16000,
+            max_tool_calls=0,
+        )
+    )
+    return registry
