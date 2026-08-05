@@ -69,10 +69,19 @@ class BudgetController:
     def record(self, input_tokens: int, output_tokens: int, cost: float) -> None:
         """Model Gateway 唯一权威记账入口：超限则拒绝累加并抛异常（实际消耗不超过硬预算）。"""
         add_tokens = input_tokens + output_tokens
-        if (
-            self._used_tokens + add_tokens > self._token_budget
-            or self._used_cost + cost > self._cost_budget
-        ):
-            raise BudgetExceeded("usage", float(self._used_tokens), float(self._token_budget))
+        tokens_over = self._used_tokens + add_tokens > self._token_budget
+        cost_over = self._used_cost + cost > self._cost_budget
+        if tokens_over or cost_over:
+            used = (
+                float(self._used_tokens + add_tokens)
+                if tokens_over
+                else float(self._used_cost + cost)
+            )
+            limit = (
+                float(self._cost_budget)
+                if cost_over and not tokens_over
+                else float(self._token_budget)
+            )
+            raise BudgetExceeded("usage", used, limit)
         self._used_tokens += add_tokens
         self._used_cost += cost
