@@ -89,6 +89,12 @@ def main(argv: list[str] | None = None) -> None:
     tools_info = sub.add_parser("tool-info", help="查看单个工具信息")
     tools_info.add_argument("tool", help="工具名")
     sub.add_parser("allowed-read-roots", help="显示本地只读根目录（AI_TEAM_ALLOWED_READ_ROOTS）")
+    sub.add_parser("acceptance-status", help="验收状态总览（007 3.3；不显示 Token/Key）")
+    acceptance_run_parser = sub.add_parser("acceptance-run", help="单项目真实验收（不混入 pytest）")
+    acceptance_run_parser.add_argument(
+        "name",
+        choices=["real-model", "github-readonly", "web-readonly", "local-readonly"],
+    )
     evidence = sub.add_parser("evidence", help="列出任务的 Evidence 摘要")
     evidence.add_argument("run_id", help="run_id（= checkpoint thread_id）")
     evidence.add_argument("--data-dir", default=None)
@@ -122,6 +128,14 @@ def main(argv: list[str] | None = None) -> None:
 
         roots = allowed_read_roots(settings)
         print(f"allowed_read_roots: {roots or '(未配置，本地文件工具不可用)'}")
+    elif args.command == "acceptance-status":
+        from app.core.acceptance import acceptance_status
+
+        print(json.dumps(acceptance_status(settings), ensure_ascii=False, indent=2))
+    elif args.command == "acceptance-run":
+        from app.core.acceptance import acceptance_run
+
+        print(json.dumps(acceptance_run(args.name, settings), ensure_ascii=False, indent=2))
     elif args.command == "evidence":
         from app.runner import evidence_list
 
