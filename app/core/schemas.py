@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -84,6 +84,7 @@ class ExecutionResult(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     unverified_items: list[str] = Field(default_factory=list)
     ts: str
+    metadata: dict[str, Any] = Field(default_factory=dict)  # M3-C：审批/补丁/测试报告引用
 
 
 class ReviewIssue(BaseModel):
@@ -116,6 +117,14 @@ class ClarificationPayload(BaseModel):
 
     clarification_id: str
     answer: str = Field(min_length=1)
+
+
+class ApprovalPayload(BaseModel):
+    """审批恢复值（007 5.4）：interrupt 后用户决定（approved/rejected）。"""
+
+    approval_id: str = Field(min_length=1)
+    decision: Literal["approved", "rejected"] = "approved"
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class FinalReport(BaseModel):

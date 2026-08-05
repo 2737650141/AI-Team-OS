@@ -15,6 +15,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -73,11 +74,20 @@ class ApprovalRequest(BaseModel):
 
 
 class ApprovalService:
-    """审批服务：创建 / 决策 / 验证（操作哈希绑定，防 TOCTOU）。"""
+    """审批服务：创建 / 决策 / 验证（操作哈希绑定，防 TOCTOU）。
 
-    def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> None:
+    可选持久化（JSONL，跨进程恢复用，007 5.4/十九-11）。
+    """
+
+    def __init__(
+        self, ttl_seconds: int = DEFAULT_TTL_SECONDS, storage_path: Path | None = None
+    ) -> None:
         self._ttl = ttl_seconds
         self._requests: dict[str, ApprovalRequest] = {}
+        self._storage_path = storage_path
+        if storage_path is not None:
+            storage_path.parent.mkdir(parents=True, exist_ok=True)
+            self._load()
 
     # ---- 哈希计算（5.3） ----
     @staticmethod
@@ -160,6 +170,7 @@ class ApprovalService:
             expires_at=expires_at,
         )
         self._requests[approval_id] = request
+        self._persist(request)
         return request
 
     def get(self, approval_id: str) -> ApprovalRequest | None:
@@ -198,6 +209,7 @@ class ApprovalService:
         request.status = decision
         request.decided_at = _now()
         request.decision_reason = reason
+        self._persist(request)
         return request
 
     def verify_execution(
@@ -223,3 +235,18 @@ class ApprovalService:
             raise ApprovalError("parameter hash mismatch; approval invalidated (GT-W04)")
         if target_hash and target_hash != request.target_hash:
             raise ApprovalError("target hash mismatch; approval invalidated (GT-W04)")
+
+    # ---- 持久化（跨进程恢复，十九-11） ----
+    def _persist(self, request: ApprovalRequest) -> None:
+        if self._storage_path is None:
+            return
+        with self._storage_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(request.model_dump(), ensure_ascii=False) + "\n")
+
+    def _load(self) -> None:
+        if self._storage_path is None or not self._storage_path.exists():
+            return
+        for line in self._storage_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                request = ApprovalRequest(**json.loads(line))
+                self._requests[request.approval_id] = request

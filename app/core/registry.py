@@ -80,12 +80,26 @@ def default_registry() -> AgentRegistry:
             agent_id="executor",
             role_type="executor",
             display_name="Executor",
-            goal="执行已批准的实施性工作（M2 不执行写操作）",
-            instructions="M2 只注册不执行；disabled 不可被派发。",
-            allowed_tools=[],
+            goal="生成变更提案并经审批后实施（007 十二：正式启用）",
+            instructions=(
+                "只允许：创建 PatchProposal、读取 worktree、调用沙箱写工具、"
+                "调用受限测试命令、生成 Artifact；禁止自行批准、访问源项目、"
+                "调用网络、未登记命令、remote/push/发送/设备。"
+            ),
+            allowed_tools=[
+                "sandbox_create_directory",
+                "sandbox_write_file",
+                "sandbox_apply_patch",
+                "sandbox_copy_file",
+                "sandbox_move_file",
+                "sandbox_delete_path",
+                "sandbox_restore_backup",
+                "fixture_repo_lookup",
+                "fixture_source_lookup",
+            ],
             token_limit=64000,
-            max_tool_calls=0,
-            enabled=False,
+            max_tool_calls=20,
+            enabled=True,  # 007 十二：Executor 正式启用（M3-C）
         )
     )
     registry.register(

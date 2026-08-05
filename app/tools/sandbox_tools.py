@@ -315,6 +315,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             requires_approval=True,  # 网关放行需 ctx.approval_id（M3-C 审批流）
             handler=handler,
             roles=("executor",),
+            accepts_ctx=True,  # M3-C：写工具需 ctx（approval_id 绑定）
         )
         for name, desc, schema, handler, risk in specs
     ]

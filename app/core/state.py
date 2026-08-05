@@ -180,3 +180,4 @@ class TaskState(BaseModel):
     final_evidence: list[Evidence] = Field(default_factory=list)
     current_subtask_id: str | None = None
     pending_clarification_id: str | None = None
+    pending_approval_id: str | None = None  # 007 5.4：审批 interrupt 暂停标记

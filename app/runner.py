@@ -19,13 +19,14 @@ from pathlib import Path
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
+from app.agents.executor import SandboxContext
 from app.core.budget import BudgetController, BudgetExceeded
 from app.core.config import AppSettings, allowed_read_roots, load_settings
 from app.core.context_builder import ContextBuilder
 from app.core.evidence import EvidenceWriter
 from app.core.registry import default_registry
 from app.core.resume import ResumePayload
-from app.core.schemas import ClarificationPayload
+from app.core.schemas import ApprovalPayload, ClarificationPayload
 from app.core.state import TaskState
 from app.gateway.audit import AuditLog
 from app.gateway.fake_provider import FakeModelProvider
@@ -71,6 +72,7 @@ class RunContext:
     context: ContextBuilder
     settings: AppSettings
     local_roots: list = field(default_factory=list)
+    sandbox: SandboxContext | None = None  # 007 四-十三：沙箱执行上下文
 
 
 def build_provider(settings: AppSettings):
@@ -180,6 +182,10 @@ def _build_context(
         settings, audit=audit, task_id=state.task_id, overrides=model_override_roles or None
     )
     context = ContextBuilder(settings)
+    # 007 四-十三：沙箱执行上下文（sandbox_* 目标任务；工作区从磁盘加载或新建）
+    sandbox = _build_sandbox_context(
+        state, data_dir, tool_gateway, model_overrides, settings, audit
+    )
     return RunContext(
         budget=budget,
         audit=audit,
@@ -190,7 +196,55 @@ def _build_context(
         context=context,
         settings=settings,
         local_roots=local_roots,
+        sandbox=sandbox,
     )
+
+
+def _build_sandbox_context(
+    state: TaskState,
+    data_dir: Path,
+    tool_gateway: ToolGateway,
+    model_overrides: dict[str, str] | None,
+    settings: AppSettings,
+    audit: AuditLog,
+) -> SandboxContext | None:
+    """构造沙箱上下文（工作区加载/创建 + 审批 + Artifact + 命令执行器 + 写工具注册）。"""
+    if not state.user_goal.startswith("sandbox_"):
+        return None
+    from app.agents.executor import SandboxContext
+    from app.core.approval import ApprovalService
+    from app.core.artifacts import ArtifactWriter
+    from app.core.command_runner import CommandPolicy, SandboxCommandRunner
+    from app.core.workspace import WorkspaceError, WorkspaceManager
+    from app.tools.sandbox_tools import SandboxToolset, build_sandbox_tools
+
+    ws_mgr = WorkspaceManager(data_dir / "runtime")
+    try:
+        manifest = ws_mgr.load_manifest(state.task_id)
+    except WorkspaceError:
+        alias = (model_overrides or {}).get("project_alias")
+        if not alias:
+            raise ValueError("sandbox task requires --project <alias> (007 4.2)")
+        source = ws_mgr.resolve_project_alias(alias, allowed_read_roots(settings))
+        manifest = ws_mgr.create_workspace(state.task_id, alias, source)
+    worktree = Path(manifest.worktree_path)
+    task_dir = data_dir / "runtime" / "workspaces" / state.task_id
+    approval = ApprovalService(storage_path=task_dir / "approvals.jsonl")
+    artifacts = ArtifactWriter(data_dir / "runtime", state.task_id)
+    command_runner = SandboxCommandRunner(CommandPolicy(), worktree, logs_dir=task_dir / "logs")
+    sandbox = SandboxContext(
+        worktree=worktree,
+        approval=approval,
+        artifacts=artifacts,
+        command_runner=command_runner,
+        tool_gateway=tool_gateway,
+        task_id=state.task_id,
+    )
+    # 沙箱写工具注册（roles=executor + requires_approval；网关放行需 ctx.approval_id）
+    toolset = SandboxToolset(worktree, state.task_id, artifacts, approval)
+    for spec in build_sandbox_tools(toolset):
+        tool_gateway.register(spec)
+    return sandbox
 
 
 def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
@@ -203,6 +257,7 @@ def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
         router=ctx.router,
         context=ctx.context,
         settings=ctx.settings,
+        sandbox_context=ctx.sandbox,
     )
     return graph.compile(checkpointer=SqliteSaver(conn))
 
@@ -245,13 +300,24 @@ def run_task(
         result = compiled.invoke(state.model_dump(), config={"configurable": {"thread_id": run_id}})
         state = TaskState.model_validate(result)
         if "__interrupt__" in result:
-            # 澄清 interrupt：写回 paused（跨进程 status 可读），等待 resume --clarification
+            # 澄清/审批 interrupt：写回 paused（跨进程 status 可读），等待恢复
+            interrupt_value = result["__interrupt__"][0].value if result["__interrupt__"] else None
+            pending_approval = (
+                interrupt_value.approval_id
+                if isinstance(interrupt_value, ApprovalPayload)
+                else None
+            )
             compiled.update_state(
                 {"configurable": {"thread_id": run_id}},
-                {"current_status": "paused", "paused_from_status": state.current_status},
+                {
+                    "current_status": "paused",
+                    "paused_from_status": state.current_status,
+                    "pending_approval_id": pending_approval,
+                },
             )
             state.current_status = "paused"
             state.paused_from_status = state.paused_from_status or "created"
+            state.pending_approval_id = pending_approval
             return RunReport(
                 task_id,
                 run_id,
@@ -291,7 +357,7 @@ def run_task(
 
 def resume_task(
     run_id: str,
-    payload: ResumePayload | ClarificationPayload | None = None,
+    payload: ResumePayload | ClarificationPayload | ApprovalPayload | None = None,
     data_dir: Path | None = None,
     model_mode: str = "fake",
     model_overrides: dict[str, str] | None = None,
@@ -300,6 +366,7 @@ def resume_task(
     """从 SQLite checkpoint 恢复（进程 B）。
 
     - 澄清挂起中：必须提供 ClarificationPayload（004 十三，空答案由 Schema 拒绝）。
+    - 审批挂起中：必须提供 ApprovalPayload（007 5.4，approve/reject 先写审批服务再恢复）。
     - 其余场景：ResumePayload（禁止 None，003-A 三/ADR-0001）。
     """
     if payload is None:
@@ -333,6 +400,25 @@ def resume_task(
                 )
         elif isinstance(payload, ClarificationPayload):
             raise RuntimeError("run is not awaiting clarification")
+        # 审批挂起时恢复值必须为 ApprovalPayload 且 approval_id 匹配（007 5.4）
+        if state.pending_approval_id:
+            if not isinstance(payload, ApprovalPayload):
+                raise RuntimeError(
+                    "run is awaiting approval; provide ApprovalPayload (approve/reject)"
+                )
+            if payload.approval_id != state.pending_approval_id:
+                raise RuntimeError(
+                    f"approval_id mismatch: {payload.approval_id} != {state.pending_approval_id}"
+                )
+            # 先落审批决策（持久化），恢复后 Executor 再验证并执行/终止
+            from app.core.approval import ApprovalService
+
+            approval = ApprovalService(
+                storage_path=data_dir / "runtime" / "workspaces" / state.task_id / "approvals.jsonl"
+            )
+            approval.decide(payload.approval_id, payload.decision, payload.reason)
+        elif isinstance(payload, ApprovalPayload):
+            raise RuntimeError("run is not awaiting approval")
         ctx = _build_context(
             state,
             data_dir,

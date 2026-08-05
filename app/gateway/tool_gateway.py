@@ -251,19 +251,22 @@ class ToolGateway:
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
         # handler 永不执行；M3-C 审批流：ctx.approval_id + 已批准才放行（007 5.4）
+        approved_pass = False
         if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval or not tool.read_only:
             if ctx and ctx.approval_id and self._approval_service is not None:
                 request = self._approval_service.get(ctx.approval_id)
                 if request is not None:
                     try:
+                        # 放行验证（5.3/5.4）：操作哈希绑定 + 实际参数哈希绑定（GT-W04）
                         self._approval_service.verify_execution(
                             request,
-                            parameter_hash="",
+                            parameter_hash=ApprovalService.parameter_hash_of(args),
                             target_hash="",
                             operation_hash=request.operation_hash,
                         )
+                        approved_pass = True  # 放行：继续执行 handler
                     except ApprovalError as exc:
-                        self._seen_keys.add(key)
+                        # M3-C：审批无效不登记幂等键——批准后可重试（GT-W01/W03）
                         self.tool_calls.append(record)
                         self._audit.entry(
                             "tool_blocked",
@@ -275,7 +278,6 @@ class ToolGateway:
                             ok=False, error=f"approval invalid: {exc}", status="blocked"
                         )
                 else:
-                    self._seen_keys.add(key)
                     self.tool_calls.append(record)
                     self._audit.entry(
                         "tool_blocked",
@@ -286,8 +288,11 @@ class ToolGateway:
                     return ToolResult(
                         ok=False, error="approval not found for write tool", status="blocked"
                     )
-            else:
-                self._seen_keys.add(key)  # blocked 同样登记幂等键，避免重复生成 pending approval
+            if not approved_pass:
+                if self._approval_service is None:
+                    # M1/M2 语义：无审批流时登记幂等键，避免重复生成 pending approval
+                    self._seen_keys.add(key)
+                # M3-C：审批流中不登记——用户批准后调用方可重试（GT-W01/W03）
                 self.approvals.append(
                     {
                         "id": uuid.uuid4().hex[:12],
@@ -299,20 +304,22 @@ class ToolGateway:
                         "ts": _now(),
                     }
                 )
-            record["status"] = "blocked"
-            self.tool_calls.append(record)
-            self._audit.entry(
-                "tool_blocked",
-                task_id=self._task_id,
-                tool=tool_name,
-                reason="dangerous_or_requires_approval_m1",
-            )
-            return ToolResult(
-                ok=False, error="dangerous tool blocked: approval required (M3)", status="blocked"
-            )
+                record["status"] = "blocked"
+                self.tool_calls.append(record)
+                self._audit.entry(
+                    "tool_blocked",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    reason="dangerous_or_requires_approval_m1",
+                )
+                return ToolResult(
+                    ok=False,
+                    error="dangerous tool blocked: approval required (M3)",
+                    status="blocked",
+                )
 
         try:
-            data = tool.handler(**args)
+            data = tool.handler(**args, ctx=ctx) if tool.accepts_ctx else tool.handler(**args)
         except Exception as exc:  # noqa: BLE001
             record["status"] = "error"
             self.tool_calls.append(record)

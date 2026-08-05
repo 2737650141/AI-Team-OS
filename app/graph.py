@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from app.agents.executor import DeterministicFakeExecutor, SandboxContext
 from app.agents.llm_agents import (
     LLMPlanner,
     LLMResearcher,
@@ -67,6 +68,11 @@ def plan_scenario_for(goal: str) -> str:
             return "over_budget_plan"
         if s == "unknown-agent":
             return "unknown_agent_plan"
+    if goal.startswith("sandbox_"):
+        # 007：沙箱目标任务（GT-W01~W10）
+        if "create_readme" in goal or "GT-W01" in goal:
+            return "sandbox_create_readme_plan"
+        return "sandbox_code_fix_plan"  # GT-W02/W03/W04/W07/W09 共用
     return "github_compare_plan"
 
 
@@ -96,6 +102,7 @@ def build_graph(
     router: ModelRouter | None = None,
     context: ContextBuilder | None = None,
     settings: AppSettings | None = None,
+    sandbox_context: SandboxContext | None = None,
 ) -> StateGraph:
     """M2/M3-A 图。goal 用于推导 Plan/Reviewer 场景（测试与 CLI 共用同一 Runtime）。
 
@@ -111,6 +118,9 @@ def build_graph(
     settings = settings or AppSettings()
     router = router or ModelRouter(settings.routing)
     context = context or ContextBuilder(settings)
+    executor_agent = (
+        DeterministicFakeExecutor(sandbox_context) if sandbox_context is not None else None
+    )
     llm_planner = (
         LLMPlanner(model_gateway, router, context, settings) if model_mode == "real" else None
     )
@@ -252,6 +262,25 @@ def build_graph(
         all_subtasks = [SubtaskState.model_validate(x) for x in payload["all_subtasks"]]
         scenario = payload.get("review_scenario") or review_scenario
         running = subtask.model_copy(update={"runtime_status": "running"})
+        if running.assigned_role == "executor":
+            # 007 十二/十三：Executor 工作流（审批 interrupt 在此节点内）
+            if executor_agent is None:
+                updated = running.model_copy(
+                    update={
+                        "runtime_status": "rejected",
+                        "rework_count": running.rework_count + 1,
+                    }
+                )
+                return {"subtasks": [updated], **tool_gateway.snapshot()}
+            result = executor_agent.run(running, all_subtasks, scenario)
+            updated = running.model_copy(
+                update={
+                    "runtime_status": "executed",
+                    "execution_result": result,
+                    "evidence_refs": result.evidence_refs,
+                }
+            )
+            return {"subtasks": [updated], **tool_gateway.snapshot()}
         if running.assigned_role != "researcher":
             # 防御：M2 不支持的执行角色模拟 reject 语义（递增 rework_count），
             # 经 route_after_review 的返工上限收敛为 failed/rework_limit_exceeded

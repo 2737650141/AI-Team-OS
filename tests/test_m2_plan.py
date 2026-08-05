@@ -54,8 +54,8 @@ def test_unknown_role_rejected() -> None:
     assert exc_info.value.code == "unknown_role"
 
 
-def test_disabled_role_rejected() -> None:
-    """Executor disabled：指派 executor 的子任务被拒绝（004 六.9）。"""
+def test_executor_role_enabled_after_m3c() -> None:
+    """Executor 已启用（007 十二）：指派 executor 的计划通过验证。"""
     plan = Plan(
         goal="x",
         subtasks=[
@@ -68,14 +68,13 @@ def test_disabled_role_rejected() -> None:
                 input_refs=[],
                 expected_output="r",
                 acceptance_criteria=["a"],
+                required_tools=["sandbox_apply_patch"],
                 token_budget=100,
                 tool_call_budget=1,
             )
         ],
     )
-    with pytest.raises(PlanValidationError) as exc_info:
-        validate_plan(plan, _registry(), task_token_budget=10000)
-    assert exc_info.value.code == "role_disabled"
+    validate_plan(plan, _registry(), task_token_budget=10000)  # 不再抛 role_disabled
 
 
 def test_tools_not_in_whitelist_rejected() -> None:

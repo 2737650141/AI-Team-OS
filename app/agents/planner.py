@@ -93,6 +93,62 @@ def make_plan(scenario: str, goal: str, task_token_budget: int = 10000) -> Plan:
                 ),
             ],
         )
+    if scenario == "sandbox_code_fix_plan":
+        # 007 GT-W02/W07：读失败测试 Evidence → Executor 修复补丁
+        return Plan(
+            goal=goal,
+            subtasks=[
+                SubtaskSpec(
+                    subtask_id="s1",
+                    title="读取失败测试 Evidence",
+                    objective="读取 worktree 中测试与源码，确认确定性 bug",
+                    dependencies=[],
+                    assigned_role="researcher",
+                    input_refs=[
+                        "local_read_text:src/main.py",
+                        "local_read_text:tests/test_main.py",
+                    ],
+                    expected_output="bug 位置与失败原因",
+                    acceptance_criteria=["识别 buggy() 恒错"],
+                    required_tools=["local_read_text"],
+                    token_budget=2000,
+                    tool_call_budget=3,
+                ),
+                SubtaskSpec(
+                    subtask_id="s2",
+                    title="应用修复补丁",
+                    objective="生成最小修复 PatchProposal，经审批后应用并运行 pytest",
+                    dependencies=["s1"],
+                    assigned_role="executor",
+                    input_refs=[],
+                    expected_output="patch 应用成功且 pytest 通过",
+                    acceptance_criteria=["buggy() 返回 True", "pytest 通过", "仅修改 src/main.py"],
+                    required_tools=["sandbox_apply_patch"],
+                    token_budget=2000,
+                    tool_call_budget=2,
+                ),
+            ],
+        )
+    if scenario == "sandbox_create_readme_plan":
+        # 007 GT-W01：README 追加段落
+        return Plan(
+            goal=goal,
+            subtasks=[
+                SubtaskSpec(
+                    subtask_id="s1",
+                    title="新增 README 段落",
+                    objective="在沙箱 worktree 的 README.md 追加确定性段落",
+                    dependencies=[],
+                    assigned_role="executor",
+                    input_refs=[],
+                    expected_output="README.md 追加段落",
+                    acceptance_criteria=["段落存在", "源项目不变"],
+                    required_tools=["sandbox_apply_patch"],
+                    token_budget=2000,
+                    tool_call_budget=2,
+                ),
+            ],
+        )
     if scenario == "invalid_cycle_plan":
         return Plan(
             goal=goal,

@@ -16,13 +16,13 @@ def test_default_registry_has_five_roles() -> None:
 
 
 def test_executor_registered_but_disabled() -> None:
-    """Executor 只注册不执行：disabled 不可被派发（004 五）。"""
+    """Executor 已注册且已启用（007 十二：M3-C 正式启用）。"""
     registry = default_registry()
     executor = registry.get("executor")
     assert executor.role_type == "executor"
-    assert executor.enabled is False
-    assert registry.is_enabled("executor") is False
-    assert registry.by_role("executor") == []  # by_role 只返回 enabled
+    assert executor.enabled is True  # 007 十二：M3-C 启用
+    assert registry.is_enabled("executor") is True
+    assert "executor" in [a.agent_id for a in registry.all()]
 
 
 def test_unknown_agent_rejected() -> None:
