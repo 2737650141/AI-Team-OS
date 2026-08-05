@@ -92,3 +92,34 @@ def test_tool_error_recorded(tool_gateway: ToolGateway) -> None:
     result = tool_gateway.invoke("fixture_repo_lookup", {"repo_name": "missing_repo"})
     assert result.status == "error"
     assert result.ok is False
+
+
+def test_non_readonly_tool_blocked_even_if_safe(tmp_path: Path) -> None:
+    """安全收紧：非只读工具一律拦截（防错标风险，security_review MEDIUM-3）。"""
+    from app.tools.spec import RiskLevel, ToolSpec
+
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    gateway = ToolGateway(audit=audit, task_id="t1")
+    calls: list[str] = []
+
+    def handler(path: str, content: str) -> dict:
+        calls.append(path)
+        return {"ok": True}
+
+    gateway.register(
+        ToolSpec(
+            name="safe_write_mislabeled",
+            description="演示：safe 但非只读（错标）",
+            input_schema={"path": "str", "content": "str"},
+            risk_level=RiskLevel.SAFE,  # 错标为 safe
+            read_only=False,
+            handler=handler,
+        )
+    )
+
+    result = gateway.invoke("safe_write_mislabeled", {"path": "a", "content": "b"})
+
+    assert result.status == "blocked"
+    assert result.ok is False
+    assert calls == []  # handler 未执行
+    assert gateway.approvals[0]["status"] == "pending"

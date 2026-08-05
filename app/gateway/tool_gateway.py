@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -34,8 +35,10 @@ class ToolGateway:
             self._audit.entry("tool_unknown", task_id=self._task_id, tool=tool_name, role=role)
             return ToolResult(ok=False, error=f"unknown tool: {tool_name}", status="error")
 
-        # R19：幂等键查重，恢复/重放时不重复执行
-        key = hashlib.sha256(f"{tool_name}:{sorted(args.items())}".encode()).hexdigest()[:16]
+        # R19：幂等键查重，恢复/重放时不重复执行（JSON 规范化，兼容非字符串参数）
+        key = hashlib.sha256(
+            f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)}".encode()
+        ).hexdigest()[:16]
         if key in self._seen_keys:
             self._audit.entry(
                 "tool_skipped_duplicate", task_id=self._task_id, tool=tool_name, key=key
@@ -51,9 +54,9 @@ class ToolGateway:
             "ts": _now(),
         }
 
-        # GT-10（M1）：dangerous 或 requires_approval 必须确定性拦截，
-        # handler 永不执行；审批流在 M3 实现
-        if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval:
+        # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
+        # handler 永不执行；审批流在 M3 实现（非只读一律拦截，防错标风险）
+        if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval or not tool.read_only:
             self._seen_keys.add(key)  # blocked 同样登记幂等键，避免重复生成 pending approval
             self.approvals.append(
                 {
@@ -80,14 +83,6 @@ class ToolGateway:
                 status="blocked",
             )
 
-        if tool.risk_level is RiskLevel.SENSITIVE and not tool.read_only:
-            # M1：sensitive 暂放行并记录；审批策略 M3 落地
-            self._audit.entry(
-                "tool_sensitive_auto_allowed_m1",
-                task_id=self._task_id,
-                tool=tool_name,
-            )
-
         try:
             data = tool.handler(**args)
         except Exception as exc:  # noqa: BLE001
@@ -100,14 +95,14 @@ class ToolGateway:
 
         self._seen_keys.add(key)
         record["status"] = "ok"
-        record["result_summary"] = str(data)[:200]
+        record["result_summary"] = redact(str(data))[:200]
         self.tool_calls.append(record)
         self.evidence.append(
             {
                 "id": uuid.uuid4().hex[:12],
                 "task_id": self._task_id,
                 "tool": tool_name,
-                "summary": str(data)[:200],
+                "summary": redact(str(data))[:200],
                 "ts": _now(),
             }
         )
