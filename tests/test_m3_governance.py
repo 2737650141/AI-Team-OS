@@ -349,6 +349,7 @@ def test_prompt_version_and_hash() -> None:
         "supervisor.decision",
         "planner.plan",
         "researcher.report",
+        "researcher.probe",
         "reviewer.review",
     }
     assert UNTRUSTED_MARKER  # 注入边界标记存在

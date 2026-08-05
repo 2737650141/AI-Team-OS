@@ -250,7 +250,14 @@ def test_app_has_no_network_imports() -> None:
     import re
 
     root = Path(__file__).resolve().parent.parent / "app"
-    network_boundary = {root / "gateway" / "openai_compatible.py"}
+    # 显式网络边界（默认不启用/仅做校验）：真实 Provider、SSRF 校验（DNS 解析）、
+    # web_fetch 工具（注册后才可用）
+    network_boundary = {
+        root / "gateway" / "openai_compatible.py",
+        root / "core" / "ssrf.py",
+        root / "tools" / "web_fetch.py",
+        root / "tools" / "github_client.py",
+    }
     banned = re.compile(
         r"^\s*(import|from)\s+(requests|urllib|http\.client|socket|aiohttp)\b", re.M
     )
