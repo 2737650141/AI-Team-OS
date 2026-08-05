@@ -6,6 +6,7 @@
 5061f1e 只读工具 / 9dc9ba3 工具循环+CLI/API / 3fdf4f1 测试 / be4f4dc 文档 /
 fca7436 审查修复 / c775a22 统计口径 / df3c4f0 证据+打包 / 5f3a4e6 AWS 模式 /
 12fedbc 数字+marker 修正；git log 见 artifacts/review/m3b-git-log.txt）
+本文件由 a8820a0 定稿（提交序列修正）
 
 ## 1. M3-A 遗留 LOW 修复（006 四）
 
