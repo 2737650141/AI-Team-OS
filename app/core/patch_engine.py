@@ -255,8 +255,8 @@ class PatchApplier:
             raise PatchError(f"invalid hunk header: {header}")
         old_start = int(m.group(1))
         result: list[str] = []
-        # 按行号定位（1-based）
-        idx = old_start - 1
+        # 按行号定位（1-based）；空文件 hunk（@@ -0,0）old_start=0 → idx=0
+        idx = max(old_start - 1, 0)
         if idx < 0 or idx > len(old_lines):
             raise PatchError(f"hunk start out of range: {old_start}")
         result.extend(old_lines[:idx])

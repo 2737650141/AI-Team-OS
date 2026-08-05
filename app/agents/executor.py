@@ -88,25 +88,25 @@ class DeterministicFakeExecutor:
         old = readme.read_text(encoding="utf-8") if readme.exists() else ""
         addition = "\n## Sandbox 段落（GT-W01）\n由 Executor 生成的确定性新增段落。\n"
         target = "README.md"
-        # 正确 unified diff（review should-fix-1：旧行作上下文 + 末尾追加新行，
-        # 而非硬编码 @@ -1,1 +1,1 @@ 只含 + 行导致前置插入）
+        # 正确 unified diff（review sa_20260805_144828）：旧行作上下文（" " 前缀）
+        # + 末尾追加新行；空文件 hunk 用 @@ -0,0（patch_engine 已支持）
         old_lines = old.splitlines(keepends=True)
         add_lines = addition.splitlines(keepends=True)
         if old_lines:
             n = len(old_lines)
             k = len(add_lines)
             diff_lines = [
-                f"--- a/{target}",
-                f"+++ b/{target}",
-                f"@@ -{n},{n} +{n},{n + k} @@",
+                f"--- a/{target}\n",
+                f"+++ b/{target}\n",
+                f"@@ -{n},{n} +{n},{n + k} @@\n",
             ]
-            diff_lines += old_lines
+            diff_lines += [" " + line for line in old_lines]
             diff_lines += ["+" + line for line in add_lines]
         else:
             diff_lines = [
-                f"--- a/{target}",
-                f"+++ b/{target}",
-                f"@@ -0,0 +1,{len(add_lines)} @@",
+                f"--- a/{target}\n",
+                f"+++ b/{target}\n",
+                f"@@ -0,0 +1,{len(add_lines)} @@\n",
             ]
             diff_lines += ["+" + line for line in add_lines]
         diff = "".join(diff_lines)

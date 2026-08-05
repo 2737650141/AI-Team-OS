@@ -205,3 +205,38 @@ def test_gt_w03_graph_reject_then_redispatch(data_dir: Path, monkeypatch) -> Non
     manifest = WorkspaceManager(data_dir / "runtime").load_manifest(report.state.task_id)
     assert manifest is not None
     assert manifest.source_project_alias == "sample-python"
+
+
+# ---------- review（sa_20260805_144828）回归：create_readme 图级路径 ----------
+def test_gt_w01_graph_create_readme(data_dir: Path, monkeypatch) -> None:
+    """GT-W01 图级：sandbox_create_readme → 审批 → 应用 → README 末尾追加段落。"""
+    fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+    monkeypatch.setenv("AI_TEAM_ALLOWED_READ_ROOTS", str(fixtures))
+    from app.core.schemas import ApprovalPayload
+    from app.runner import resume_task, run_task
+
+    report = run_task(
+        "sandbox_create_readme",
+        token_budget=20000,
+        cost_budget=1.0,
+        data_dir=data_dir,
+        model_overrides={"project_alias": "sample-python"},
+    )
+    assert report.state.current_status == "paused"
+    report2 = resume_task(
+        report.run_id,
+        payload=ApprovalPayload(
+            approval_id=report.state.pending_approval_id, decision="approved", reason="ok"
+        ),
+        data_dir=data_dir,
+    )
+    assert report2.state.current_status == "completed"
+    wt = data_dir / "runtime" / "workspaces" / report.state.task_id / "worktree"
+    readme = wt / "README.md"
+    assert readme.exists()
+    content = readme.read_text(encoding="utf-8")
+    assert content.startswith("# sample-python")  # 原有内容保留
+    assert "GT-W01" in content  # 新增段落（末尾追加）
+    # 源项目未变（fixture README 本身提及 GT-W01；断言 Executor 新增内容不在源项目）
+    src_readme = fixtures / "sample-python" / "README.md"
+    assert "由 Executor 生成的确定性新增段落" not in src_readme.read_text(encoding="utf-8")

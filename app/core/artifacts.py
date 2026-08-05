@@ -27,6 +27,7 @@ ARTIFACT_TYPES = {
     "command_report",
     "git_commit",
     "final_report",
+    "rollback_report",
 }
 
 
