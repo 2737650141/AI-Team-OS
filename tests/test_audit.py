@@ -31,11 +31,7 @@ def test_audit_log_redacts_on_write(tmp_path: Path) -> None:
         token="Bearer abcdef.ghijkl.mnopqr",
     )
     # review 复核：走真实写入路径（JSON 序列化带引号）也要脱敏
-    pem = (
-        "-----BEGIN RSA PRIVATE KEY-----\n"
-        "MIIEpQIBAAKCAQEAabcdef\n"
-        "-----END RSA PRIVATE KEY-----"
-    )
+    pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpQIBAAKCAQEAabcdef\n-----END RSA PRIVATE KEY-----"
     audit.entry(
         "test_event2",
         task_id="t1",

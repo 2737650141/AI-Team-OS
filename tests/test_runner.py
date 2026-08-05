@@ -29,5 +29,5 @@ def test_run_task_budget_failure(tmp_path: Path) -> None:
         data_dir=tmp_path / "data",
     )
     assert report.status == "failed"
-    assert report.state.failure_code.value == "budget_exceeded"
+    assert report.state.failure_code == "budget_exceeded"
     assert report.usage["tokens"] <= 50
