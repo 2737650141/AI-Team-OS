@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.approval import ApprovalError, ApprovalService
 from app.core.evidence import EvidenceQuotaExceeded, EvidenceWriter
 from app.core.secrets import redact
 from app.gateway.audit import AuditLog
@@ -67,6 +68,7 @@ class ToolGateway:
         initial_approvals: list[dict[str, Any]] | None = None,
         policy: ToolPolicy | None = None,
         evidence_writer: EvidenceWriter | None = None,
+        approval_service: ApprovalService | None = None,
     ) -> None:
         self._audit = audit
         self._task_id = task_id
@@ -77,10 +79,11 @@ class ToolGateway:
         self.approvals: list[dict[str, Any]] = list(initial_approvals or ())
         # 幂等键 → 成功结果缓存（004 4.x）：命中时复用完整结构化结果，handler 不重复执行
         self._result_cache: dict[str, dict[str, Any]] = {}
-        # 006 十一：策略 / 配额 / Evidence 固化器
+        # 006 十一：策略 / 配额 / Evidence 固化器；007 5.4：审批服务（写工具放行）
         self.policy = policy or ToolPolicy()
         self._quota = ToolQuota(self.policy)
         self.evidence_writer = evidence_writer
+        self._approval_service = approval_service
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
 
@@ -247,20 +250,55 @@ class ToolGateway:
         )
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
-        # handler 永不执行；审批流在 M3 实现（非只读一律拦截，防错标风险）
+        # handler 永不执行；M3-C 审批流：ctx.approval_id + 已批准才放行（007 5.4）
         if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval or not tool.read_only:
-            self._seen_keys.add(key)  # blocked 同样登记幂等键，避免重复生成 pending approval
-            self.approvals.append(
-                {
-                    "id": uuid.uuid4().hex[:12],
-                    "task_id": self._task_id,
-                    "tool": tool_name,
-                    "args_summary": redact(str(args))[:200],
-                    "status": "pending",
-                    "decided_by": None,
-                    "ts": _now(),
-                }
-            )
+            if ctx and ctx.approval_id and self._approval_service is not None:
+                request = self._approval_service.get(ctx.approval_id)
+                if request is not None:
+                    try:
+                        self._approval_service.verify_execution(
+                            request,
+                            parameter_hash="",
+                            target_hash="",
+                            operation_hash=request.operation_hash,
+                        )
+                    except ApprovalError as exc:
+                        self._seen_keys.add(key)
+                        self.tool_calls.append(record)
+                        self._audit.entry(
+                            "tool_blocked",
+                            task_id=self._task_id,
+                            tool=tool_name,
+                            reason=f"approval_not_valid: {str(exc)[:100]}",
+                        )
+                        return ToolResult(
+                            ok=False, error=f"approval invalid: {exc}", status="blocked"
+                        )
+                else:
+                    self._seen_keys.add(key)
+                    self.tool_calls.append(record)
+                    self._audit.entry(
+                        "tool_blocked",
+                        task_id=self._task_id,
+                        tool=tool_name,
+                        reason="approval_not_found",
+                    )
+                    return ToolResult(
+                        ok=False, error="approval not found for write tool", status="blocked"
+                    )
+            else:
+                self._seen_keys.add(key)  # blocked 同样登记幂等键，避免重复生成 pending approval
+                self.approvals.append(
+                    {
+                        "id": uuid.uuid4().hex[:12],
+                        "task_id": self._task_id,
+                        "tool": tool_name,
+                        "args_summary": redact(str(args))[:200],
+                        "status": "pending",
+                        "decided_by": None,
+                        "ts": _now(),
+                    }
+                )
             record["status"] = "blocked"
             self.tool_calls.append(record)
             self._audit.entry(
