@@ -40,6 +40,10 @@ def blocked_ip_reason(ip: str) -> str | None:
         addr = ipaddress.ip_address(ip)
     except ValueError:
         return None
+    # IPv4-mapped（::ffff:169.254.169.254）先解映射再判定（review should-fix-2）
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
     if (
         addr.is_loopback
         or addr.is_private

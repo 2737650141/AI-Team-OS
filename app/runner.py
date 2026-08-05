@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -146,8 +148,19 @@ def _build_context(
     local_roots: list = []
     if model_overrides and "project_alias" in model_overrides:
         # CLI/API 项目别名 → 允许根目录子目录（14/15：不使用任意绝对路径）
+        # 别名严格限字母数字下划线连字符（review sa_20260805_035741 Blocking-2：防穿越）
         alias = model_overrides["project_alias"]
-        roots = [r / alias for r in roots if (r / alias).is_dir()] or roots
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", alias):
+            raise ValueError("project_alias must match [A-Za-z0-9_-]{1,64}")
+        checked: list = []
+        for r in roots:
+            p = (r / alias).resolve()
+            r_resolved = r.resolve()
+            if p.is_dir() and (
+                str(p) == str(r_resolved) or str(p).startswith(str(r_resolved) + os.sep)
+            ):
+                checked.append(p)
+        roots = checked or roots
     if roots:
         policy_obj = LocalPathPolicy(roots)
         for spec in build_local_tools(policy_obj):
@@ -482,7 +495,13 @@ def evidence_list(run_id: str, data_dir: Path | None = None) -> dict:
 
 
 def evidence_show(evidence_id: str, data_dir: Path | None = None) -> dict:
-    """006 十四：Evidence 原始快照（明确命令；快照已脱敏，无凭据）。"""
+    """006 十四：Evidence 原始快照（明确命令；快照已脱敏，无凭据）。
+
+    evidence_id 严格限十六进制（uuid hex，review sa_20260805_035741 should-fix-1：
+    防 glob 穿越读任意文件）。
+    """
+    if not re.fullmatch(r"[0-9a-f]{16,32}", evidence_id):
+        raise KeyError(f"invalid evidence_id: {evidence_id}")
     data_dir = data_dir or Path("data")
     runtime_dir = data_dir / "runtime" / "evidence"
     matches = list(runtime_dir.glob(f"*/{evidence_id}.*"))

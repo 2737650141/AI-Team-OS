@@ -70,7 +70,12 @@ class LocalPathPolicy:
         if base in _DEVICE_NAMES:
             raise LocalPathError("device path rejected")
         if not parts:
-            raise LocalPathError("path is empty")
+            # 根目录本身（local_list_directory 默认参数）
+            for root in self._roots:
+                if self._is_sensitive(root):
+                    raise LocalPathError("sensitive file rejected")
+                return root
+            raise LocalPathError("no allowed read roots configured")
         # 只在允许根目录下拼接（8.1：客户端不能传任意绝对根目录），再解析真实路径
         for root in self._roots:
             candidate = root.joinpath(*parts)
@@ -103,7 +108,7 @@ class LocalPathPolicy:
         if lowered in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"):
             return True
         for part in path.parts:
-            if part in SENSITIVE_DIRS:
+            if part.lower() in SENSITIVE_DIRS:
                 return True
         # 浏览器配置等用户数据目录（8.3）
         if (

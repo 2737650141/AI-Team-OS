@@ -168,7 +168,7 @@ class LLMResearcher:
         ctx_for_gateway = ToolExecutionContext(
             task_id=subtask.subtask_id,
             subtask_id=subtask.subtask_id,
-            role=f"researcher:{subtask.subtask_id}",
+            role="researcher",  # 与工具 roles 白名单匹配（review sa_20260805_035741 Blocking-1）
             tool_call_budget=subtask.tool_call_budget,
         )
         collected: list[dict[str, Any]] = []

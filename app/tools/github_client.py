@@ -85,7 +85,9 @@ def validate_query(value: str, max_len: int = 200) -> str:
 class GitHubClient:
     """仅 GET 的 GitHub API 客户端（mock transport 可注入）。"""
 
-    token: str = field(default_factory=lambda: os.environ.get("AI_TEAM_GITHUB_TOKEN", ""))
+    token: str = field(
+        default_factory=lambda: os.environ.get("AI_TEAM_GITHUB_TOKEN", ""), repr=False
+    )
     timeout_seconds: int = 30
     transport: httpx.BaseTransport | None = None
     max_response_bytes: int = _MAX_RESPONSE_BYTES

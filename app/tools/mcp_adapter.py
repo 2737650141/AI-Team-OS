@@ -82,7 +82,13 @@ class FakeMCPServer:
 
 
 def _is_read_only(name: str, description: str = "") -> bool:
-    """只读判定（10.2）：写语义关键词命中或无法确定 → 拒绝。"""
+    """只读判定（10.2）：写语义关键词命中 → 拒绝。
+
+    说明（review sa_20260805_035741 should-fix-4）：这是关键词黑名单（命中即拒），
+    未命中不代表一定安全——真正的防线是 1) 静态注册时管理员显式登记 allowed_tools；
+    2) 转换后强制 read_only=True 且全经 Tool Gateway（结果只读处理、Evidence 固化）；
+    3) 真实 stdio/http MCP Server 接入前必须人工评审工具清单（M3-B 仅 Fake 实现）。
+    """
     lowered = f"{name} {description}".lower()
     return not any(hint in lowered for hint in _WRITE_HINTS)
 

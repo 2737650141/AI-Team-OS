@@ -92,7 +92,9 @@ def main(argv: list[str] | None = None) -> None:
     evidence = sub.add_parser("evidence", help="列出任务的 Evidence 摘要")
     evidence.add_argument("run_id", help="run_id（= checkpoint thread_id）")
     evidence.add_argument("--data-dir", default=None)
-    evidence_show_parser = sub.add_parser("evidence-show", help="查看 Evidence 原始快照（明确命令）")
+    evidence_show_parser = sub.add_parser(
+        "evidence-show", help="查看 Evidence 原始快照（明确命令）"
+    )
     evidence_show_parser.add_argument("evidence_id", help="evidence_id")
     evidence_show_parser.add_argument("--data-dir", default=None)
 

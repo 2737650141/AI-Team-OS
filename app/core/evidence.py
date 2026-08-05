@@ -97,10 +97,8 @@ class EvidenceWriter:
     ) -> EvidenceRecord:
         """固化一条 Evidence（5.1：先固化再交给模型）。"""
         with self._lock:
-            if len(self._records) >= self._max_evidence:
-                raise EvidenceQuotaExceeded(f"evidence quota exceeded: {self._max_evidence}")
             content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:32]
-            # 去重（5.1：同一内容不重复存储）
+            # 去重（5.1：同一内容不重复存储）——先去重再查配额（重复内容不消耗配额）
             existing_id = self._hash_index.get(content_hash)
             if existing_id:
                 existing = self._records[existing_id]
@@ -108,6 +106,8 @@ class EvidenceWriter:
                     {"source_uri": source_uri, "at": _now()}
                 )
                 return existing
+            if len(self._records) >= self._max_evidence:
+                raise EvidenceQuotaExceeded(f"evidence quota exceeded: {self._max_evidence}")
             # 截断（5.3）：超限保存受限快照并标记，不静默假装完整
             truncated = False
             raw = content
