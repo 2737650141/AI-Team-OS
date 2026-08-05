@@ -1,14 +1,19 @@
-"""CLI（M2）：run / resume / status / trace。"""
+"""CLI（M3-A）：run / resume / status / trace / providers / provider-health。"""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+from app.core.config import load_settings
 from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
+from app.gateway.contracts import ProviderError
 from app.runner import (
     RunReport,
+    dry_run,
+    provider_health,
     resume_task,
     run_task,
     status_task,
@@ -26,6 +31,18 @@ def _print_report(report: RunReport) -> None:
     print(f"tool_call_count:  {report.tool_call_count}")
 
 
+def _print_providers(settings) -> None:
+    print(f"provider:         {settings.model.provider}")
+    print(f"real_enabled:     {settings.model.enable_real}")
+    print(f"default_model:    {settings.model.default_model or '(未配置)'}")
+    print("role routing:")
+    for role, model in settings.routing.role_defaults.items():
+        print(f"  {role}: {model or '(继承 default)'}")
+    print(f"allowed_models:   {settings.routing.allowed_models}")
+    print(f"fallback_models:  {settings.routing.fallback_models}")
+    print("(API Key 已配置但绝不显示)")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="ai-team-os", description="AI Team OS 任务 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -38,6 +55,14 @@ def main(argv: list[str] | None = None) -> None:
     run.add_argument("--budget-cost", type=float, default=1.0)
     run.add_argument("--project-id", default="default")
     run.add_argument("--data-dir", default=None)
+    run.add_argument(
+        "--model-mode",
+        choices=["fake", "real"],
+        default="fake",
+        help="模型模式（默认 fake，避免意外费用）",
+    )
+    run.add_argument("--dry-run", action="store_true", help="只显示预计模型调用与预算，不真正调用")
+    run.add_argument("--model-override", action="append", default=[], metavar="ROLE=MODEL")
 
     resume = sub.add_parser("resume", help="恢复暂停的任务（澄清挂起时须带 --clarification）")
     resume.add_argument("run_id", help="run_id（= checkpoint thread_id）")
@@ -54,21 +79,49 @@ def main(argv: list[str] | None = None) -> None:
     trace.add_argument("run_id", help="run_id（= checkpoint thread_id）")
     trace.add_argument("--data-dir", default=None)
 
+    sub.add_parser("providers", help="显示 Provider 与角色路由配置")
+    sub.add_parser("provider-health", help="Provider 健康状态（不发起真实请求）")
+
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
+    settings = load_settings()
 
-    if args.command == "run":
+    if args.command == "providers":
+        _print_providers(settings)
+    elif args.command == "provider-health":
+        print(json.dumps(provider_health(settings), ensure_ascii=False, indent=2))
+    elif args.command == "run":
         if args.budget_tokens <= 0 or args.budget_cost <= 0:
             parser.error("--budget-tokens 与 --budget-cost 必须为正数")
-        _print_report(
-            run_task(
-                args.goal,
-                args.budget_tokens,
-                args.budget_cost,
-                args.project_id,
-                data_dir=data_dir,
+        overrides = {}
+        for item in args.model_override:
+            role, _, model = item.partition("=")
+            overrides[role.strip()] = model.strip()
+        if args.dry_run:
+            print(
+                json.dumps(
+                    dry_run(args.goal, args.budget_tokens, args.budget_cost, settings),
+                    ensure_ascii=False,
+                    indent=2,
+                )
             )
-        )
+            return
+        try:
+            _print_report(
+                run_task(
+                    args.goal,
+                    args.budget_tokens,
+                    args.budget_cost,
+                    args.project_id,
+                    data_dir=data_dir,
+                    model_mode=args.model_mode,
+                    model_overrides=overrides or None,
+                    settings=settings,
+                )
+            )
+        except ProviderError as exc:
+            # 005 十六：未启用真实调用 / 缺 API Key 等配置错误明确报安全消息
+            parser.error(f"model provider error: {exc.safe_message}")
     elif args.command == "resume":
         if args.clarification:
             # 澄清挂起时从 checkpoint 读取 pending_clarification_id 构造 ClarificationPayload
@@ -81,12 +134,12 @@ def main(argv: list[str] | None = None) -> None:
             )
         else:
             payload = ResumePayload(action="continue")
-        _print_report(resume_task(args.run_id, payload=payload, data_dir=data_dir))
+        _print_report(
+            resume_task(args.run_id, payload=payload, data_dir=data_dir, settings=settings)
+        )
     elif args.command == "status":
         _print_report(status_task(args.run_id, data_dir=data_dir))
     elif args.command == "trace":
-        import json
-
         print(json.dumps(trace_task(args.run_id, data_dir=data_dir), ensure_ascii=False, indent=2))
 
 

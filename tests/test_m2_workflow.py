@@ -242,11 +242,21 @@ def test_reviewer_pass_when_deterministic_clean(tmp_path: Path) -> None:
 
 # ---------- 无网络环境全测试通过（测试要求 22） ----------
 def test_app_has_no_network_imports() -> None:
+    """默认路径无网络（005 3.3/18.1-28）：fake 模式与全部自动测试不得触网。
+
+    app/gateway/openai_compatible.py 是显式网络边界（真实 Provider），
+    只有 AI_TEAM_MODEL_ENABLE_REAL=true 才启用；其余 app/ 代码禁止网络导入。
+    """
     import re
 
     root = Path(__file__).resolve().parent.parent / "app"
+    network_boundary = {root / "gateway" / "openai_compatible.py"}
     banned = re.compile(
         r"^\s*(import|from)\s+(requests|urllib|http\.client|socket|aiohttp)\b", re.M
     )
-    offenders = [str(p) for p in root.rglob("*.py") if banned.search(p.read_text(encoding="utf-8"))]
+    offenders = [
+        str(p)
+        for p in root.rglob("*.py")
+        if banned.search(p.read_text(encoding="utf-8")) and p not in network_boundary
+    ]
     assert offenders == [], f"app/ 存在网络导入: {offenders}"

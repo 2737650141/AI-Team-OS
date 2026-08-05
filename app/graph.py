@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from app.agents.llm_agents import (
+    LLMPlanner,
+    LLMResearcher,
+    LLMReviewer,
+    LLMSupervisorDecision,
+)
 from app.agents.planner import make_plan
 from app.agents.researcher import FakeResearcher
 from app.agents.reviewer import (
@@ -24,6 +30,8 @@ from app.agents.reviewer import (
     evidence_ids_of,
     role_used_tool_calls,
 )
+from app.core.config import AppSettings
+from app.core.context_builder import ContextBuilder
 from app.core.plan_validator import PlanValidationError, validate_plan
 from app.core.registry import AgentRegistry, default_registry
 from app.core.schemas import (
@@ -33,7 +41,9 @@ from app.core.schemas import (
     ReviewResult,
 )
 from app.core.state import CHECKPOINT_VERSION, SubtaskState, TaskState
+from app.gateway.contracts import ProviderError
 from app.gateway.model_gateway import ModelGateway
+from app.gateway.router import ModelRouter
 from app.gateway.tool_gateway import ToolGateway
 
 MAX_CLARIFICATION_ROUNDS = 3  # 集中配置（004 十三）
@@ -61,9 +71,11 @@ def plan_scenario_for(goal: str) -> str:
 
 
 def review_scenario_for(goal: str) -> str:
-    """goal → Reviewer 场景（GT-11）。仅显式 "scenario:" 前缀触发。"""
+    """goal → Reviewer 场景（GT-11 / 004 4.2 工具型返工）。仅显式 "scenario:" 前缀触发。"""
     if goal.startswith("scenario:reject-once"):
         return "review_reject_once_then_pass"
+    if goal.startswith("scenario:reject-tool-once"):
+        return "review_reject_tool_once"
     if goal.startswith("scenario:always-reject"):
         return "review_always_reject"
     return "default"
@@ -80,14 +92,41 @@ def build_graph(
     tool_gateway: ToolGateway,
     goal: str = "",
     registry: AgentRegistry | None = None,
+    model_mode: str = "fake",
+    router: ModelRouter | None = None,
+    context: ContextBuilder | None = None,
+    settings: AppSettings | None = None,
 ) -> StateGraph:
-    """M2 图。goal 用于推导 Plan/Reviewer 场景（测试与 CLI 共用同一 Runtime）。"""
+    """M2/M3-A 图。goal 用于推导 Plan/Reviewer 场景（测试与 CLI 共用同一 Runtime）。
+
+    model_mode: "fake"（默认，DeterministicFake 角色）| "real"（LLM 角色，
+    经 Model Gateway + 结构化输出治理；路由/循环/完成条件仍由代码负责，005 15）。
+    """
     registry = registry or default_registry()
     plan_scenario = plan_scenario_for(goal)
     review_scenario = review_scenario_for(goal)
     researcher = FakeResearcher(tool_gateway)
     det_reviewer = DeterministicReviewer()
     fake_reviewer = FakeReviewer(review_scenario)
+    settings = settings or AppSettings()
+    router = router or ModelRouter(settings.routing)
+    context = context or ContextBuilder(settings)
+    llm_planner = (
+        LLMPlanner(model_gateway, router, context, settings) if model_mode == "real" else None
+    )
+    llm_researcher = (
+        LLMResearcher(model_gateway, router, context, settings, tool_gateway)
+        if model_mode == "real"
+        else None
+    )
+    llm_reviewer = (
+        LLMReviewer(model_gateway, router, context, settings) if model_mode == "real" else None
+    )
+    llm_supervisor = (
+        LLMSupervisorDecision(model_gateway, router, context, settings)
+        if model_mode == "real"
+        else None
+    )
 
     def _validate_checkpoint(state: TaskState) -> None:
         if state.checkpoint_version != CHECKPOINT_VERSION:
@@ -140,10 +179,17 @@ def build_graph(
 
     def plan(state: TaskState) -> dict:
         goal_text = state.clarified_goal or state.user_goal
-        last_error: PlanValidationError | None = None
+        last_error: PlanValidationError | ProviderError | None = None
         for _attempt in range(PLAN_RETRY_LIMIT + 1):
             try:
-                plan_obj = make_plan(plan_scenario, goal_text, task_token_budget=state.token_budget)
+                if llm_planner is not None:
+                    plan_obj = llm_planner.make_plan(
+                        state, [a.agent_id for a in registry.all() if a.enabled]
+                    )
+                else:
+                    plan_obj = make_plan(
+                        plan_scenario, goal_text, task_token_budget=state.token_budget
+                    )
                 validate_plan(plan_obj, registry, state.token_budget)
                 subtasks = [SubtaskState(**s.model_dump()) for s in plan_obj.subtasks]
                 return {
@@ -152,9 +198,9 @@ def build_graph(
                     "selected_agents": {s.subtask_id: s.assigned_role for s in plan_obj.subtasks},
                     "current_status": "planning",
                 }
-            except PlanValidationError as exc:  # noqa: PERF203
+            except (PlanValidationError, ProviderError) as exc:  # noqa: PERF203
                 last_error = exc
-        # 超过重试上限：进入 failed/planning_invalid，不得绕过 Schema 继续（004 六）
+        # 超过重试上限：进入 failed/planning_invalid，不得绕过 Schema 继续（004 六 / 005 15.1）
         return {
             "current_status": "failed",
             "failure_code": "planning_invalid",
@@ -216,7 +262,10 @@ def build_graph(
                 }
             )
             return {"subtasks": [updated], **tool_gateway.snapshot()}
-        result = researcher.run(running, all_subtasks, scenario)
+        if llm_researcher is not None:
+            result = llm_researcher.run(running, all_subtasks)
+        else:
+            result = researcher.run(running, all_subtasks, scenario)
         updated = running.model_copy(
             update={
                 "runtime_status": "executed",
@@ -239,7 +288,15 @@ def build_graph(
             agent = registry.get(s.assigned_role)
             used_calls = role_used_tool_calls(state, s.assigned_role, s.subtask_id)
             issues = det_reviewer.check(s, valid_ids, agent.allowed_tools, used_calls)
-            result = fake_reviewer.review(s, issues)
+            if llm_reviewer is not None:
+                # 005 15.3：确定性失败直接 reject，LLM 评审只在确定性通过后执行
+                result = (
+                    llm_reviewer.review(state, s, issues)
+                    if not issues
+                    else fake_reviewer.review(s, issues)
+                )
+            else:
+                result = fake_reviewer.review(s, issues)
             if result.verdict == "reject":
                 updated = s.model_copy(
                     update={
@@ -326,6 +383,14 @@ def build_graph(
                 "tokens": state.budget_usage.get("tokens", 0.0),
             },
         )
+        if llm_supervisor is not None:
+            # 005 15.4：模型仅参与语言组织；失败回退确定性汇总
+            composed = llm_supervisor.compose_summary(state)
+            if composed:
+                report.summary = composed.get("summary", report.summary)
+                report.limitations.extend(composed.get("limitations", []) or [])
+                if composed.get("downgrade_note"):
+                    report.limitations.append(f"降级说明: {composed['downgrade_note']}")
         return {
             "final_result": report.model_dump_json(indent=2, ensure_ascii=False),
             "final_evidence": state.evidence,
