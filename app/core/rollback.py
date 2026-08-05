@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,16 @@ class WorkspaceRollback:
             if entry.get("approval_id") != patch_approval_id:
                 continue
             target = _validate_rel_path(entry["target"], self._worktree)
+            if entry.get("created"):
+                # 新建文件：回滚 = 移入回收区（可恢复），不物理删除
+                if target.exists():
+                    trash_dst = self._trash / f"{uuid.uuid4().hex[:12]}-{target.name}"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(target), str(trash_dst))
+                    restored.append(f"{entry['target']} (created; moved to trash)")
+                else:
+                    restored.append(f"{entry['target']} (created; already absent)")
+                continue
             backup = self._backups / entry["backup"]
             if not backup.exists():
                 missing.append(entry["target"])
@@ -84,6 +95,22 @@ class WorkspaceRollback:
             shutil.copy2(backup, target)
             restored.append(entry["target"])
         if missing:
+            # 缺失备份：先完成已恢复部分，再明确报错（review should-fix-2）
+            if restored:
+                self._artifacts.write(
+                    artifact_type="rollback_report",
+                    content=json.dumps(
+                        {
+                            "approval_id": approval_id,
+                            "restored": restored,
+                            "missing": missing,
+                            "partial": True,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    task_id=self._task_id,
+                )
             raise RollbackError(f"rollback incomplete; missing backups: {missing}")
         if not restored:
             raise RollbackError(f"no backups found for approval: {patch_approval_id}")

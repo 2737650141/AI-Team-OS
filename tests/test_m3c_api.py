@@ -158,3 +158,50 @@ def test_api_approval_body_cannot_change_params(data_dir: Path, seeded) -> None:
         )
         # 额外字段被忽略（schema 拒绝未知字段由 pydantic extra=ignore 默认；不影响审批绑定）
         assert resp.status_code in (200, 409)
+
+
+# ---------- review blocking（sa_20260805_144828）回归：reject 后重派不死锁 ----------
+def test_gt_w03_graph_reject_then_redispatch(data_dir: Path, monkeypatch) -> None:
+    """图级 GT-W03：reject → rejected_by_user → reviewer reject → 重派 → 新审批 →
+    批准 → completed（此前 executor 复用 rejected 请求导致恢复永久卡死）。"""
+    fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+    monkeypatch.setenv("AI_TEAM_ALLOWED_READ_ROOTS", str(fixtures))
+    from app.core.schemas import ApprovalPayload
+    from app.runner import resume_task, run_task
+
+    # 1. 首次运行 → 暂停（审批 R1 pending）
+    report = run_task(
+        "sandbox_code_fix",
+        token_budget=20000,
+        cost_budget=1.0,
+        data_dir=data_dir,
+        model_overrides={"project_alias": "sample-python"},
+    )
+    assert report.state.current_status == "paused"
+    r1 = report.state.pending_approval_id
+    assert r1
+
+    # 2. 用户拒绝 R1 → 恢复：executor rejected_by_user → reviewer reject → 重派
+    report2 = resume_task(
+        report.run_id,
+        payload=ApprovalPayload(approval_id=r1, decision="rejected", reason="not now"),
+        data_dir=data_dir,
+    )
+    # 重派后 executor 创建新审批 R2 并再次暂停（blocking 修复：不复用 rejected）
+    assert report2.state.current_status == "paused"
+    r2 = report2.state.pending_approval_id
+    assert r2 and r2 != r1
+
+    # 3. 批准 R2 → completed（补丁应用 + pytest 通过）
+    report3 = resume_task(
+        report2.run_id,
+        payload=ApprovalPayload(approval_id=r2, decision="approved", reason="ok"),
+        data_dir=data_dir,
+    )
+    assert report3.state.current_status == "completed"
+    # 源项目（fixtures/sample-python）未被修改
+    from app.core.workspace import WorkspaceManager
+
+    manifest = WorkspaceManager(data_dir / "runtime").load_manifest(report.state.task_id)
+    assert manifest is not None
+    assert manifest.source_project_alias == "sample-python"

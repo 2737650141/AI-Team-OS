@@ -81,14 +81,27 @@ class ArtifactWriter:
         approval_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         filename: str | None = None,
+        dedupe_content: bool = False,
     ) -> ArtifactRecord:
-        """固化一条 Artifact：内容落盘 + 索引记录。"""
+        """固化一条 Artifact：内容落盘 + 索引记录。
+
+        dedupe_content=True 时按 (subtask_id, artifact_type, content_hash) 复用
+        既有记录（Executor 重放不产生重复 diff 预览，nit sa_20260805_144828）。
+        """
         if artifact_type not in ARTIFACT_TYPES:
             raise ValueError(f"unknown artifact type: {artifact_type}")
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:32]
+        if dedupe_content:
+            for rec in self.load_all(task_id):
+                if (
+                    rec.subtask_id == subtask_id
+                    and rec.artifact_type == artifact_type
+                    and rec.content_hash == content_hash
+                ):
+                    return rec
         artifact_id = uuid.uuid4().hex[:16]
         fname = filename or f"{artifact_id}.{artifact_type.replace('_', '-')}.txt"
         target = self._task_dir / fname
-        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:32]
         target.write_text(content, encoding="utf-8")
         record = ArtifactRecord(
             artifact_id=artifact_id,

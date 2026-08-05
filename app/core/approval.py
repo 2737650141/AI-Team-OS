@@ -197,6 +197,7 @@ class ApprovalService:
             raise ApprovalError(f"approval not found: {approval_id}")
         if self.is_expired(request):
             request.status = "expired"
+            self._persist(request)  # nit-2：过期状态落盘（重载不再见 stale pending）
             raise ApprovalError("approval expired")
         if request.status == "approved" and decision == "approved":
             return request  # 幂等（5.4）
@@ -211,6 +212,10 @@ class ApprovalService:
         request.decision_reason = reason
         self._persist(request)
         return request
+
+    def cancel(self, approval_id: str, reason: str | None = None) -> ApprovalRequest:
+        """取消 pending 审批（重放新建但未决策的请求回收）。"""
+        return self.decide(approval_id, "cancelled", reason)
 
     def verify_execution(
         self,
@@ -228,6 +233,7 @@ class ApprovalService:
             raise ApprovalError(f"approval not approved: {request.status}")
         if self.is_expired(request):
             request.status = "expired"
+            self._persist(request)  # nit-2：过期状态落盘
             raise ApprovalError("approval expired during execution")
         if operation_hash is not None and operation_hash != request.operation_hash:
             raise ApprovalError("operation hash mismatch; approval invalidated")

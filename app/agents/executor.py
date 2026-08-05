@@ -87,12 +87,29 @@ class DeterministicFakeExecutor:
         readme = self._sandbox.worktree / "README.md"
         old = readme.read_text(encoding="utf-8") if readme.exists() else ""
         addition = "\n## Sandbox 段落（GT-W01）\n由 Executor 生成的确定性新增段落。\n"
-        new = old + addition if old else addition
         target = "README.md"
-        diff = "".join(
-            ["--- a/" + target + "\n", "+++ b/" + target + "\n", "@@ -1,1 +1,1 @@\n"]
-            + ["+" + line for line in new.splitlines(keepends=True)]
-        )
+        # 正确 unified diff（review should-fix-1：旧行作上下文 + 末尾追加新行，
+        # 而非硬编码 @@ -1,1 +1,1 @@ 只含 + 行导致前置插入）
+        old_lines = old.splitlines(keepends=True)
+        add_lines = addition.splitlines(keepends=True)
+        if old_lines:
+            n = len(old_lines)
+            k = len(add_lines)
+            diff_lines = [
+                f"--- a/{target}",
+                f"+++ b/{target}",
+                f"@@ -{n},{n} +{n},{n + k} @@",
+            ]
+            diff_lines += old_lines
+            diff_lines += ["+" + line for line in add_lines]
+        else:
+            diff_lines = [
+                f"--- a/{target}",
+                f"+++ b/{target}",
+                f"@@ -0,0 +1,{len(add_lines)} @@",
+            ]
+            diff_lines += ["+" + line for line in add_lines]
+        diff = "".join(diff_lines)
         return PatchProposal(
             patch_id="p-readme",
             task_id=self._sandbox.task_id,
@@ -162,6 +179,7 @@ class DeterministicFakeExecutor:
                 ts=_now(),
             )
         # 8.3：Diff Artifact（审批前生成预览）
+        # 重放复用（nit sa_20260805_144828）：同子任务同内容 diff 不重复写
         diff_artifact = sb.artifacts.write(
             artifact_type="diff",
             content=proposal.unified_diff,
@@ -169,6 +187,7 @@ class DeterministicFakeExecutor:
             subtask_id=subtask.subtask_id,
             created_by="executor",
             metadata={"patch_id": proposal.patch_id, "expected_effect": proposal.expected_effect},
+            dedupe_content=True,
         )
         # 目标哈希（审批绑定，5.3）
         target_hashes = {}
@@ -181,9 +200,14 @@ class DeterministicFakeExecutor:
         parameter_hash = ApprovalService.parameter_hash_of(
             {"patch_json": proposal.model_dump_json()}
         )
-        # 重放语义（5.4）：LangGraph 恢复时重放本节点——复用该子任务最新审批请求
-        # （用户决定绑定其 approval_id；拒绝场景返回 rejected_by_user）
-        existing = [r for r in sb.approval.all(sb.task_id) if r.subtask_id == subtask.subtask_id]
+        # 重放语义（5.4）：LangGraph 恢复时重放本节点——复用该子任务最新**可决策**审批
+        # 请求（pending/approved；用户决定绑定其 approval_id）。rejected 请求不可再决策，
+        # 重派时必须创建新请求，否则恢复永久卡死（review blocking sa_20260805_144828）
+        existing = [
+            r
+            for r in sb.approval.all(sb.task_id)
+            if r.subtask_id == subtask.subtask_id and r.status in ("pending", "approved")
+        ]
         if existing:
             request = existing[-1]
         else:
@@ -204,17 +228,29 @@ class DeterministicFakeExecutor:
             )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
         decision = interrupt(ApprovalPayload(approval_id=request.approval_id, decision="approved"))
-        # LOW-1：恢复值 approval_id 必须绑定本请求（fail closed，重放确定性）
+        # 恢复值绑定解析（blocking sa_20260805_144828）：用户决定绑定的是其批准的
+        # approval_id（拒绝重放时用户决定绑定旧 rejected 请求，而本节点新建了请求）。
+        # 按 payload.approval_id 解析真实请求；新建但未决策的请求取消（不污染审批列表）。
+        resolved = request
         if decision.approval_id != request.approval_id:
-            return ExecutionResult(
-                subtask_id=subtask.subtask_id,
-                summary="approval_id mismatch on resume; patch not applied",
-                claims=[],
-                ts=_now(),
-                metadata={"status": "rejected_verification"},
-            )
+            alt = sb.approval.get(decision.approval_id)
+            if alt is None:
+                return ExecutionResult(
+                    subtask_id=subtask.subtask_id,
+                    summary="approval_id mismatch on resume; patch not applied",
+                    claims=[],
+                    ts=_now(),
+                    metadata={"status": "rejected_verification"},
+                )
+            resolved = alt
         if decision.decision != "approved":
             # GT-W03：拒绝 → 不应用补丁、保留提案与 Diff、标记未实施
+            if resolved.approval_id != request.approval_id:
+                try:
+                    sb.approval.cancel(request.approval_id, reason="superseded by user decision")
+                except ApprovalError:
+                    pass  # 已决策/已取消则忽略
+            request = resolved
             return ExecutionResult(
                 subtask_id=subtask.subtask_id,
                 summary=(
@@ -229,6 +265,7 @@ class DeterministicFakeExecutor:
                     "diff_artifact_id": diff_artifact.artifact_id,
                 },
             )
+        request = resolved
         # 批准：再验证（5.4 TOCTOU）→ 应用 → 测试 → Artifact
         try:
             sb.approval.verify_execution(

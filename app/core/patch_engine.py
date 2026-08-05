@@ -188,24 +188,27 @@ class PatchApplier:
                 )
                 new_text = self._apply_diff_to_file(proposal.unified_diff, rel, old_text)
                 # 备份原文件（原子回滚用；映射记录供 WorkspaceRollback 恢复）
+                # 新建文件（原不存在）backup 记空串 → 回滚时删除（review should-fix-2）
                 backup = self._backups_dir / f"{uuid.uuid4().hex[:12]}.bak"
-                if target.exists():
+                was_created = not target.exists()
+                if not was_created:
                     shutil.copy2(target, backup)
                     backup_files.append((target, backup))
-                    with self._manifest_path.open("a", encoding="utf-8") as mf:
-                        import json
+                with self._manifest_path.open("a", encoding="utf-8") as mf:
+                    import json
 
-                        mf.write(
-                            json.dumps(
-                                {
-                                    "approval_id": approval_id,
-                                    "target": rel,
-                                    "backup": backup.name,
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n"
+                    mf.write(
+                        json.dumps(
+                            {
+                                "approval_id": approval_id,
+                                "target": rel,
+                                "backup": backup.name if not was_created else "",
+                                "created": was_created,
+                            },
+                            ensure_ascii=False,
                         )
+                        + "\n"
+                    )
                 # 原子替换（7.1）：写临时文件后 rename
                 tmp = target.with_suffix(target.suffix + ".tmp")
                 tmp.write_text(new_text, encoding="utf-8")

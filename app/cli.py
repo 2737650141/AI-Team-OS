@@ -20,7 +20,6 @@ from app.runner import (
     dry_run,
     provider_health,
     resume_task,
-    rollback,
     run_task,
     status_task,
     trace_task,
@@ -131,10 +130,14 @@ def main(argv: list[str] | None = None) -> None:
     artifacts_cmd.add_argument("run_id")
     artifact_show_parser = sub.add_parser("artifact-show", help="单个 Artifact 内容")
     artifact_show_parser.add_argument("artifact_id")
-    rollback_parser = sub.add_parser("rollback", help="回滚指定 Patch（需已批准的回滚审批）")
+    rollback_parser = sub.add_parser(
+        "rollback", help="回滚指定 Patch（缺省内部创建并批准回滚审批）"
+    )
     rollback_parser.add_argument("run_id")
     rollback_parser.add_argument("--patch", required=True, help="目标 Patch 的 approval_id")
-    rollback_parser.add_argument("--approval", required=True, help="已批准的回滚审批 approval_id")
+    rollback_parser.add_argument(
+        "--approval", default=None, help="已批准的回滚审批 approval_id（缺省：本命令即批准）"
+    )
     for p in (
         workspace_status_parser,
         diff_cmd,
@@ -214,13 +217,19 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "artifact-show":
         print(json.dumps(artifact_show(args.artifact_id, data_dir), ensure_ascii=False, indent=2))
     elif args.command == "rollback":
-        print(
-            json.dumps(
-                rollback(args.run_id, args.patch, args.approval, data_dir),
-                ensure_ascii=False,
-                indent=2,
+        from app.runner import rollback as _rollback
+
+        try:
+            print(
+                json.dumps(
+                    _rollback(args.run_id, args.patch, args.approval, data_dir),
+                    ensure_ascii=False,
+                    indent=2,
+                )
             )
-        )
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"ok": False, "error": str(exc)}))
+            raise SystemExit(1)
     elif args.command == "evidence":
         from app.runner import evidence_list
 

@@ -235,10 +235,10 @@ class ApprovalDecisionBody(BaseModel):
 
 
 class RollbackBody(BaseModel):
-    """回滚请求：目标 Patch 的 approval_id + 已批准的回滚审批 approval_id。"""
+    """回滚请求：目标 Patch 的 approval_id + 可选已批准的回滚审批 approval_id。"""
 
     patch_approval_id: str = Field(min_length=1, max_length=64)
-    approval_id: str = Field(min_length=1, max_length=64)
+    approval_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 @app.get("/tasks/{run_id}/approvals")

@@ -464,6 +464,34 @@ def resume_task(
                 len(ctx.tool_gateway.tool_calls),
                 "failed",
             )
+        if "__interrupt__" in result:
+            # 恢复后再次暂停（重派产生的审批 interrupt 等）：写回 paused + 新 pending，
+            # 与 run_task 对称（blocking sa_20260805_144828 图级流程）
+            interrupt_value = result["__interrupt__"][0].value if result["__interrupt__"] else None
+            pending_approval = (
+                interrupt_value.approval_id
+                if isinstance(interrupt_value, ApprovalPayload)
+                else None
+            )
+            compiled.update_state(
+                {"configurable": {"thread_id": run_id}},
+                {
+                    "current_status": "paused",
+                    "paused_from_status": state.current_status,
+                    "pending_approval_id": pending_approval,
+                },
+            )
+            state.current_status = "paused"
+            state.pending_approval_id = pending_approval
+            return RunReport(
+                state.task_id,
+                run_id,
+                state,
+                ctx.budget.usage,
+                getattr(ctx.provider, "call_count", 0),
+                len(ctx.tool_gateway.tool_calls),
+                "paused",
+            )
         state = TaskState.model_validate(result)
         # 图已设置最终状态（completed / failed），runner 不覆盖
         return RunReport(
@@ -686,9 +714,17 @@ def artifact_show(artifact_id: str, data_dir: Path | None = None) -> dict:
 
 
 def rollback(
-    run_id: str, patch_approval_id: str, approval_id: str, data_dir: Path | None = None
+    run_id: str,
+    patch_approval_id: str,
+    approval_id: str | None = None,
+    data_dir: Path | None = None,
 ) -> dict:
-    """007 十六/十七：回滚指定 Patch（须提供已批准的回滚审批）。"""
+    """007 十六/十七：回滚指定 Patch。
+
+    approval_id 缺省时内部创建并批准（action_type=rollback）：用户在终端/API
+    显式执行 rollback 命令即明确回滚意图，审批记录仍完整落盘（review
+    should-fix-3：此前无创建路径导致命令不可达）。
+    """
     from app.core.approval import ApprovalService
     from app.core.artifacts import ArtifactWriter
     from app.core.rollback import WorkspaceRollback
@@ -702,6 +738,23 @@ def rollback(
     worktree = Path(manifest.worktree_path)
     base = data_dir / "runtime" / "workspaces" / state.task_id
     approval = ApprovalService(storage_path=base / "approvals.jsonl")
+    if approval_id is None:
+        request = approval.create(
+            task_id=state.task_id,
+            run_id=run_id,
+            action_type="rollback",
+            tool_name="sandbox_rollback",
+            risk_level="sensitive",
+            approval_level="explicit",
+            summary=f"rollback patch approval {patch_approval_id}",
+            target_paths=[f"patch:{patch_approval_id}"],
+        )
+        approval.decide(
+            request.approval_id,
+            "approved",
+            reason="CLI/API rollback command (explicit user intent)",
+        )
+        approval_id = request.approval_id
     rollback = WorkspaceRollback(
         worktree,
         base / "input",
