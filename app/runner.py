@@ -184,9 +184,33 @@ def resume_task(
             )
         budget, audit, fake, model_gateway, tool_gateway = _build_context(state, data_dir)
         compiled = _compile(state, conn, model_gateway, tool_gateway)
-        result = compiled.invoke(
-            Command(resume=payload), config={"configurable": {"thread_id": run_id}}
-        )
+        try:
+            result = compiled.invoke(
+                Command(resume=payload), config={"configurable": {"thread_id": run_id}}
+            )
+        except BudgetExceeded as exc:
+            # 与 run_task 对称：恢复中预算不足时写回 failed，避免 checkpoint 停留在 paused
+            compiled.update_state(
+                {"configurable": {"thread_id": run_id}},
+                {
+                    "current_status": "failed",
+                    "failure_code": "budget_exceeded",
+                    "final_result": str(exc),
+                    "budget_usage": budget.usage,
+                },
+            )
+            state.current_status = "failed"
+            state.failure_code = "budget_exceeded"
+            state.final_result = str(exc)
+            return RunReport(
+                state.task_id,
+                run_id,
+                state,
+                budget.usage,
+                fake.call_count,
+                len(tool_gateway.tool_calls),
+                "failed",
+            )
         state = TaskState.model_validate(result)
         state.current_status = "completed"
         return RunReport(
