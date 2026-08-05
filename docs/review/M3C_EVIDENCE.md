@@ -2,9 +2,11 @@
 
 阶段：M3-B1（PDF/验收状态）+ M3-C（沙箱执行/审批/补丁/命令/回滚/Git 闭环）
 分支：phase-3c/sandbox-execution（自 main ed89ff3 创建）
-提交：ecc94f9(PDF) → dfc1518(acceptance) → f709af4(workspace+approval) →
+提交（12 个）：ecc94f9(PDF) → dfc1518(acceptance) → f709af4(workspace+approval) →
 3fd70c4(sandbox tools+patch+command) → 3d7779a(git) → 539267a(executor 启用) →
-e38b29b(runtime+rollback+CLI/API) → 86ea660(reasonix 移除)；git log 见
+e38b29b(runtime+rollback+CLI/API) → 86ea660(reasonix 移除) → 95531a8(文档) →
+f0f83fa(security 修复) → 386ece3(review round1 修复) → 71c980c(review round2 修复)；
+git log 见
 artifacts/review/m3c-git-log.txt
 
 ## 一、M3-B1 封板补齐
@@ -82,16 +84,27 @@ artifacts/review/m3c-git-log.txt
 
 ## 十一、测试
 
-- 全量：289 passed + 2 skipped（M1-M3-B 回归 + M3-C 新增 60+ 项）。
+- 全量：294 passed + 2 skipped（M1-M3-B 回归 + M3-C 新增 60+ 项）。
 - 默认真实网络请求次数：0（全部 MockTransport/IP 字面量）。
 
 ## 十二、双重审查
 
-- 普通 review 与 security_review 在最终验证后执行（结论于 §十三 追加）。
+- security_review（sa_20260805_144156 → 复查 sa_20260805_150635）：修复
+  HIGH（killpg 进程组杀伤 → start_new_session）+ MEDIUM（restore_backup 穿越）+
+  LOW（approval_id 绑定/task_id 校验/过期落盘）；最终 verdict=pass，无 blocking，
+  1 MEDIUM posture note（rollback 自动批准：本地单用户信任模型内非 bypass）+ 2 LOW。
+- 普通 review（sa_20260805_144828 三轮）：修复 blocking（reject 重派死锁 →
+  pending/approved 复用过滤 + payload 解析 + resume __interrupt__；README diff
+  格式）+ should-fix（回滚新建文件/缺失备份部分恢复/回滚审批创建路径）+
+  nits（dedupe diff/过期持久化/cancel）；最终 verdict=pass，无剩余 finding。
 
-## 十三、最终验证与审查结论
+## 十三、最终验证
 
-（封板时填写）
+- `pytest tests/`：294 passed + 2 skipped（最后提交 71c980c 后）。
+- `ruff check/format --check`（app tests scripts fixtures）：全绿 87 文件。
+- `mypy app`：53 source files no issues。
+- `git diff --check`：通过；工作区干净；无 remote/push。
+- 证据包：artifacts/review/m3c-source.zip（扫描 clean）。
 
 ## 十四、已知限制
 
