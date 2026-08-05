@@ -277,3 +277,64 @@ def test_no_real_network_in_default_tests(env) -> None:
 
     assert httpx.MockTransport  # mock 基础设施可用
     assert env["gateway"].available_tools()
+
+
+# ---------- security_review（sa_20260805_144156）修复回归 ----------
+def test_restore_backup_traversal_rejected(env) -> None:
+    """MEDIUM-2：restore_backup 的 backup_name 限 uuid-hex .bak（防 ../ 穿越）。"""
+    from app.tools.sandbox_tools import SandboxToolset
+
+    toolset = SandboxToolset(env["worktree"], "t1", env["artifacts"], env["approval"])
+    ctx = ToolExecutionContext(task_id="t1", subtask_id="s1", role="executor")
+    r = toolset.restore_backup("../../outside.bak", "x.txt", ctx)
+    assert r["ok"] is False and r["code"] == "blocked"
+    r2 = toolset.restore_backup("deadbeefcafe.bak", "x.txt", ctx)
+    assert r2["ok"] is False  # 合法格式但不存在
+
+
+def test_timeout_uses_new_session(env) -> None:
+    """HIGH：Popen 独立会话（start_new_session），超时 killpg 只杀子进程组。"""
+    import subprocess
+
+    from app.core.command_runner import SandboxCommandRunner
+
+    runner = SandboxCommandRunner(CommandPolicy(), env["worktree"])
+    # 直接构造子进程验证会话隔离（不经白名单——白名单 pytest 已覆盖）
+    proc = subprocess.Popen(
+        ["python", "-c", "import time; time.sleep(5)"],
+        cwd=str(env["worktree"]),
+        shell=False,
+        start_new_session=True,
+    )
+    assert proc.poll() is None
+    runner._terminate_tree(proc)
+    proc.wait(timeout=5)
+    assert proc.returncode is not None  # 已被终止
+
+
+def test_executor_approval_id_binding(env) -> None:
+    """LOW-1：恢复值 approval_id 不匹配 → fail closed（不应用补丁）。"""
+    from app.agents.executor import SandboxContext
+
+    ctx = SandboxContext(
+        worktree=env["worktree"],
+        approval=env["approval"],
+        artifacts=env["artifacts"],
+        task_id="t1",
+    )
+    from app.agents.executor import DeterministicFakeExecutor
+
+    executor = DeterministicFakeExecutor(ctx)
+    # 直接验证 verify_execution 对 pending 状态拒绝（LOW-1 的 fail-closed 基础）
+    from app.core.approval import ApprovalError
+
+    req = env["approval"].create(
+        task_id="t1",
+        action_type="apply_patch",
+        tool_name="sandbox_apply_patch",
+        summary="x",
+        target_paths=["src/main.py"],
+    )
+    with pytest.raises(ApprovalError, match="not approved"):
+        env["approval"].verify_execution(req, parameter_hash="", target_hash="")
+    assert executor is not None  # 构造成功

@@ -204,6 +204,15 @@ class DeterministicFakeExecutor:
             )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
         decision = interrupt(ApprovalPayload(approval_id=request.approval_id, decision="approved"))
+        # LOW-1：恢复值 approval_id 必须绑定本请求（fail closed，重放确定性）
+        if decision.approval_id != request.approval_id:
+            return ExecutionResult(
+                subtask_id=subtask.subtask_id,
+                summary="approval_id mismatch on resume; patch not applied",
+                claims=[],
+                ts=_now(),
+                metadata={"status": "rejected_verification"},
+            )
         if decision.decision != "approved":
             # GT-W03：拒绝 → 不应用补丁、保留提案与 Diff、标记未实施
             return ExecutionResult(

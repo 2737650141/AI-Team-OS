@@ -213,6 +213,11 @@ def _build_sandbox_context(
     """构造沙箱上下文（工作区加载/创建 + 审批 + Artifact + 命令执行器 + 写工具注册）。"""
     if not state.user_goal.startswith("sandbox_"):
         return None
+    # LOW-2：task_id 拼入工作区路径，严格限 uuid-hex（防路径注入）
+    import re as _re
+
+    if not _re.fullmatch(r"[0-9a-f]{12,16}", state.task_id):
+        raise ValueError(f"invalid task_id for sandbox workspace: {state.task_id}")
     from app.agents.executor import SandboxContext
     from app.core.approval import ApprovalService
     from app.core.artifacts import ArtifactWriter

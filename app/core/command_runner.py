@@ -196,6 +196,8 @@ class SandboxCommandRunner:
                 stderr=subprocess.PIPE,
                 shell=False,  # 9.1：绝不使用 shell
                 text=False,
+                # security_review HIGH：独立会话（POSIX 新进程组），超时 killpg 只杀子进程
+                start_new_session=True,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             try:

@@ -239,10 +239,20 @@ class SandboxToolset:
     def restore_backup(
         self, backup_name: str, target: str, ctx: ToolExecutionContext | None
     ) -> dict:
-        """恢复备份（15：回滚能力）。"""
+        """恢复备份（15：回滚能力）。backup_name 严格限 uuid-hex .bak（防穿越）。"""
         try:
             _check_sensitive(target)
-            backup = self._backups / backup_name
+            import re as _re
+
+            if not _re.fullmatch(r"[0-9a-f]{12}\.bak", backup_name):
+                return {"ok": False, "error": "invalid backup name", "code": "blocked"}
+            backup = (self._backups / backup_name).resolve()
+            backups_resolved = self._backups.resolve()
+            if not (
+                str(backup) == str(backups_resolved)
+                or str(backup).startswith(str(backups_resolved) + os.sep)
+            ):
+                return {"ok": False, "error": "backup escapes backups dir", "code": "blocked"}
             if not backup.exists() or backup.suffix != ".bak":
                 return {"ok": False, "error": "backup not found", "code": "invalid"}
             dst = _validate_worktree_path(target, self._worktree)
