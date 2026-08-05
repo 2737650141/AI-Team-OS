@@ -14,6 +14,7 @@ dependencies = [
     "uvicorn>=0.30,<1.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
+    "pypdf>=4.0,<6.0",  # PDF 只读文本提取（007 3.1：许可证 BSD-3-Clause，纯 Python，不执行 PDF 脚本）
 ]
 
 [project.optional-dependencies]
@@ -23,6 +24,7 @@ dev = [
     "ruff>=0.5,<1.0",
     "mypy>=1.10,<2.0",
     "httpx>=0.27,<1.0",
+    "reportlab>=4.0,<5.0",  # 测试专用：合成 PDF 生成（007 3.1 测试）
 ]
 
 [project.scripts]
