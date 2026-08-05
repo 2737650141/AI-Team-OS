@@ -1,39 +1,41 @@
-"""打包 M3-A 源码证据包（artifacts/review/m3a-source.zip）。
+"""打包 M3-B 源码证据包（artifacts/review/m3b-source.zip）。
 
-包含：源码（app/tests/docs/pyproject/.gitignore/.github）、M3A_EVIDENCE、
+包含：源码（app/tests/docs/scripts/pyproject/.gitignore/.env.example/.github）、M3B_EVIDENCE、
 pytest 原始输出、Ruff/mypy 输出、demo 演示产物、Git log/status。
 排除：.env、.venv、.reasonix、*.db、*.sqlite、API Key 模式。
 """
 
 from __future__ import annotations
 
-import re
 import zipfile
 from pathlib import Path
 
+from app.core.secrets import SENSITIVE_SUFFIXES
+from app.core.secrets import scan_text as scan_secrets
+
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "artifacts" / "review" / "m3a-source.zip"
+OUT = ROOT / "artifacts" / "review" / "m3b-source.zip"
 
 INCLUDE_DIRS = ["app", "tests", "docs", "scripts"]
 INCLUDE_FILES = ["pyproject.toml", ".gitignore", ".env.example", ".github"]
 DEMO_DIR = ROOT / "artifacts" / "demo"
 
-# 敏感模式：任何命中即拒绝打包（源码包不得包含密钥/凭据/数据库）
-SENSITIVE = [
-    re.compile(r"sk-[A-Za-z0-9]{16,}", re.I),
-    re.compile(r"api[_-]?key\s*=\s*['\"]?[A-Za-z0-9]{16,}", re.I),
-    re.compile(r"-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----"),
-]
-SENSITIVE_EXEMPT = {".env.example", "test_audit.py"}  # 模板占位符 / redact 功能测试样本（假密钥）
+# 统一秘密检测（006 四.3/4）：模式集与运行时脱敏共用（app.core.secrets）
+# 豁免按相对路径精确匹配（006 四.5），并打印豁免原因
+SENSITIVE_EXEMPT = {
+    ".env.example": "模板占位符（sk-placeholder-replace-me），非真实凭据",
+    "tests/test_audit.py": "redact 功能测试样本（假密钥用于断言脱敏），非真实凭据",
+}
 
-BANNED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".p8"}
+BANNED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".p12", ".p8"} | SENSITIVE_SUFFIXES
 
 
 def scan_text(text: str, path: str) -> list[str]:
+    """秘密检测：统一逻辑 + 相对路径豁免（打印原因）。"""
     if path in SENSITIVE_EXEMPT:
+        print(f"exempt (reason: {SENSITIVE_EXEMPT[path]}): {path}")
         return []
-    hits = [p.pattern for p in SENSITIVE if p.search(text)]
-    return hits
+    return scan_secrets(text)
 
 
 def main() -> None:

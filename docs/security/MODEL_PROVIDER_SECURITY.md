@@ -45,3 +45,16 @@ CONFIG_ERROR（"real model calls disabled"），不得静默调用。
 本阶段继续禁止：真实 GitHub / Web Search / MCP / 文件写 / Shell / subprocess Agent 工具 /
 Docker / Redis / PostgreSQL / pgvector / 邮件 / 日历 / 桌面与安卓控制 / 自动 push。
 应用为本地单用户开发模式，不得监听公网地址。
+
+## 6. 剩余风险：DNS rebinding（006 四）
+
+连接级 DNS rebinding TOCTOU（校验时解析的公网地址与连接时实际解析地址可能不同）
+已记录为已知限制，缓解措施：
+
+- 生产 Base URL 为固定服务端配置（`AI_TEAM_MODEL_BASE_URL`），禁止客户端输入。
+- 禁止自动重定向（follow_redirects=False），每次重定向目标重新校验。
+- 域名解析失败直接拒绝（不放行）。
+- 剩余风险：同一域名在解析后到连接前被 DNS 重新绑定到内网地址。
+  缓解：TLS 证书校验 + 内网环境通常无合法证书；完全消除需自定义 transport
+  在连接后校验对端 IP（M3-C 候选）。
+

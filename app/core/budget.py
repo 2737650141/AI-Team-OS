@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 
 class BudgetExceeded(Exception):
     """预算不足/超限。触发后调用方必须停止发起新的调用（GT-09）。"""
@@ -11,6 +13,20 @@ class BudgetExceeded(Exception):
         self.used = used
         self.limit = limit
         super().__init__(f"{kind} budget exceeded: used={used}, limit={limit}")
+
+
+@dataclass(frozen=True)
+class BudgetSnapshot:
+    """预算只读视图（006 四.1）：冻结快照，不暴露可变控制器，赋值即抛 FrozenInstanceError。"""
+
+    tokens_used: float
+    cost_used: float
+    token_budget: float
+    cost_budget: float
+
+    @property
+    def usage(self) -> dict[str, float]:
+        return {"tokens": float(self.tokens_used), "cost": float(self.cost_used)}
 
 
 class BudgetController:

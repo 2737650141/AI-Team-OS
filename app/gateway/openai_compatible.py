@@ -133,12 +133,26 @@ class OpenAICompatibleProvider:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        # 流式读取响应并限制最大字节（006 四.2）：超过 _MAX_RESPONSE_BYTES 立即断开，
+        # 不等待完整缓冲
+        chunks: list[bytes] = []
+        total = 0
         try:
-            resp = self._client.post(
-                url,
-                json=body,
-                headers=headers,
-            )
+            with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_RESPONSE_BYTES:
+                        resp.close()
+                        raise ProviderError(
+                            ProviderErrorCode.MALFORMED_RESPONSE,
+                            "provider response body exceeds limit",
+                            provider=self.provider_name,
+                            model=request.model,
+                        )
+                    chunks.append(chunk)
+                resp.read()
+                status_code = resp.status_code
+                resp_headers = resp.headers
         except httpx.TimeoutException as exc:
             raise ProviderError(
                 ProviderErrorCode.TIMEOUT,
@@ -161,8 +175,8 @@ class OpenAICompatibleProvider:
                 model=request.model,
             ) from exc
         # 重定向：httpx follow_redirects=False，3xx 视为配置错误（7.3：不允许重定向到内网）
-        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-            location = resp.headers.get("location", "")
+        if status_code in (301, 302, 303, 307, 308):
+            location = resp_headers.get("location", "")
             reason = (
                 _blocked_host_reason(urlparse(location).hostname or "")
                 if location
@@ -174,56 +188,60 @@ class OpenAICompatibleProvider:
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 401:
+        if status_code == 401:
             raise ProviderError(
                 ProviderErrorCode.AUTHENTICATION_ERROR,
                 "provider authentication failed",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 403:
+        if status_code == 403:
             raise ProviderError(
                 ProviderErrorCode.PERMISSION_ERROR,
                 "provider permission denied",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 404:
+        if status_code == 404:
             raise ProviderError(
                 ProviderErrorCode.MODEL_NOT_FOUND,
                 f"model not found: {request.model}",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 429:
+        if status_code == 429:
             raise ProviderError(
                 ProviderErrorCode.RATE_LIMITED,
                 "provider rate limited",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code >= 500:
+        if status_code >= 500:
             raise ProviderError(
                 ProviderErrorCode.PROVIDER_INTERNAL_ERROR,
                 "provider internal error",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code != 200:
+        if status_code != 200:
             raise ProviderError(
                 ProviderErrorCode.INVALID_REQUEST,
-                f"provider returned status {resp.status_code}",
+                f"provider returned status {status_code}",
                 provider=self.provider_name,
                 model=request.model,
             )
-        # 响应体限制（7.2）：接收后按字节数拒绝超大响应（httpx 全缓冲，无法流式截断）
-        if len(resp.content) > _MAX_RESPONSE_BYTES:
+        # 重建响应对象（流式已限长；此处仅防 mock transport 直通超大响应）
+        content = b"".join(chunks)
+        if len(content) > _MAX_RESPONSE_BYTES:
             raise ProviderError(
                 ProviderErrorCode.MALFORMED_RESPONSE,
                 "provider response body exceeds limit",
                 provider=self.provider_name,
                 model=request.model,
             )
+        resp = httpx.Response(
+            status_code, headers=resp_headers, content=content, request=resp.request
+        )
         return self._parse_success(request, resp)
 
     def estimate_usage(self, request: ModelRequest) -> UsageEstimate:
