@@ -8,17 +8,32 @@ from pathlib import Path
 
 from app.core.config import load_settings
 from app.core.resume import ResumePayload
-from app.core.schemas import ClarificationPayload
+from app.core.schemas import ApprovalPayload, ClarificationPayload
 from app.gateway.contracts import ProviderError
 from app.runner import (
     RunReport,
+    approval_show,
+    approvals_of,
+    artifact_show,
+    artifacts_of,
+    diff_of,
     dry_run,
     provider_health,
     resume_task,
+    rollback,
     run_task,
     status_task,
     trace_task,
+    workspace_status,
+    workspaces,
 )
+
+
+def _approval_resume_payload(
+    approval_id: str, decision: str, reason: str | None
+) -> ApprovalPayload:
+    """从 run 的 checkpoint 定位 pending approval 并构造恢复值（approve/reject）。"""
+    return ApprovalPayload(approval_id=approval_id, decision=decision, reason=reason)  # type: ignore[arg-type]
 
 
 def _print_report(report: RunReport) -> None:
@@ -95,6 +110,43 @@ def main(argv: list[str] | None = None) -> None:
         "name",
         choices=["real-model", "github-readonly", "web-readonly", "local-readonly"],
     )
+    # 007 十六：沙箱工作区/审批/Artifact/回滚
+    sub.add_parser("workspaces", help="列出任务工作区")
+    workspace_status_parser = sub.add_parser("workspace-status", help="单个工作区状态")
+    workspace_status_parser.add_argument("task_id")
+    diff_cmd = sub.add_parser("diff", help="任务最新 Diff")
+    diff_cmd.add_argument("run_id")
+    approvals_parser = sub.add_parser("approvals", help="任务的审批列表")
+    approvals_parser.add_argument("run_id")
+    approval_show_parser = sub.add_parser("approval-show", help="单个审批详情")
+    approval_show_parser.add_argument("approval_id")
+    approve_parser = sub.add_parser("approve", help="批准审批并恢复任务（007 5.4）")
+    approve_parser.add_argument("run_id")
+    approve_parser.add_argument("approval_id")
+    reject_parser = sub.add_parser("reject", help="拒绝审批并恢复任务（不应用补丁）")
+    reject_parser.add_argument("run_id")
+    reject_parser.add_argument("approval_id")
+    reject_parser.add_argument("--reason", default=None)
+    artifacts_cmd = sub.add_parser("artifacts", help="任务的 Artifact 列表")
+    artifacts_cmd.add_argument("run_id")
+    artifact_show_parser = sub.add_parser("artifact-show", help="单个 Artifact 内容")
+    artifact_show_parser.add_argument("artifact_id")
+    rollback_parser = sub.add_parser("rollback", help="回滚指定 Patch（需已批准的回滚审批）")
+    rollback_parser.add_argument("run_id")
+    rollback_parser.add_argument("--patch", required=True, help="目标 Patch 的 approval_id")
+    rollback_parser.add_argument("--approval", required=True, help="已批准的回滚审批 approval_id")
+    for p in (
+        workspace_status_parser,
+        diff_cmd,
+        approvals_parser,
+        approval_show_parser,
+        approve_parser,
+        reject_parser,
+        artifacts_cmd,
+        artifact_show_parser,
+        rollback_parser,
+    ):
+        p.add_argument("--data-dir", default=None)
     evidence = sub.add_parser("evidence", help="列出任务的 Evidence 摘要")
     evidence.add_argument("run_id", help="run_id（= checkpoint thread_id）")
     evidence.add_argument("--data-dir", default=None)
@@ -136,6 +188,39 @@ def main(argv: list[str] | None = None) -> None:
         from app.core.acceptance import acceptance_run
 
         print(json.dumps(acceptance_run(args.name, settings), ensure_ascii=False, indent=2))
+    elif args.command == "workspaces":
+        print(json.dumps(workspaces(data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "workspace-status":
+        print(json.dumps(workspace_status(args.task_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "diff":
+        print(json.dumps(diff_of(args.run_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "approvals":
+        print(json.dumps(approvals_of(args.run_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "approval-show":
+        print(json.dumps(approval_show(args.approval_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "approve":
+        # 007 5.4：approve → 决策落盘 → 恢复任务
+        approval_payload = _approval_resume_payload(args.approval_id, "approved", None)
+        _print_report(
+            resume_task(args.run_id, payload=approval_payload, data_dir=data_dir, settings=settings)
+        )
+    elif args.command == "reject":
+        approval_payload = _approval_resume_payload(args.approval_id, "rejected", args.reason)
+        _print_report(
+            resume_task(args.run_id, payload=approval_payload, data_dir=data_dir, settings=settings)
+        )
+    elif args.command == "artifacts":
+        print(json.dumps(artifacts_of(args.run_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "artifact-show":
+        print(json.dumps(artifact_show(args.artifact_id, data_dir), ensure_ascii=False, indent=2))
+    elif args.command == "rollback":
+        print(
+            json.dumps(
+                rollback(args.run_id, args.patch, args.approval, data_dir),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     elif args.command == "evidence":
         from app.runner import evidence_list
 

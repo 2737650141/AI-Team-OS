@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -149,9 +150,16 @@ def _coerce(settings: BaseSettings, field: str, value: str):
 
 
 def allowed_read_roots(settings: AppSettings | None = None) -> list[Path]:
-    """006 8.1：本地只读根目录（分号分隔环境变量），默认无。"""
+    """006 8.1：本地只读根目录（分号分隔环境变量），默认无。
+
+    优先 AI_TEAM_ALLOWED_READ_ROOTS（006 语义，不经 MODEL 前缀），
+    回退 settings.model.allowed_read_roots（AI_TEAM_MODEL_ALLOWED_READ_ROOTS）。
+    """
     settings = settings or load_settings()
-    raw = settings.model.allowed_read_roots.strip()
+    raw = (
+        os.environ.get("AI_TEAM_ALLOWED_READ_ROOTS", "").strip()
+        or settings.model.allowed_read_roots.strip()
+    )
     if not raw:
         return []
     return [Path(p.strip()) for p in raw.split(";") if p.strip()]

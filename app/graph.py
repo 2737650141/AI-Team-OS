@@ -308,6 +308,10 @@ def build_graph(
     def review_all(state: TaskState) -> dict:
         """独立审查（004 十）：确定性检查 + 结构化评审；评审结果追加历史（不覆盖）。"""
         valid_ids = evidence_ids_of(state)
+        if sandbox_context is not None:
+            # M3-C：Executor 的 Claim 可引用 Artifact ID（diff/patch/test_report，十四.1）
+            for artifact in sandbox_context.artifacts.load_all(state.task_id):
+                valid_ids.add(artifact.artifact_id)
         updated_subtasks: list[SubtaskState] = []
         all_results: list[ReviewResult] = []
         for s in state.subtasks:

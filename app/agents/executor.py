@@ -49,6 +49,7 @@ class SandboxContext:
     command_runner: SandboxCommandRunner | None = None
     tool_gateway: ToolGateway | None = None
     task_id: str = ""
+    run_id: str | None = None  # 真实 run_id（审批记录绑定，API/CLI 恢复定位）
 
 
 class ExecutorError(Exception):
@@ -114,7 +115,8 @@ class DeterministicFakeExecutor:
         old = main.read_text(encoding="utf-8")
         if "def buggy" not in old:
             raise ExecutorError("deterministic bug not found (expected 'def buggy')")
-        new = old.replace("return False", "return True", 1)
+        # 只替换函数体缩进行的 return False（docstring 描述含同串，先出现会误替换）
+        new = old.replace("    return False\n", "    return True\n", 1)
         target = "src/main.py"
         diff_lines = ["--- a/" + target + "\n", "+++ b/" + target + "\n"]
         old_lines = old.splitlines(keepends=True)
@@ -177,23 +179,29 @@ class DeterministicFakeExecutor:
                     target.read_text(encoding="utf-8", errors="replace")
                 )
         parameter_hash = ApprovalService.parameter_hash_of(
-            {"patch": proposal.unified_diff, "files": proposal.target_files}
+            {"patch_json": proposal.model_dump_json()}
         )
-        request = sb.approval.create(
-            task_id=sb.task_id,
-            run_id=sb.task_id,
-            subtask_id=subtask.subtask_id,
-            action_type="apply_patch",
-            tool_name="sandbox_apply_patch",
-            risk_level="sensitive",
-            approval_level="explicit",
-            summary=proposal.reason,
-            target_paths=proposal.target_files,
-            diff_ref=diff_artifact.artifact_id,
-            estimated_file_changes=len(proposal.target_files),
-            parameter_hash=parameter_hash,
-            target_hash=ApprovalService.target_hash_of(target_hashes),
-        )
+        # 重放语义（5.4）：LangGraph 恢复时重放本节点——复用该子任务最新审批请求
+        # （用户决定绑定其 approval_id；拒绝场景返回 rejected_by_user）
+        existing = [r for r in sb.approval.all(sb.task_id) if r.subtask_id == subtask.subtask_id]
+        if existing:
+            request = existing[-1]
+        else:
+            request = sb.approval.create(
+                task_id=sb.task_id,
+                run_id=sb.run_id or sb.task_id,
+                subtask_id=subtask.subtask_id,
+                action_type="apply_patch",
+                tool_name="sandbox_apply_patch",
+                risk_level="sensitive",
+                approval_level="explicit",
+                summary=proposal.reason,
+                target_paths=proposal.target_files,
+                diff_ref=diff_artifact.artifact_id,
+                estimated_file_changes=len(proposal.target_files),
+                parameter_hash=parameter_hash,
+                target_hash=ApprovalService.target_hash_of(target_hashes),
+            )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
         decision = interrupt(ApprovalPayload(approval_id=request.approval_id, decision="approved"))
         if decision.decision != "approved":

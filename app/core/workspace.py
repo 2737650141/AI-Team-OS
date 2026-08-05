@@ -168,9 +168,11 @@ class WorkspaceManager:
             total_bytes += p.stat().st_size
             if total_bytes > MAX_PROJECT_BYTES:
                 raise WorkspaceError(f"project exceeds {MAX_PROJECT_BYTES} bytes")
-            dest = worktree / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(p, dest)
+            # 双份副本：input/（只读初始快照，回滚用）+ worktree/（Executor 唯一可写）
+            for dest_root in (input_dir, worktree):
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(p, dest)
             file_count += 1
         # 输入快照（只读参考）：记录排除清单即可，不重复复制
         manifest = WorkspaceManifest(

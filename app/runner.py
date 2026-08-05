@@ -102,6 +102,7 @@ def _build_context(
     settings: AppSettings | None = None,
     model_mode: str = "fake",
     model_overrides: dict[str, str] | None = None,
+    run_id: str | None = None,
 ) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
     settings = settings or load_settings()
@@ -184,7 +185,7 @@ def _build_context(
     context = ContextBuilder(settings)
     # 007 四-十三：沙箱执行上下文（sandbox_* 目标任务；工作区从磁盘加载或新建）
     sandbox = _build_sandbox_context(
-        state, data_dir, tool_gateway, model_overrides, settings, audit
+        state, data_dir, tool_gateway, model_overrides, settings, audit, run_id
     )
     return RunContext(
         budget=budget,
@@ -207,6 +208,7 @@ def _build_sandbox_context(
     model_overrides: dict[str, str] | None,
     settings: AppSettings,
     audit: AuditLog,
+    run_id: str | None = None,
 ) -> SandboxContext | None:
     """构造沙箱上下文（工作区加载/创建 + 审批 + Artifact + 命令执行器 + 写工具注册）。"""
     if not state.user_goal.startswith("sandbox_"):
@@ -239,6 +241,7 @@ def _build_sandbox_context(
         command_runner=command_runner,
         tool_gateway=tool_gateway,
         task_id=state.task_id,
+        run_id=run_id,
     )
     # 沙箱写工具注册（roles=executor + requires_approval；网关放行需 ctx.approval_id）
     toolset = SandboxToolset(worktree, state.task_id, artifacts, approval)
@@ -293,6 +296,7 @@ def run_task(
         settings=settings,
         model_mode=model_mode,
         model_overrides=model_overrides,
+        run_id=run_id,
     )
     conn = _open_conn(data_dir)
     try:
@@ -425,6 +429,7 @@ def resume_task(
             settings=settings,
             model_mode=state.model_mode or model_mode,
             model_overrides=model_overrides,
+            run_id=run_id,
         )
         compiled = _compile(ctx, state, conn)
         try:
@@ -582,6 +587,141 @@ def evidence_list(run_id: str, data_dir: Path | None = None) -> dict:
             for e in trace["evidence"]
         ],
     }
+
+
+def workspaces(data_dir: Path | None = None) -> list[dict]:
+    """007 十六：列出全部任务工作区（manifest 摘要）。"""
+    from app.core.workspace import WorkspaceManager
+
+    return WorkspaceManager((data_dir or Path("data")) / "runtime").workspaces()
+
+
+def workspace_status(task_id: str, data_dir: Path | None = None) -> dict:
+    """007 十六：单个工作区状态（manifest + 目录结构）。"""
+    from app.core.workspace import WorkspaceManager
+
+    mgr = WorkspaceManager((data_dir or Path("data")) / "runtime")
+    manifest = mgr.load_manifest(task_id)
+    base = (data_dir or Path("data")) / "runtime" / "workspaces" / task_id
+    return {
+        "manifest": manifest.to_dict(),
+        "dirs": {
+            "input": (base / "input").exists(),
+            "worktree": (base / "worktree").exists(),
+            "artifacts": (base / "artifacts").exists(),
+            "backups": (base / "backups").exists(),
+            "logs": (base / "logs").exists(),
+        },
+    }
+
+
+def approvals_of(run_id: str, data_dir: Path | None = None) -> list[dict]:
+    """007 十六/十七：任务的审批列表（approval_id/状态/摘要——不含凭据）。"""
+    from app.core.approval import ApprovalService
+
+    data_dir = data_dir or Path("data")
+    checkpoint = _load_checkpoint(run_id, data_dir)
+    state = TaskState.model_validate(checkpoint)
+    approval = ApprovalService(
+        storage_path=data_dir / "runtime" / "workspaces" / state.task_id / "approvals.jsonl"
+    )
+    return [r.model_dump() for r in approval.all(state.task_id)]
+
+
+def approval_show(approval_id: str, data_dir: Path | None = None) -> dict:
+    """007 十六/十七：单个审批详情（ApprovalRequest 全字段——不含凭据）。"""
+    from app.core.approval import ApprovalService
+
+    data_dir = data_dir or Path("data")
+    for path in sorted(data_dir.glob("runtime/workspaces/*/approvals.jsonl")):
+        svc = ApprovalService(storage_path=path)
+        req = svc.get(approval_id)
+        if req is not None:
+            return req.model_dump()
+    raise KeyError(f"approval not found: {approval_id}")
+
+
+def diff_of(run_id: str, data_dir: Path | None = None) -> dict:
+    """007 十六/十七：任务最新 Diff（diff Artifact 内容）。"""
+    from app.core.artifacts import ArtifactWriter
+
+    data_dir = data_dir or Path("data")
+    checkpoint = _load_checkpoint(run_id, data_dir)
+    state = TaskState.model_validate(checkpoint)
+    writer = ArtifactWriter(data_dir / "runtime", state.task_id)
+    diffs = [a for a in writer.load_all(state.task_id) if a.artifact_type == "diff"]
+    if not diffs:
+        return {"ok": False, "error": "no diff artifact found"}
+    latest = diffs[-1]
+    return {"ok": True, "artifact_id": latest.artifact_id, "diff": writer.read_content(latest)}
+
+
+def artifacts_of(run_id: str, data_dir: Path | None = None) -> list[dict]:
+    """007 十六/十七：任务 Artifact 列表。"""
+    from app.core.artifacts import ArtifactWriter
+
+    data_dir = data_dir or Path("data")
+    checkpoint = _load_checkpoint(run_id, data_dir)
+    state = TaskState.model_validate(checkpoint)
+    writer = ArtifactWriter(data_dir / "runtime", state.task_id)
+    return [r.model_dump() for r in writer.load_all(state.task_id)]
+
+
+def artifact_show(artifact_id: str, data_dir: Path | None = None) -> dict:
+    """007 十六/十七：单个 Artifact 内容。"""
+    from app.core.artifacts import ArtifactWriter
+
+    data_dir = data_dir or Path("data")
+    for task_dir in sorted(data_dir.glob("runtime/workspaces/*")):
+        writer = ArtifactWriter(data_dir / "runtime", task_dir.name)
+        rec = writer.get(artifact_id, task_dir.name)
+        if rec is not None:
+            return {"artifact": rec.model_dump(), "content": writer.read_content(rec)}
+    raise KeyError(f"artifact not found: {artifact_id}")
+
+
+def rollback(
+    run_id: str, patch_approval_id: str, approval_id: str, data_dir: Path | None = None
+) -> dict:
+    """007 十六/十七：回滚指定 Patch（须提供已批准的回滚审批）。"""
+    from app.core.approval import ApprovalService
+    from app.core.artifacts import ArtifactWriter
+    from app.core.rollback import WorkspaceRollback
+    from app.core.workspace import WorkspaceManager
+
+    data_dir = data_dir or Path("data")
+    checkpoint = _load_checkpoint(run_id, data_dir)
+    state = TaskState.model_validate(checkpoint)
+    ws_mgr = WorkspaceManager(data_dir / "runtime")
+    manifest = ws_mgr.load_manifest(state.task_id)
+    worktree = Path(manifest.worktree_path)
+    base = data_dir / "runtime" / "workspaces" / state.task_id
+    approval = ApprovalService(storage_path=base / "approvals.jsonl")
+    rollback = WorkspaceRollback(
+        worktree,
+        base / "input",
+        worktree.parent / "backups",
+        worktree.parent / "trash",
+        ArtifactWriter(data_dir / "runtime", state.task_id),
+        approval,
+        state.task_id,
+    )
+    return rollback.rollback_patch(approval_id, patch_approval_id)
+
+
+def _load_checkpoint(run_id: str, data_dir: Path) -> dict:
+    """读取 checkpoint 状态（只读辅助）。"""
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    conn = _open_conn(data_dir)
+    try:
+        saver = SqliteSaver(conn)
+        checkpoint = saver.get_tuple(config={"configurable": {"thread_id": run_id}})
+        if checkpoint is None:
+            raise KeyError(f"run not found: {run_id}")
+        return checkpoint.checkpoint["channel_values"]
+    finally:
+        conn.close()
 
 
 def evidence_show(evidence_id: str, data_dir: Path | None = None) -> dict:

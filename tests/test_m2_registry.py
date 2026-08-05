@@ -33,11 +33,14 @@ def test_unknown_agent_rejected() -> None:
 
 
 def test_agent_tool_whitelist() -> None:
-    """Agent 工具白名单（测试要求 3）：researcher 仅允许只读 Fixture 工具。"""
+    """Agent 工具白名单（测试要求 3）：researcher 仅允许只读工具（fixture + local 只读）。"""
     registry = default_registry()
     researcher = registry.get("researcher")
-    assert set(researcher.allowed_tools) == {"fixture_repo_lookup", "fixture_source_lookup"}
-    assert all(t.startswith("fixture_") for t in researcher.allowed_tools)
+    # 007 六：researcher 白名单扩展本地只读工具（沙箱任务读取 worktree）
+    assert {"fixture_repo_lookup", "fixture_source_lookup"} <= set(researcher.allowed_tools)
+    # 全部为只读工具（无沙箱写工具/危险工具）
+    assert "sandbox_write_file" not in researcher.allowed_tools
+    assert "sandbox_delete_path" not in researcher.allowed_tools
 
 
 def test_register_disable_dispatch_guard() -> None:

@@ -109,6 +109,46 @@ class DeterministicReviewer:
                 )
             )
 
+        # 007 十四.1：Executor 子任务确定性检查（审批/Diff/测试/Artifact/状态）
+        if subtask.assigned_role == "executor":
+            metadata = subtask.execution_result.metadata or {}
+            status = metadata.get("status")
+            if status not in ("implemented",):
+                issues.append(
+                    ReviewIssue(
+                        code="executor_not_implemented",
+                        message=f"Executor 未完成实施（status={status}）："
+                        f"{subtask.execution_result.summary[:120]}",
+                        subtask_id=subtask.subtask_id,
+                    )
+                )
+            approval_id = metadata.get("approval_id")
+            if not approval_id:
+                issues.append(
+                    ReviewIssue(
+                        code="missing_approval",
+                        message="Executor 产物无审批记录",
+                        subtask_id=subtask.subtask_id,
+                    )
+                )
+            test_report = metadata.get("test_report")
+            if test_report is not None and test_report.get("return_code") != 0:
+                issues.append(
+                    ReviewIssue(
+                        code="tests_failed",
+                        message=f"测试未通过（return_code={test_report.get('return_code')}）",
+                        subtask_id=subtask.subtask_id,
+                    )
+                )
+            if not subtask.execution_result.claims:
+                issues.append(
+                    ReviewIssue(
+                        code="executor_no_claims",
+                        message="Executor 产物无 claims（无实施证据）",
+                        subtask_id=subtask.subtask_id,
+                    )
+                )
+
         # 输出 Schema 是否有效（ExecutionResult 已 Pydantic 校验；此处校验 claim_id 唯一）
         claim_ids = [c.claim_id for c in subtask.execution_result.claims]
         if len(set(claim_ids)) != len(claim_ids):

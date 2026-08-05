@@ -20,11 +20,17 @@ from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
 from app.gateway.contracts import ProviderError
 from app.runner import (
+    approval_show,
+    approvals_of,
+    artifact_show,
+    artifacts_of,
+    diff_of,
     dry_run,
     evidence_list,
     evidence_show,
     provider_health,
     resume_task,
+    rollback,
     run_task,
     status_task,
     tool_catalog,
@@ -217,3 +223,140 @@ def task_dry_run(run_id: str) -> dict[str, Any]:
     return dry_run(
         report.state.user_goal, report.state.token_budget, report.state.cost_budget, _settings()
     )
+
+
+# ================= 007 十七：审批 / Artifact / Diff / 回滚 =================
+
+
+class ApprovalDecisionBody(BaseModel):
+    """批准/拒绝只提交 approval_id（路径）与可选说明；其余参数不能由客户端修改。"""
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class RollbackBody(BaseModel):
+    """回滚请求：目标 Patch 的 approval_id + 已批准的回滚审批 approval_id。"""
+
+    patch_approval_id: str = Field(min_length=1, max_length=64)
+    approval_id: str = Field(min_length=1, max_length=64)
+
+
+@app.get("/tasks/{run_id}/approvals")
+def task_approvals(run_id: str) -> list[dict[str, Any]]:
+    try:
+        return approvals_of(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/approvals/{approval_id}")
+def get_approval(approval_id: str) -> dict[str, Any]:
+    try:
+        return approval_show(approval_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/approvals/{approval_id}/approve")
+def approve(approval_id: str, body: ApprovalDecisionBody | None = None) -> dict[str, Any]:
+    """批准（幂等）：定位任务 → 决策落盘 → 恢复。已拒绝/过期返回 409。"""
+    from app.core.approval import ApprovalError, ApprovalService
+    from app.core.schemas import ApprovalPayload
+
+    data_dir = _data_dir()
+    record = approval_show(approval_id, data_dir=data_dir)  # 404 或返回记录
+    task_id = record["task_id"]
+    approval = ApprovalService(
+        storage_path=data_dir / "runtime" / "workspaces" / task_id / "approvals.jsonl"
+    )
+    try:
+        approval.decide(approval_id, "approved", (body.reason if body else None))
+    except ApprovalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # 恢复任务（run_id 从审批记录取；未记录 run_id 时用 task_id 兜底）
+    run_id = record.get("run_id") or task_id
+    try:
+        report = resume_task(
+            run_id,
+            payload=ApprovalPayload(
+                approval_id=approval_id, decision="approved", reason=(body.reason if body else None)
+            ),
+            data_dir=data_dir,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "approval_id": approval_id,
+        "status": "approved",
+        "task_status": report.state.current_status,
+    }
+
+
+@app.post("/approvals/{approval_id}/reject")
+def reject(approval_id: str, body: ApprovalDecisionBody | None = None) -> dict[str, Any]:
+    """拒绝：不应用补丁，任务标记未实施（GT-W03）。"""
+    from app.core.approval import ApprovalError, ApprovalService
+    from app.core.schemas import ApprovalPayload
+
+    data_dir = _data_dir()
+    record = approval_show(approval_id, data_dir=data_dir)
+    task_id = record["task_id"]
+    approval = ApprovalService(
+        storage_path=data_dir / "runtime" / "workspaces" / task_id / "approvals.jsonl"
+    )
+    try:
+        approval.decide(approval_id, "rejected", (body.reason if body else None))
+    except ApprovalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    run_id = record.get("run_id") or task_id
+    try:
+        report = resume_task(
+            run_id,
+            payload=ApprovalPayload(
+                approval_id=approval_id, decision="rejected", reason=(body.reason if body else None)
+            ),
+            data_dir=data_dir,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "approval_id": approval_id,
+        "status": "rejected",
+        "task_status": report.state.current_status,
+    }
+
+
+@app.get("/tasks/{run_id}/artifacts")
+def task_artifacts(run_id: str) -> list[dict[str, Any]]:
+    try:
+        return artifacts_of(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/artifacts/{artifact_id}")
+def get_artifact(artifact_id: str) -> dict[str, Any]:
+    try:
+        return artifact_show(artifact_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/tasks/{run_id}/diff")
+def task_diff(run_id: str) -> dict[str, Any]:
+    try:
+        return diff_of(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/tasks/{run_id}/rollback")
+def task_rollback(run_id: str, body: RollbackBody) -> dict[str, Any]:
+    """回滚指定 Patch（须已批准的回滚审批；操作哈希不匹配返回 409）。"""
+    from app.core.rollback import RollbackError
+
+    try:
+        return rollback(run_id, body.patch_approval_id, body.approval_id, data_dir=_data_dir())
+    except (KeyError, RollbackError) as exc:
+        status = 404 if isinstance(exc, KeyError) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
