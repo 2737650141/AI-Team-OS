@@ -16,6 +16,8 @@ SECRET_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"ghp_[A-Za-z0-9]{20,}", re.I),  # GitHub PAT
     re.compile(r"gho_[A-Za-z0-9]{20,}", re.I),
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS Access Key
+    # AWS Secret Access Key（base64 字符集含 / +，通用模式覆盖不到）
+    re.compile(r"(?i)aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*['\"]?[A-Za-z0-9+/=_-]{20,}"),
     re.compile(
         # 通用赋值（键名=值）：值限字母数字下划线连字符，
         # 排除代码表达式（如 settings.model.api_key 含点，不误报）
