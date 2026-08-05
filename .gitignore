@@ -27,3 +27,9 @@ htmlcov/
 
 # 宿主状态目录（不入库）
 .reasonix/
+
+# 开源复用审计检出目录（不入库）
+third_party_eval/
+
+# 审计大体积证据包（本机保留，不入库，003-A 五）
+artifacts/
