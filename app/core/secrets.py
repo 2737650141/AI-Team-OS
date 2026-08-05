@@ -17,7 +17,9 @@ SECRET_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"gho_[A-Za-z0-9]{20,}", re.I),
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS Access Key
     re.compile(
-        r"(?i)(api[_-]?key|token|secret|password|passwd|authorization)\s*[=:]\s*['\"]?[A-Za-z0-9._/-]{12,}"
+        # 通用赋值（键名=值）：值限字母数字下划线连字符，
+        # 排除代码表达式（如 settings.model.api_key 含点，不误报）
+        r"(?i)(api[_-]?key|token|secret|password|passwd|authorization)\s*[=:]\s*['\"]?[A-Za-z0-9_-]{12,}"
     ),
     # PEM 私钥整块（含内容，DOTALL）：BEGIN 与 END 之间全部替换
     re.compile(

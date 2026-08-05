@@ -1,8 +1,8 @@
 """打包 M3-B 源码证据包（artifacts/review/m3b-source.zip）。
 
-包含：源码（app/tests/docs/scripts/pyproject/.gitignore/.env.example/.github）、M3B_EVIDENCE、
-pytest 原始输出、Ruff/mypy 输出、demo 演示产物、Git log/status。
-排除：.env、.venv、.reasonix、*.db、*.sqlite、API Key 模式。
+包含：源码（app/tests/docs/scripts/pyproject/.gitignore/.env.example/.github）、
+M3B_EVIDENCE、pytest 原始输出、Ruff/mypy 输出、demo 演示产物、Git log/status。
+排除：.env、.venv、.reasonix、*.db、*.sqlite、runtime/、API Key 模式。
 """
 
 from __future__ import annotations
@@ -25,9 +25,14 @@ DEMO_DIR = ROOT / "artifacts" / "demo"
 SENSITIVE_EXEMPT = {
     ".env.example": "模板占位符（SK-PLACEHOLDER），非真实凭据",
     "tests/test_audit.py": "redact 功能测试样本（假密钥用于断言脱敏），非真实凭据",
+    "tests/test_m3_governance.py": "API Key 不泄漏测试样本（假值），非真实凭据",
+    "tests/test_m3_low_fixes.py": "统一脱敏测试样本（假值），非真实凭据",
+    "tests/test_m3b_local_evidence_mcp.py": "敏感文件拒绝测试 fixture（假内容），非真实凭据",
+    "tests/test_m3b_github_web.py": "GitHub Token 不泄漏测试样本（假值），非真实凭据",
 }
 
 BANNED_SUFFIXES = {".db", ".sqlite", ".sqlite3", ".p12", ".p8"} | SENSITIVE_SUFFIXES
+BANNED_DIRS = {"__pycache__", ".pytest_cache", "runtime", ".git", ".venv", ".reasonix"}
 
 
 def scan_text(text: str, path: str) -> list[str]:
@@ -36,6 +41,17 @@ def scan_text(text: str, path: str) -> list[str]:
         print(f"exempt (reason: {SENSITIVE_EXEMPT[path]}): {path}")
         return []
     return scan_secrets(text)
+
+
+def _add_file(zf: zipfile.ZipFile, p: Path, arcname: str) -> int:
+    text = p.read_text(encoding="utf-8", errors="replace")
+    # 豁免按相对路径精确匹配（006 四.5）
+    hits = scan_text(text, arcname)
+    if hits:
+        print(f"SENSITIVE BLOCKED: {p} -> {hits}")
+        raise SystemExit(1)
+    zf.write(p, arcname)
+    return len(text.encode("utf-8"))
 
 
 def main() -> None:
@@ -52,26 +68,16 @@ def main() -> None:
                 continue
             if p.is_dir():
                 for sub in sorted(p.rglob("*")):
-                    if sub.is_dir() or "__pycache__" in sub.parts:
+                    if sub.is_dir() or any(part in BANNED_DIRS for part in sub.parts):
                         continue
-                    text = sub.read_text(encoding="utf-8", errors="replace")
                     scanned += 1
-                    hits = scan_text(text, sub.name)
-                    if hits:
-                        print(f"SENSITIVE BLOCKED: {sub} -> {hits}")
-                        raise SystemExit(1)
-                    zf.write(sub, sub.relative_to(ROOT).as_posix())
+                    total_bytes += _add_file(zf, sub, sub.relative_to(ROOT).as_posix())
                     count += 1
             else:
-                text = p.read_text(encoding="utf-8", errors="replace")
                 scanned += 1
-                hits = scan_text(text, p.name)
-                if hits:
-                    print(f"SENSITIVE BLOCKED: {p} -> {hits}")
-                    raise SystemExit(1)
-                zf.write(p, p.relative_to(ROOT).as_posix())
+                total_bytes += _add_file(zf, p, p.relative_to(ROOT).as_posix())
                 count += 1
-                total_bytes += len(text.encode("utf-8"))
+        # 目录（app/tests/docs/scripts）
         for base in INCLUDE_DIRS:
             root = ROOT / base
             if not root.exists():
@@ -82,35 +88,31 @@ def main() -> None:
                 if p.suffix.lower() in BANNED_SUFFIXES:
                     print(f"excluded (suffix): {p}")
                     continue
-                if any(part.startswith(".") for part in p.parts) or "__pycache__" in p.parts:
+                if any(part.startswith(".") for part in p.parts) or any(
+                    part in BANNED_DIRS for part in p.parts
+                ):
                     continue
-                text = p.read_text(encoding="utf-8", errors="replace")
                 scanned += 1
-                hits = scan_text(text, p.name)
-                if hits:
-                    print(f"SENSITIVE BLOCKED: {p} -> {hits}")
-                    raise SystemExit(1)
-                zf.write(p, p.relative_to(ROOT).as_posix())
+                total_bytes += _add_file(zf, p, p.relative_to(ROOT).as_posix())
                 count += 1
-                total_bytes += len(text.encode("utf-8"))
-        # 证据文件（M3A_EVIDENCE.md 已随 docs/ 目录打包）
+        # 证据文件（M3B_EVIDENCE.md 已随 docs/ 目录打包）
         evidence = [
-            ROOT / "artifacts" / "review" / "m3a-pytest-verbose.txt",
-            ROOT / "artifacts" / "review" / "m3a-ruff-check.txt",
-            ROOT / "artifacts" / "review" / "m3a-ruff-format.txt",
-            ROOT / "artifacts" / "review" / "m3a-mypy.txt",
-            ROOT / "artifacts" / "review" / "m3a-git-log.txt",
-            ROOT / "artifacts" / "review" / "m3a-git-status.txt",
-            ROOT / "artifacts" / "review" / "m3a-git-remote.txt",
+            ROOT / "artifacts" / "review" / "m3b-pytest-verbose.txt",
+            ROOT / "artifacts" / "review" / "m3b-ruff-check.txt",
+            ROOT / "artifacts" / "review" / "m3b-ruff-format.txt",
+            ROOT / "artifacts" / "review" / "m3b-mypy.txt",
+            ROOT / "artifacts" / "review" / "m3b-git-log.txt",
+            ROOT / "artifacts" / "review" / "m3b-git-status.txt",
+            ROOT / "artifacts" / "review" / "m3b-git-remote.txt",
         ]
         for p in evidence:
             if p.exists():
                 zf.write(p, p.relative_to(ROOT).as_posix())
                 count += 1
-        for p in sorted(DEMO_DIR.glob("m3a_*")):
+        for p in sorted(DEMO_DIR.glob("m3b_*")):
             zf.write(p, p.relative_to(ROOT).as_posix())
             count += 1
-    print(f"m3a-source.zip: {count} files, {total_bytes} bytes")
+    print(f"m3b-source.zip: {count} files, {total_bytes} bytes")
     print(f"sensitive scan: clean ({scanned} source files scanned)")
 
 
