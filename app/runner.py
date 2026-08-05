@@ -9,17 +9,20 @@
 
 from __future__ import annotations
 
+import os
+import re
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from app.core.budget import BudgetController, BudgetExceeded
-from app.core.config import AppSettings, load_settings
+from app.core.config import AppSettings, allowed_read_roots, load_settings
 from app.core.context_builder import ContextBuilder
+from app.core.evidence import EvidenceWriter
 from app.core.registry import default_registry
 from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
@@ -30,12 +33,17 @@ from app.gateway.model_gateway import DeterministicFakeModel, ModelGateway
 from app.gateway.openai_compatible import OpenAICompatibleProvider
 from app.gateway.router import ModelRouter, build_router
 from app.gateway.tool_gateway import ToolGateway
+from app.gateway.tool_policy import ToolPolicy
 from app.graph import build_graph
 from app.tools.fixture_repo import (
     DangerousWriteTool,
     FixtureRepositoryLookupTool,
     FixtureSourceLookupTool,
 )
+from app.tools.github_client import GitHubClient
+from app.tools.github_tools import build_github_tools
+from app.tools.local_file import LocalPathPolicy, build_local_tools
+from app.tools.web_fetch import WebFetchTool
 
 DEFAULT_REPO_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "repos.json"
 DEFAULT_SOURCE_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "sources.json"
@@ -62,6 +70,7 @@ class RunContext:
     router: ModelRouter
     context: ContextBuilder
     settings: AppSettings
+    local_roots: list = field(default_factory=list)
 
 
 def build_provider(settings: AppSettings):
@@ -94,6 +103,16 @@ def _build_context(
 ) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
     settings = settings or load_settings()
+    if model_mode == "real" and not settings.model.enable_real:
+        # 005 7.4 / 006 3.2：真实调用必须显式开启，未启用时明确拒绝（不静默进入图内失败）
+        from app.gateway.contracts import ProviderError, ProviderErrorCode
+
+        raise ProviderError(
+            ProviderErrorCode.CONFIG_ERROR,
+            "real model calls disabled; set AI_TEAM_MODEL_ENABLE_REAL=true",
+            provider=settings.model.provider,
+            model=settings.model.default_model or "",
+        )
     budget = BudgetController(
         state.token_budget,
         state.cost_budget,
@@ -114,11 +133,52 @@ def _build_context(
         initial_calls=[r.model_dump() for r in state.tool_calls],
         initial_evidence=[e.model_dump() for e in state.evidence],
         initial_approvals=[a.model_dump() for a in state.approvals],
+        policy=ToolPolicy(),
+        evidence_writer=EvidenceWriter(data_dir / "runtime", state.task_id),
     )
     tool_gateway.register(FixtureRepositoryLookupTool(DEFAULT_REPO_FIXTURE).spec())
     tool_gateway.register(FixtureSourceLookupTool(DEFAULT_SOURCE_FIXTURE).spec())
     tool_gateway.register(DangerousWriteTool().spec())
-    router = build_router(settings, audit=audit, task_id=state.task_id, overrides=model_overrides)
+    # 006 六/七/八：真实只读工具注册（网络工具仅 real 模式注册；本地工具按允许根目录）
+    if model_mode == "real":
+        for spec in build_github_tools(GitHubClient()):
+            tool_gateway.register(spec)
+        tool_gateway.register(WebFetchTool().spec())
+    roots = allowed_read_roots(settings)
+    local_roots: list = []
+    if model_overrides and "project_alias" in model_overrides:
+        # CLI/API 项目别名 → 允许根目录子目录（14/15：不使用任意绝对路径）
+        # 别名严格限字母数字下划线连字符（review sa_20260805_035741 Blocking-2：防穿越）
+        alias = model_overrides["project_alias"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", alias):
+            raise ValueError("project_alias must match [A-Za-z0-9_-]{1,64}")
+        checked: list = []
+        for r in roots:
+            p = (r / alias).resolve()
+            r_resolved = r.resolve()
+            if p.is_dir() and (
+                str(p) == str(r_resolved) or str(p).startswith(str(r_resolved) + os.sep)
+            ):
+                checked.append(p)
+        if checked:
+            roots = checked
+        elif roots:
+            # 显式报错而非静默回退完整根（review nit）
+            raise ValueError(f"project alias not found under allowed roots: {alias}")
+    if roots:
+        policy_obj = LocalPathPolicy(roots)
+        for spec in build_local_tools(policy_obj):
+            tool_gateway.register(spec)
+        local_roots = policy_obj.roots()
+    # 模型覆盖仅接受角色键（project_alias/allowed_domains 等非模型键不进入路由）
+    model_override_roles = {
+        k: v
+        for k, v in (model_overrides or {}).items()
+        if k in ("supervisor", "planner", "researcher", "reviewer", "executor")
+    }
+    router = build_router(
+        settings, audit=audit, task_id=state.task_id, overrides=model_override_roles or None
+    )
     context = ContextBuilder(settings)
     return RunContext(
         budget=budget,
@@ -129,6 +189,7 @@ def _build_context(
         router=router,
         context=context,
         settings=settings,
+        local_roots=local_roots,
     )
 
 
@@ -376,6 +437,87 @@ def trace_task(run_id: str, data_dir: Path | None = None) -> dict:
         }
     finally:
         conn.close()
+
+
+def tool_catalog(settings: AppSettings | None = None) -> list[dict]:
+    """006 十四：只读工具目录（静态描述，不实例化网络客户端）。"""
+    settings = settings or load_settings()
+    catalog = [
+        {"name": "fixture_repo_lookup", "description": "本地 Fixture 仓库查询", "read_only": True},
+        {
+            "name": "fixture_source_lookup",
+            "description": "本地 Fixture 来源查询",
+            "read_only": True,
+        },
+        {
+            "name": "web_fetch",
+            "description": "只读获取公开网页内容（SSRF 防护）",
+            "read_only": True,
+        },
+    ]
+    catalog.extend(
+        {
+            "name": s.name,
+            "description": s.description,
+            "read_only": True,
+            "source": "github",
+        }
+        for s in build_github_tools(GitHubClient())
+    )
+    roots = allowed_read_roots(settings)
+    if roots:
+        catalog.extend(
+            {
+                "name": s.name,
+                "description": s.description,
+                "read_only": True,
+                "source": "local",
+            }
+            for s in build_local_tools(LocalPathPolicy(roots))
+        )
+    return catalog
+
+
+def evidence_list(run_id: str, data_dir: Path | None = None) -> dict:
+    """006 十四：任务 Evidence 摘要（不展示快照原文）。"""
+    trace = trace_task(run_id, data_dir=data_dir)
+    return {
+        "run_id": run_id,
+        "evidence_count": len(trace["evidence"]),
+        "evidence": [
+            {
+                "evidence_id": e.get("id"),
+                "tool": e.get("tool"),
+                "source_uri": e.get("source_uri"),
+                "summary": e.get("summary", "")[:200],
+                "ts": e.get("ts"),
+                "truncated": e.get("truncated", False),
+            }
+            for e in trace["evidence"]
+        ],
+    }
+
+
+def evidence_show(evidence_id: str, data_dir: Path | None = None) -> dict:
+    """006 十四：Evidence 原始快照（明确命令；快照已脱敏，无凭据）。
+
+    evidence_id 严格限十六进制（uuid hex，review sa_20260805_035741 should-fix-1：
+    防 glob 穿越读任意文件）。
+    """
+    if not re.fullmatch(r"[0-9a-f]{16,32}", evidence_id):
+        raise KeyError(f"invalid evidence_id: {evidence_id}")
+    data_dir = data_dir or Path("data")
+    runtime_dir = data_dir / "runtime" / "evidence"
+    matches = list(runtime_dir.glob(f"*/{evidence_id}.*"))
+    if not matches:
+        raise KeyError(f"evidence not found: {evidence_id}")
+    path = matches[0]
+    return {
+        "evidence_id": evidence_id,
+        "snapshot": path.read_text(encoding="utf-8", errors="replace")[:100_000],
+        "snapshot_ref": path.relative_to(data_dir).as_posix(),
+        "size": path.stat().st_size,
+    }
 
 
 def provider_health(settings: AppSettings | None = None) -> dict:

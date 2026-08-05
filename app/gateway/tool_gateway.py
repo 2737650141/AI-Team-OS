@@ -13,7 +13,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.gateway.audit import AuditLog, redact
+from app.core.evidence import EvidenceQuotaExceeded, EvidenceWriter
+from app.core.secrets import redact
+from app.gateway.audit import AuditLog
+from app.gateway.tool_policy import (
+    ToolExecutionContext,
+    ToolPolicy,
+    ToolQuota,
+)
 from app.tools.spec import RiskLevel, ToolResult, ToolSpec
 
 
@@ -21,8 +28,21 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _source_type_of(tool_name: str) -> str:
+    """工具名 → Evidence source_type（006 五）。"""
+    for prefix in ("github", "web", "local", "mcp", "fixture"):
+        if tool_name.startswith(prefix):
+            return prefix
+    return "tool"
+
+
 def _new_record(
-    task_id: str, tool_name: str, args: dict[str, Any], key: str, role: str | None
+    task_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    key: str,
+    role: str | None,
+    subtask_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": uuid.uuid4().hex[:12],
@@ -31,6 +51,7 @@ def _new_record(
         "args": {k: redact(str(v)) for k, v in args.items()},
         "idempotency_key": key,
         "role": role,
+        "subtask_id": subtask_id,
         "ts": _now(),
     }
 
@@ -44,6 +65,8 @@ class ToolGateway:
         initial_calls: list[dict[str, Any]] | None = None,
         initial_evidence: list[dict[str, Any]] | None = None,
         initial_approvals: list[dict[str, Any]] | None = None,
+        policy: ToolPolicy | None = None,
+        evidence_writer: EvidenceWriter | None = None,
     ) -> None:
         self._audit = audit
         self._task_id = task_id
@@ -54,6 +77,10 @@ class ToolGateway:
         self.approvals: list[dict[str, Any]] = list(initial_approvals or ())
         # 幂等键 → 成功结果缓存（004 4.x）：命中时复用完整结构化结果，handler 不重复执行
         self._result_cache: dict[str, dict[str, Any]] = {}
+        # 006 十一：策略 / 配额 / Evidence 固化器
+        self.policy = policy or ToolPolicy()
+        self._quota = ToolQuota(self.policy)
+        self.evidence_writer = evidence_writer
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
 
@@ -64,10 +91,20 @@ class ToolGateway:
     def register(self, tool: ToolSpec) -> None:
         self._tools[tool.name] = tool
 
-    def invoke(self, tool_name: str, args: dict[str, Any], role: str | None = None) -> ToolResult:
+    def available_tools(self) -> list[str]:
+        """可用工具名（006 十二：研究者工具循环的允许集合）。"""
+        return sorted(self._tools.keys())
+
+    def invoke(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        role: str | None = None,
+        ctx: ToolExecutionContext | None = None,
+    ) -> ToolResult:
         """唯一工具执行入口：全程持锁，保证并行 Send 下调用顺序可复现（确定性内核）。"""
         with self._lock:
-            return self._invoke(tool_name, args, role)
+            return self._invoke(tool_name, args, role, ctx)
 
     def snapshot(self) -> dict:
         """锁内快照：并行 exec 回写状态用（避免锁外迭代共享集合）。"""
@@ -78,11 +115,81 @@ class ToolGateway:
                 "idempotency_keys": sorted(self._seen_keys),
             }
 
-    def _invoke(self, tool_name: str, args: dict[str, Any], role: str | None = None) -> ToolResult:
+    def _invoke(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        role: str | None = None,
+        ctx: ToolExecutionContext | None = None,
+    ) -> ToolResult:
         tool = self._tools.get(tool_name)
         if tool is None:
             self._audit.entry("tool_unknown", task_id=self._task_id, tool=tool_name, role=role)
             return ToolResult(ok=False, error=f"unknown tool: {tool_name}", status="error")
+
+        # 006 十一 执行流程：角色白名单 → 只读/风险 → 参数 Schema → URL/路径安全 → 配额
+        effective_role = role or (ctx.role if ctx else None) or ""
+        if tool.roles and effective_role not in tool.roles:
+            self._audit.entry(
+                "tool_role_denied", task_id=self._task_id, tool=tool_name, role=effective_role
+            )
+            return ToolResult(
+                ok=False,
+                error=f"tool {tool_name} not allowed for role {effective_role}",
+                status="blocked",
+            )
+        if tool.args_schema:
+            try:
+                from app.core.output_governance import build_validator
+
+                build_validator(tool.args_schema).model_validate(args)
+            except Exception as exc:  # noqa: BLE001
+                self._audit.entry(
+                    "tool_args_rejected",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    error=redact(str(exc))[:200],
+                )
+                return ToolResult(
+                    ok=False, error="tool arguments rejected by schema", status="blocked"
+                )
+        if tool.url_validator is not None and "url" in args:
+            try:
+                tool.url_validator(str(args["url"]))
+            except Exception as exc:  # noqa: BLE001
+                self._audit.entry(
+                    "tool_url_rejected",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    error=redact(str(exc))[:200],
+                )
+                return ToolResult(ok=False, error="url rejected by policy", status="blocked")
+        if tool.path_validator is not None:
+            for key in ("path", "dir"):
+                if key in args:
+                    try:
+                        tool.path_validator(str(args[key]))
+                    except Exception as exc:  # noqa: BLE001
+                        self._audit.entry(
+                            "tool_path_rejected",
+                            task_id=self._task_id,
+                            tool=tool_name,
+                            error=redact(str(exc))[:200],
+                        )
+                        return ToolResult(
+                            ok=False, error="path rejected by policy", status="blocked"
+                        )
+        try:
+            self._quota.check_and_reserve(ctx)
+            self._quota.check_evidence(self.evidence_writer)
+        except ValueError as exc:
+            self._audit.entry(
+                "tool_quota_exceeded",
+                task_id=self._task_id,
+                tool=tool_name,
+                error=redact(str(exc))[:200],
+            )
+            return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
 
         # R19：幂等键查重，恢复/重放时不重复执行（JSON 规范化，兼容非字符串参数）
         key = hashlib.sha256(
@@ -104,7 +211,14 @@ class ToolGateway:
                         break
             if hit is not None:
                 # 004 4.1：cached_success_result —— 复用已有成功结果，不重复执行副作用
-                record = _new_record(self._task_id, tool_name, args, key, role)
+                record = _new_record(
+                    self._task_id,
+                    tool_name,
+                    args,
+                    key,
+                    role,
+                    ctx.subtask_id if ctx else None,
+                )
                 record["status"] = "cached_success_result"
                 record["cached_from"] = hit["evidence_id"]
                 record["content_hash"] = hit.get("hash", "")
@@ -128,7 +242,9 @@ class ToolGateway:
                 ok=False, error="duplicate call skipped (no cached result)", status="skipped"
             )
 
-        record = _new_record(self._task_id, tool_name, args, key, role)
+        record = _new_record(
+            self._task_id, tool_name, args, key, role, ctx.subtask_id if ctx else None
+        )
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
         # handler 永不执行；审批流在 M3 实现（非只读一律拦截，防错标风险）
@@ -178,6 +294,47 @@ class ToolGateway:
         evidence_id = uuid.uuid4().hex[:12]
         ts = _now()
         content_hash = hashlib.sha256(str(data).encode()).hexdigest()[:16]
+        # 006 十一：Evidence 固化（先固化再返回引用，模型只拿 Evidence ID）
+        if self.evidence_writer is not None:
+            try:
+                self._quota.check_read_bytes(
+                    self.evidence_writer, additional=len(str(data).encode("utf-8"))
+                )
+                source_type = _source_type_of(tool_name)
+                source_uri = str(
+                    args.get("url")
+                    or args.get("repo")
+                    or args.get("path")
+                    or args.get("source_id")
+                    or tool_name
+                )
+                ev = self.evidence_writer.write(
+                    tool_name=tool_name,
+                    source_type=source_type,
+                    source_uri=source_uri,
+                    content=str(data),
+                    title=tool.description[:80],
+                    subtask_id=ctx.subtask_id if ctx else None,
+                    reliability=0.7 if tool.risk_level is RiskLevel.SAFE else 0.5,
+                )
+                evidence_id = ev.evidence_id
+                ts = ev.retrieved_at
+                content_hash = ev.content_hash
+            except EvidenceQuotaExceeded:
+                # Evidence 配额超限：结果不固化（记录仍保留），按 blocked 语义返回
+                record["status"] = "blocked"
+                self._audit.entry("tool_evidence_quota", task_id=self._task_id, tool=tool_name)
+                return ToolResult(ok=False, error="evidence quota exceeded", status="blocked")
+            except ValueError as exc:
+                # 读取字节配额超限（51）：不固化，按 blocked 语义返回
+                record["status"] = "blocked"
+                self._audit.entry(
+                    "tool_read_quota",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    error=redact(str(exc))[:200],
+                )
+                return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
         self.evidence.append(
             {
                 "id": evidence_id,

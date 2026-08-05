@@ -219,8 +219,19 @@ def evidence_ids_of(state) -> set[str]:
 
 
 def role_used_tool_calls(state, role: str, subtask_id: str) -> int:
-    """按子任务统计工具调用次数（role 记录为 "researcher:<subtask_id>"）。"""
+    """按子任务统计工具调用次数。
+
+    双口径（review sa_20260805_035741 should-fix）：优先按 subtask_id 精确归属
+    （LLMResearcher 工具循环记录），无 subtask_id 的旧记录按 role
+    （"researcher" 或 "researcher:<subtask_id>"）匹配。
+    """
     full = f"{role}:{subtask_id}"
-    return sum(
-        1 for c in state.tool_calls if (c.get("role") if isinstance(c, dict) else c.role) == full
-    )
+    total = 0
+    for c in state.tool_calls:
+        rec = c if isinstance(c, dict) else c.model_dump()
+        if rec.get("subtask_id") is not None:
+            if rec["subtask_id"] == subtask_id:
+                total += 1
+        elif rec.get("role") in (role, full):
+            total += 1
+    return total

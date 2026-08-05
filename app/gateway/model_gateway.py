@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from app.core.budget import BudgetController, BudgetExceeded
+from app.core.budget import BudgetController, BudgetExceeded, BudgetSnapshot
 from app.core.config import lookup_price
 from app.gateway.audit import AuditLog
 from app.gateway.contracts import (
@@ -87,8 +87,14 @@ class ModelGateway:
         self._task_id = task_id
 
     @property
-    def budget(self) -> BudgetController:
-        return self._budget
+    def budget(self) -> BudgetSnapshot:
+        """预算只读视图（006 四.1 LOW 修复）：返回冻结快照，不暴露可变 BudgetController。"""
+        return BudgetSnapshot(
+            tokens_used=self._budget.usage["tokens"],
+            cost_used=self._budget.usage["cost"],
+            token_budget=float(self._budget.token_budget),
+            cost_budget=float(self._budget.cost_budget),
+        )
 
     def chat(
         self, messages: list[dict[str, str]], model: str = "fake", max_tokens: int = 512

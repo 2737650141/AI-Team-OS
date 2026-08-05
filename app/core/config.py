@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -36,6 +36,8 @@ class ModelProviderSettings(BaseSettings):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)  # AI_TEAM_MODEL_TEMPERATURE
     max_output_tokens: int = Field(default=4096, gt=0)  # AI_TEAM_MODEL_MAX_OUTPUT_TOKENS
     enable_real: bool = False  # AI_TEAM_MODEL_ENABLE_REAL（真实调用必须显式开启，005 7.4）
+    # 本地只读根目录（006 8.1）：AI_TEAM_ALLOWED_READ_ROOTS（分号分隔），默认空
+    allowed_read_roots: str = ""
 
 
 class ModelPrice(BaseModel):
@@ -146,7 +148,10 @@ def _coerce(settings: BaseSettings, field: str, value: str):
     return value
 
 
-def api_key_from_env(env: dict[str, str] | None = None) -> str:
-    """API Key 只从环境变量读取（5.2）；返回空字符串表示未配置。"""
-    source = env if env is not None else os.environ
-    return source.get("AI_TEAM_MODEL_API_KEY", "")
+def allowed_read_roots(settings: AppSettings | None = None) -> list[Path]:
+    """006 8.1：本地只读根目录（分号分隔环境变量），默认无。"""
+    settings = settings or load_settings()
+    raw = settings.model.allowed_read_roots.strip()
+    if not raw:
+        return []
+    return [Path(p.strip()) for p in raw.split(";") if p.strip()]

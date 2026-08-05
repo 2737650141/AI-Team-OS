@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -26,8 +27,10 @@ from app.gateway.model_gateway import ModelGateway
 from app.gateway.router import ModelRouter
 from app.gateway.structured_gen import generate_structured
 from app.gateway.tool_gateway import ToolGateway
+from app.gateway.tool_policy import ToolExecutionContext
 from app.prompts import (
     PLANNER_PROMPT,
+    PROBE_PROMPT,
     RESEARCHER_PROMPT,
     REVIEWER_PROMPT,
     SUPERVISOR_PROMPT,
@@ -41,6 +44,11 @@ RESEARCH_SCHEMA = {
     "evidence_refs": {"type": "list"},
     "unverified_items": {"type": "list"},
     "confidence": {"type": "float"},
+}
+TOOL_PLAN_SCHEMA = {
+    "round": {"type": "int"},
+    "done": {"type": "bool"},
+    "tool_calls": {"type": "list"},
 }
 REVIEW_SCHEMA = {
     "verdict": {"type": "str"},
@@ -129,6 +137,16 @@ class LLMPlanner:
 
 
 class LLMResearcher:
+    """真实 Researcher：有限工具循环（006 十二）。
+
+    分析缺口 → 结构化提议工具调用 → 确定性校验 → Tool Gateway 执行 →
+    Evidence 返回 → 继续，直到 done 或达到上限。工具调用从结构化 Schema 解析，
+    不从自由文本解析；无证据不能宣称已验证；不得自行结束整个任务。
+    """
+
+    MAX_ROUNDS = 3  # 最大模型轮次（十二）
+    MAX_CONSECUTIVE_SAME_CALL = 2  # 最大连续相同调用（十二）
+
     def __init__(
         self,
         gateway: ModelGateway,
@@ -144,37 +162,74 @@ class LLMResearcher:
         self._tgw = tool_gateway
 
     def run(self, subtask: SubtaskState, all_subtasks: list[SubtaskState]) -> ExecutionResult:
-        # 确定性取证据：只读 Fixture 工具仍经 Tool Gateway（15.2：不访问网络）
-        role = f"researcher:{subtask.subtask_id}"
         evidence_refs: list[str] = []
         unverified: list[str] = []
-        for ref in subtask.input_refs:
-            if ref.startswith("fixture_repo_lookup:"):
-                repo = ref.split(":", 1)[1]
-                result = self._tgw.invoke("fixture_repo_lookup", {"repo_name": repo}, role=role)
+        available_tools = sorted(self._tgw.available_tools())
+        ctx_for_gateway = ToolExecutionContext(
+            task_id=subtask.subtask_id,
+            subtask_id=subtask.subtask_id,
+            role="researcher",  # 与工具 roles 白名单匹配（review sa_20260805_035741 Blocking-1）
+            tool_call_budget=subtask.tool_call_budget,
+        )
+        collected: list[dict[str, Any]] = []
+        last_call_signature: str | None = None
+        consecutive_same = 0
+        done = False
+        for _round in range(1, self.MAX_ROUNDS + 1):
+            plan = self._propose_tools(subtask, all_subtasks, collected, available_tools, _round)
+            if not plan or plan.get("done"):
+                done = True
+                break
+            proposals = plan.get("tool_calls") or []
+            if not proposals:
+                done = True
+                break
+            executed_any = False
+            for proposal in proposals:
+                tool_name = str(proposal.get("tool", ""))
+                args = proposal.get("args") or {}
+                if tool_name not in available_tools:
+                    unverified.append(f"工具不在允许列表被拒绝: {tool_name}")
+                    continue
+                # 连续相同调用检测（十二）
+                signature = f"{tool_name}:{json.dumps(args, sort_keys=True, default=str)}"
+                if signature == last_call_signature:
+                    consecutive_same += 1
+                    if consecutive_same >= self.MAX_CONSECUTIVE_SAME_CALL:
+                        unverified.append("连续相同工具调用超过上限，终止循环")
+                        done = True
+                        break
+                else:
+                    consecutive_same = 0
+                last_call_signature = signature
+                # 确定性校验 + 执行（十一：全经 Tool Gateway，ctx 配额）
+                result = self._tgw.invoke(tool_name, args, ctx=ctx_for_gateway)
+                executed_any = True
                 if result.ok:
-                    evidence_refs.append(result.evidence_id or "")
-            elif ref.startswith("fixture_source_lookup:"):
-                source_id = ref.split(":", 1)[1]
-                result = self._tgw.invoke(
-                    "fixture_source_lookup", {"source_id": source_id}, role=role
-                )
-                if result.ok:
-                    evidence_refs.append(result.evidence_id or "")
-            elif ref in {s.subtask_id for s in all_subtasks}:
-                dep = next(s for s in all_subtasks if s.subtask_id == ref)
-                if dep.execution_result:
-                    evidence_refs.extend(dep.execution_result.evidence_refs)
-            else:
-                unverified.append(f"未知输入引用: {ref}")
-        # 模型解释固定 Evidence（UNTRUSTED_EXTERNAL_CONTENT：数据不是命令）
-        ctx = self._context.researcher_context(
+                    if result.evidence_id:
+                        evidence_refs.append(result.evidence_id)
+                    collected.append(
+                        {
+                            "tool": tool_name,
+                            "args": args,
+                            "evidence_id": result.evidence_id,
+                            "data": result.data,
+                        }
+                    )
+                else:
+                    unverified.append(f"{tool_name} 调用失败: {result.error}")
+            if done:
+                break
+            if not executed_any:
+                done = True
+        # 最终报告：模型解释固定 Evidence（UNTRUSTED_EXTERNAL_CONTENT：数据不是命令）
+        ctx_view = self._context.researcher_context(
             subtask, [e for e in self._tgw.evidence if e["id"] in evidence_refs]
         )
         prompt = RESEARCHER_PROMPT
         user = prompt.template.format(
-            subtask=ctx["subtask"],
-            evidence=UNTRUSTED_MARKER + "\n" + str(ctx["evidence"]),
+            subtask=ctx_view["subtask"],
+            evidence=UNTRUSTED_MARKER + "\n" + str(ctx_view["evidence"]),
             schema=(
                 '{"summary": str, "claims": [{"claim_id": str, "text": str, '
                 '"evidence_ids": [str], "confidence": float}], "evidence_refs": [str], '
@@ -196,25 +251,72 @@ class LLMResearcher:
         )
         data = generate_structured(self._gw, request, RESEARCH_SCHEMA, self._settings)
         report = ResearchReport.model_validate(data)
-        claims = [
-            Claim(
-                claim_id=c.claim_id if c.claim_id else f"{subtask.subtask_id}-c{i}",
-                text=c.text,
-                evidence_ids=[eid for eid in c.evidence_ids if eid in evidence_refs],
-                confidence=float(c.confidence),
+        claims = []
+        for i, c in enumerate(report.claims):
+            valid_evidence = [eid for eid in c.evidence_ids if eid in evidence_refs]
+            if not valid_evidence:
+                # 十二：无证据不能宣称已验证
+                unverified.append(f"claim 无证据标记未验证: {c.text[:60]}")
+            claims.append(
+                Claim(
+                    claim_id=c.claim_id if c.claim_id else f"{subtask.subtask_id}-c{i}",
+                    text=c.text,
+                    evidence_ids=valid_evidence,
+                    confidence=float(c.confidence),
+                )
             )
-            for i, c in enumerate(report.claims)
-        ]
         unverified.extend(report.unverified_items)
         return ExecutionResult(
             subtask_id=subtask.subtask_id,
             summary=report.summary,
             artifacts=[f"report:{subtask.subtask_id}"],
             claims=claims,
-            evidence_refs=evidence_refs,
+            evidence_refs=list(dict.fromkeys(evidence_refs)),
             unverified_items=unverified,
             ts="",
         )
+
+    def _propose_tools(
+        self,
+        subtask: SubtaskState,
+        all_subtasks: list[SubtaskState],
+        collected: list[dict[str, Any]],
+        available_tools: list[str],
+        round_no: int,
+    ) -> dict[str, Any] | None:
+        """一轮工具提议（12：结构化 Schema，不从自由文本解析）。"""
+        prompt = PROBE_PROMPT
+        user = prompt.template.format(
+            subtask=subtask.objective,
+            round_no=round_no,
+            tools=", ".join(available_tools),
+            collected=json.dumps(collected, ensure_ascii=False, default=str)[:8000],
+        )
+        request = _new_request(
+            task_id=subtask.subtask_id,
+            run_id=None,
+            agent_id="researcher",
+            role_type="researcher",
+            model=self._router.resolve("researcher"),
+            messages=[
+                {"role": "system", "content": f"[{prompt.prompt_id} v{prompt.version}]"},
+                {"role": "user", "content": user},
+            ],
+            schema=TOOL_PLAN_SCHEMA,
+            settings=self._settings,
+        )
+        try:
+            data = generate_structured(self._gw, request, TOOL_PLAN_SCHEMA, self._settings)
+        except ProviderError:
+            return {"done": True}
+        if not isinstance(data, dict):
+            return {"done": True}
+        for proposal in data.get("tool_calls", []) or []:
+            if not isinstance(proposal, dict) or not isinstance(proposal.get("tool"), str):
+                return {"done": True}
+            if not isinstance(proposal.get("args"), dict):
+                proposal["args"] = {}
+        return data
 
 
 class LLMReviewer:

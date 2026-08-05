@@ -1,8 +1,12 @@
-"""ToolSpec：统一工具定义（002-A 第八节）。
+"""ToolSpec：统一工具定义（002-A 第八节 + 006 十一）。
 
 risk_level: safe | sensitive | dangerous
 read_only: bool（是否可写独立表达，不由 risk_level 表示）
 requires_approval: bool
+roles: 允许调用该工具的角色白名单（006 十一：角色白名单检查）
+args_schema: 参数 Pydantic/JSON Schema 校验（006 十一：参数 Schema 检查）
+url_validator / path_validator: URL/路径安全校验回调（web_fetch / local_* 工具）
+max_result_bytes: 结果大小限制（006 十一：结果大小限制）
 """
 
 from __future__ import annotations
@@ -27,6 +31,11 @@ class ToolSpec:
     read_only: bool
     handler: Callable[..., Any]
     requires_approval: bool = False
+    roles: tuple[str, ...] = ()  # 空 = 任意角色（006 十一）
+    args_schema: dict[str, Any] | None = None  # 参数 Schema（005 9 校验器复用）
+    url_validator: Callable[[str], Any] | None = None  # 抛异常即拒绝（返回忽略）
+    path_validator: Callable[[str], Any] | None = None  # 抛异常即拒绝（返回忽略）
+    max_result_bytes: int = 512 * 1024
 
 
 @dataclass

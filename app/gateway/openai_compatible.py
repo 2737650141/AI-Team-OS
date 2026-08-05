@@ -10,14 +10,13 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
-import socket
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
 
+from app.core.ssrf import blocked_host_reason, blocked_ip_reason
 from app.gateway.contracts import (
     ModelRequest,
     ModelResponse,
@@ -29,58 +28,15 @@ from app.gateway.contracts import (
 
 USER_AGENT = "ai-team-os/0.3.0"
 
-# 云元数据地址（169.254.169.254 等）与链路本地
-_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal", "metadata"}
+# 兼容别名（旧测试导入；统一逻辑见 app.core.ssrf，006 四.4）
+_blocked_host_reason = blocked_host_reason
+_blocked_ip_reason = blocked_ip_reason
+
 _MAX_RESPONSE_BYTES = 1024 * 1024  # 最大响应体 1MB（7.2）
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _blocked_host_reason(host: str) -> str | None:
-    """Base URL 安全校验（7.3）：返回拒绝原因或 None（放行）。
-
-    允许 https 域名（含子域）；拒绝 IP 字面量中的环回/RFC1918/链路本地/云元数据，
-    拒绝 localhost/内网主机名。
-    """
-    lowered = host.lower().rstrip(".")
-    if lowered in ("localhost", "127.0.0.1", "::1"):
-        return f"localhost/loopback host rejected: {host}"
-    if lowered in _METADATA_HOSTS or lowered.endswith(".internal"):
-        return f"metadata/internal host rejected: {host}"
-    # 解析主机名：IP 字面量直接判定
-    try:
-        ipaddress.ip_address(lowered)
-    except ValueError:
-        # 域名：解析到内网地址即拒绝（DNS 解析属 SSRF 防护一部分）；
-        # 解析失败必须拒绝而非放行（防 DNS rebinding TOCTOU 的解析侧）
-        try:
-            infos = socket.getaddrinfo(lowered, None)
-        except OSError:
-            return f"hostname resolution failed (rejected): {host}"
-        for info in infos:
-            reason = _blocked_ip_reason(str(info[4][0]))
-            if reason:
-                return f"{reason} (resolved from {host})"
-        return None
-    return _blocked_ip_reason(lowered)
-
-
-def _blocked_ip_reason(ip: str) -> str | None:
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return None
-    if (
-        addr.is_loopback
-        or addr.is_private
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_multicast
-    ):
-        return f"non-public IP rejected: {ip}"
-    return None
 
 
 class OpenAICompatibleProvider:
@@ -133,12 +89,26 @@ class OpenAICompatibleProvider:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        # 流式读取响应并限制最大字节（006 四.2）：超过 _MAX_RESPONSE_BYTES 立即断开，
+        # 不等待完整缓冲
+        chunks: list[bytes] = []
+        total = 0
         try:
-            resp = self._client.post(
-                url,
-                json=body,
-                headers=headers,
-            )
+            with self._client.stream("POST", url, json=body, headers=headers) as resp:
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_RESPONSE_BYTES:
+                        resp.close()
+                        raise ProviderError(
+                            ProviderErrorCode.MALFORMED_RESPONSE,
+                            "provider response body exceeds limit",
+                            provider=self.provider_name,
+                            model=request.model,
+                        )
+                    chunks.append(chunk)
+                resp.read()
+                status_code = resp.status_code
+                resp_headers = resp.headers
         except httpx.TimeoutException as exc:
             raise ProviderError(
                 ProviderErrorCode.TIMEOUT,
@@ -161,8 +131,8 @@ class OpenAICompatibleProvider:
                 model=request.model,
             ) from exc
         # 重定向：httpx follow_redirects=False，3xx 视为配置错误（7.3：不允许重定向到内网）
-        if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
-            location = resp.headers.get("location", "")
+        if status_code in (301, 302, 303, 307, 308):
+            location = resp_headers.get("location", "")
             reason = (
                 _blocked_host_reason(urlparse(location).hostname or "")
                 if location
@@ -174,56 +144,60 @@ class OpenAICompatibleProvider:
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 401:
+        if status_code == 401:
             raise ProviderError(
                 ProviderErrorCode.AUTHENTICATION_ERROR,
                 "provider authentication failed",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 403:
+        if status_code == 403:
             raise ProviderError(
                 ProviderErrorCode.PERMISSION_ERROR,
                 "provider permission denied",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 404:
+        if status_code == 404:
             raise ProviderError(
                 ProviderErrorCode.MODEL_NOT_FOUND,
                 f"model not found: {request.model}",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code == 429:
+        if status_code == 429:
             raise ProviderError(
                 ProviderErrorCode.RATE_LIMITED,
                 "provider rate limited",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code >= 500:
+        if status_code >= 500:
             raise ProviderError(
                 ProviderErrorCode.PROVIDER_INTERNAL_ERROR,
                 "provider internal error",
                 provider=self.provider_name,
                 model=request.model,
             )
-        if resp.status_code != 200:
+        if status_code != 200:
             raise ProviderError(
                 ProviderErrorCode.INVALID_REQUEST,
-                f"provider returned status {resp.status_code}",
+                f"provider returned status {status_code}",
                 provider=self.provider_name,
                 model=request.model,
             )
-        # 响应体限制（7.2）：接收后按字节数拒绝超大响应（httpx 全缓冲，无法流式截断）
-        if len(resp.content) > _MAX_RESPONSE_BYTES:
+        # 重建响应对象（流式已限长；此处仅防 mock transport 直通超大响应）
+        content = b"".join(chunks)
+        if len(content) > _MAX_RESPONSE_BYTES:
             raise ProviderError(
                 ProviderErrorCode.MALFORMED_RESPONSE,
                 "provider response body exceeds limit",
                 provider=self.provider_name,
                 model=request.model,
             )
+        resp = httpx.Response(
+            status_code, headers=resp_headers, content=content, request=resp.request
+        )
         return self._parse_success(request, resp)
 
     def estimate_usage(self, request: ModelRequest) -> UsageEstimate:

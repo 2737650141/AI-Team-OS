@@ -120,6 +120,31 @@ REVIEWER_PROMPT = Prompt(
     ),
 )
 
+PROBE_PROMPT = Prompt(
+    prompt_id="researcher.probe",
+    version="1.0",
+    role="researcher",
+    purpose="分析证据缺口并结构化提议下一步工具调用（006 十二：工具调用必须为结构化 Schema）",
+    input_contract="子任务目标、本轮号、可用工具列表、已收集 Evidence",
+    output_contract="TOOL_PLAN Schema：{round: int, done: bool, tool_calls: [{tool: str, args: dict}]}",
+    forbidden_actions=[
+        "不得提议列表外工具",
+        "不得连续重复相同调用",
+        "不得自行结束整个任务",
+        "不得直接写最终结论",
+    ],
+    template=(
+        "你是 AI Team OS 的 Researcher（工具循环第 {round_no} 轮）。\n"
+        "子任务目标：{subtask}\n"
+        "可用工具（只能从中选择）：{tools}\n"
+        "已收集 Evidence：\n{collected}\n"
+        '只输出 JSON 对象：{{"round": int, "done": bool, "tool_calls": '
+        '[{{"tool": str, "args": {{}}}}]}}。\n'
+        "若证据已足够生成结论，done=true 且 tool_calls=[]。\n" + _shared_security_block()
+    ),
+)
+
 PROMPT_REGISTRY: dict[str, Prompt] = {
-    p.prompt_id: p for p in (SUPERVISOR_PROMPT, PLANNER_PROMPT, RESEARCHER_PROMPT, REVIEWER_PROMPT)
+    p.prompt_id: p
+    for p in (SUPERVISOR_PROMPT, PLANNER_PROMPT, RESEARCHER_PROMPT, REVIEWER_PROMPT, PROBE_PROMPT)
 }

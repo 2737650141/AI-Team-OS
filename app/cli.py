@@ -63,6 +63,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     run.add_argument("--dry-run", action="store_true", help="只显示预计模型调用与预算，不真正调用")
     run.add_argument("--model-override", action="append", default=[], metavar="ROLE=MODEL")
+    run.add_argument(
+        "--project", default=None, help="本地项目别名（映射到允许根目录子目录，不接收任意绝对路径）"
+    )
+    run.add_argument("--allowed-domains", default=None, help="允许域名列表（预留，M3-B 不启用）")
 
     resume = sub.add_parser("resume", help="恢复暂停的任务（澄清挂起时须带 --clarification）")
     resume.add_argument("run_id", help="run_id（= checkpoint thread_id）")
@@ -81,6 +85,18 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("providers", help="显示 Provider 与角色路由配置")
     sub.add_parser("provider-health", help="Provider 健康状态（不发起真实请求）")
+    sub.add_parser("tools", help="列出可用只读工具")
+    tools_info = sub.add_parser("tool-info", help="查看单个工具信息")
+    tools_info.add_argument("tool", help="工具名")
+    sub.add_parser("allowed-read-roots", help="显示本地只读根目录（AI_TEAM_ALLOWED_READ_ROOTS）")
+    evidence = sub.add_parser("evidence", help="列出任务的 Evidence 摘要")
+    evidence.add_argument("run_id", help="run_id（= checkpoint thread_id）")
+    evidence.add_argument("--data-dir", default=None)
+    evidence_show_parser = sub.add_parser(
+        "evidence-show", help="查看 Evidence 原始快照（明确命令）"
+    )
+    evidence_show_parser.add_argument("evidence_id", help="evidence_id")
+    evidence_show_parser.add_argument("--data-dir", default=None)
 
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
@@ -90,6 +106,36 @@ def main(argv: list[str] | None = None) -> None:
         _print_providers(settings)
     elif args.command == "provider-health":
         print(json.dumps(provider_health(settings), ensure_ascii=False, indent=2))
+    elif args.command == "tools":
+        from app.runner import tool_catalog
+
+        print(json.dumps(tool_catalog(settings), ensure_ascii=False, indent=2))
+    elif args.command == "tool-info":
+        from app.runner import tool_catalog
+
+        entry = next((t for t in tool_catalog(settings) if t["name"] == args.tool), None)
+        if entry is None:
+            parser.error(f"unknown tool: {args.tool}")
+        print(json.dumps(entry, ensure_ascii=False, indent=2))
+    elif args.command == "allowed-read-roots":
+        from app.core.config import allowed_read_roots
+
+        roots = allowed_read_roots(settings)
+        print(f"allowed_read_roots: {roots or '(未配置，本地文件工具不可用)'}")
+    elif args.command == "evidence":
+        from app.runner import evidence_list
+
+        print(
+            json.dumps(evidence_list(args.run_id, data_dir=data_dir), ensure_ascii=False, indent=2)
+        )
+    elif args.command == "evidence-show":
+        from app.runner import evidence_show
+
+        print(
+            json.dumps(
+                evidence_show(args.evidence_id, data_dir=data_dir), ensure_ascii=False, indent=2
+            )
+        )
     elif args.command == "run":
         if args.budget_tokens <= 0 or args.budget_cost <= 0:
             parser.error("--budget-tokens 与 --budget-cost 必须为正数")
@@ -97,6 +143,10 @@ def main(argv: list[str] | None = None) -> None:
         for item in args.model_override:
             role, _, model = item.partition("=")
             overrides[role.strip()] = model.strip()
+        if args.project:
+            overrides["project_alias"] = args.project
+        if args.allowed_domains:
+            overrides["allowed_domains"] = args.allowed_domains
         if args.dry_run:
             print(
                 json.dumps(
