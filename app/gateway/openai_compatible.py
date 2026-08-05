@@ -10,14 +10,13 @@
 
 from __future__ import annotations
 
-import ipaddress
 import json
-import socket
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
 
+from app.core.ssrf import blocked_host_reason, blocked_ip_reason
 from app.gateway.contracts import (
     ModelRequest,
     ModelResponse,
@@ -29,58 +28,15 @@ from app.gateway.contracts import (
 
 USER_AGENT = "ai-team-os/0.3.0"
 
-# 云元数据地址（169.254.169.254 等）与链路本地
-_METADATA_HOSTS = {"169.254.169.254", "metadata.google.internal", "metadata"}
+# 兼容别名（旧测试导入；统一逻辑见 app.core.ssrf，006 四.4）
+_blocked_host_reason = blocked_host_reason
+_blocked_ip_reason = blocked_ip_reason
+
 _MAX_RESPONSE_BYTES = 1024 * 1024  # 最大响应体 1MB（7.2）
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _blocked_host_reason(host: str) -> str | None:
-    """Base URL 安全校验（7.3）：返回拒绝原因或 None（放行）。
-
-    允许 https 域名（含子域）；拒绝 IP 字面量中的环回/RFC1918/链路本地/云元数据，
-    拒绝 localhost/内网主机名。
-    """
-    lowered = host.lower().rstrip(".")
-    if lowered in ("localhost", "127.0.0.1", "::1"):
-        return f"localhost/loopback host rejected: {host}"
-    if lowered in _METADATA_HOSTS or lowered.endswith(".internal"):
-        return f"metadata/internal host rejected: {host}"
-    # 解析主机名：IP 字面量直接判定
-    try:
-        ipaddress.ip_address(lowered)
-    except ValueError:
-        # 域名：解析到内网地址即拒绝（DNS 解析属 SSRF 防护一部分）；
-        # 解析失败必须拒绝而非放行（防 DNS rebinding TOCTOU 的解析侧）
-        try:
-            infos = socket.getaddrinfo(lowered, None)
-        except OSError:
-            return f"hostname resolution failed (rejected): {host}"
-        for info in infos:
-            reason = _blocked_ip_reason(str(info[4][0]))
-            if reason:
-                return f"{reason} (resolved from {host})"
-        return None
-    return _blocked_ip_reason(lowered)
-
-
-def _blocked_ip_reason(ip: str) -> str | None:
-    try:
-        addr = ipaddress.ip_address(ip)
-    except ValueError:
-        return None
-    if (
-        addr.is_loopback
-        or addr.is_private
-        or addr.is_link_local
-        or addr.is_reserved
-        or addr.is_multicast
-    ):
-        return f"non-public IP rejected: {ip}"
-    return None
 
 
 class OpenAICompatibleProvider:
