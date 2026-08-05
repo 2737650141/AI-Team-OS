@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
-import re
 import sys
 import zipfile
 from pathlib import Path
+
+# 统一秘密模式（与 app/core/secrets.py 同源：导入共享注册表，含 PEM/Bearer/通用赋值）
+from app.core.secrets import SECRET_PATTERNS
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "artifacts" / "review"
@@ -20,17 +22,16 @@ ZIP_NAME = "m3c-source.zip"
 # 源码/文档（与 M3-A/M3-B 一致）
 INCLUDE_DIRS = ["app", "tests", "docs", "scripts", "fixtures", ".github"]
 INCLUDE_FILES = ["pyproject.toml", ".gitignore", ".env.example"]
-EXCLUDE_DIRS = {"__pycache__", ".venv", "runtime", "artifacts", ".git", "node_modules", ".pytest_cache", ".mypy_cache"}
-
-# 真实密钥模式（与 app/core/secrets.py 同源收紧；测试假密钥经相对路径豁免）
-SECRET_PATTERNS = [
-    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
-    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"),
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    re.compile(r"\baws_secret_access_key\s*=\s*[A-Za-z0-9/+=_-]{20,}"),
-    re.compile(r"\bAI_TEAM_MODEL_API_KEY\s*=\s*[^\s]{8,}"),
-]
+EXCLUDE_DIRS = {
+    "__pycache__",
+    ".venv",
+    "runtime",
+    "artifacts",
+    ".git",
+    "node_modules",
+    ".pytest_cache",
+    ".mypy_cache",
+}
 
 # 测试假密钥白名单豁免（相对路径 + 原因；007 二十五：打包敏感扫描说明）
 SENSITIVE_EXEMPT = {

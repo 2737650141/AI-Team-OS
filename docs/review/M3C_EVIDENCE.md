@@ -2,11 +2,11 @@
 
 阶段：M3-B1（PDF/验收状态）+ M3-C（沙箱执行/审批/补丁/命令/回滚/Git 闭环）
 分支：phase-3c/sandbox-execution（自 main ed89ff3 创建）
-提交（12 个）：ecc94f9(PDF) → dfc1518(acceptance) → f709af4(workspace+approval) →
+提交（14 个）：ecc94f9(PDF) → dfc1518(acceptance) → f709af4(workspace+approval) →
 3fd70c4(sandbox tools+patch+command) → 3d7779a(git) → 539267a(executor 启用) →
 e38b29b(runtime+rollback+CLI/API) → 86ea660(reasonix 移除) → 95531a8(文档) →
-f0f83fa(security 修复) → 386ece3(review round1 修复) → 71c980c(review round2 修复)；
-git log 见
+f0f83fa(security 修复) → 386ece3(review round1 修复) → 71c980c(review round2 修复) →
+dbd276e(EVIDENCE 定稿) → ecbfa4c(打包脚本)；git log 见
 artifacts/review/m3c-git-log.txt
 
 ## 一、M3-B1 封板补齐
@@ -100,11 +100,12 @@ artifacts/review/m3c-git-log.txt
 
 ## 十三、最终验证
 
-- `pytest tests/`：294 passed + 2 skipped（最后提交 71c980c 后）。
+- `pytest tests/`：294 passed + 2 skipped（最终 HEAD dbd276e/ecbfa4c 后）。
 - `ruff check/format --check`（app tests scripts fixtures）：全绿 87 文件。
 - `mypy app`：53 source files no issues。
 - `git diff --check`：通过；工作区干净；无 remote/push。
-- 证据包：artifacts/review/m3c-source.zip（扫描 clean）。
+- 证据包：artifacts/review/m3c-source.zip（138 files，敏感扫描 clean，
+  由提交后的 scripts/make_m3c_zip.py 生成——扫描导入 app.core.secrets 共享模式集）。
 
 ## 十四、已知限制
 
