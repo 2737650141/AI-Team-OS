@@ -114,6 +114,11 @@ class CommandPolicy:
             "git_log": ["git", "log", "--oneline", "-10"],
             "git_add": ["git", "add"],
             "git_commit": ["git", "commit", "-m"],
+            "git_init": ["git", "init"],
+            "git_config": ["git", "config", "--local"],  # 沙箱本地配置（11.1/11.4）
+            "git_rev_parse": ["git", "rev-parse"],
+            "git_show": ["git", "show"],
+            "git_remote": ["git", "remote"],  # 只读断言（11.3 禁止 add/rm）
         }
 
     def resolve(self, executable_id: str, args: list[str]) -> list[str]:
@@ -141,6 +146,11 @@ class CommandPolicy:
                 "--oneline",
                 "-m",
                 "--color=never",
+                "--local",
+                "-b",
+                "--name-only",
+                "--format=",
+                "-10",
             ):
                 # 允许受控 flag；其余以 - 开头的参数需在白名单内（保守拒绝）
                 raise CommandError(f"flag not allowed: {arg[:40]}")
