@@ -160,7 +160,11 @@ def _build_context(
                 str(p) == str(r_resolved) or str(p).startswith(str(r_resolved) + os.sep)
             ):
                 checked.append(p)
-        roots = checked or roots
+        if checked:
+            roots = checked
+        elif roots:
+            # 显式报错而非静默回退完整根（review nit）
+            raise ValueError(f"project alias not found under allowed roots: {alias}")
     if roots:
         policy_obj = LocalPathPolicy(roots)
         for spec in build_local_tools(policy_obj):

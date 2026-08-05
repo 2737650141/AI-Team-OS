@@ -26,10 +26,7 @@ from app.tools.local_file import LocalPathPolicy, build_local_tools
 
 
 def _settings() -> AppSettings:
-    return AppSettings(
-        model=ModelProviderSettings(default_model="test-model", enable_real=True),
-        routing=ModelRouter.__init__.__self__ if False else AppSettings().routing,  # 默认路由
-    )
+    return AppSettings(model=ModelProviderSettings(default_model="test-model", enable_real=True))
 
 
 def _real_researcher_env(tmp_path: Path):
@@ -75,7 +72,6 @@ def _real_researcher_env(tmp_path: Path):
         )
     ):
         tgw.register(spec)
-    from app.gateway.router import ModelRouter
 
     router = ModelRouter(AppSettings().routing)
     return gw, tgw, router, provider, responses
@@ -153,6 +149,21 @@ def test_sensitive_dir_case_insensitive(tmp_path: Path) -> None:
     with pytest.raises(Exception) as exc_info:
         policy.validate(".SSH/config")
     assert "sensitive" in str(exc_info.value)
+
+
+def test_role_used_tool_calls_dual_matching() -> None:
+    """review 复查：role_used_tool_calls 双口径（researcher 与 researcher:s1 都统计）。"""
+    from app.agents.reviewer import role_used_tool_calls
+    from app.core.state import TaskState
+
+    state = TaskState(task_id="t", user_goal="x", token_budget=1000, cost_budget=1.0)
+    state.tool_calls = [
+        {"role": "researcher", "subtask_id": "s1", "idempotency_key": "k1"},  # 新格式（LLM 循环）
+        {"role": "researcher:s1", "idempotency_key": "k2"},  # 旧格式（Fake 口径）
+        {"role": "researcher:s2", "idempotency_key": "k3"},  # 旧格式
+    ]
+    assert role_used_tool_calls(state, "researcher", "s1") == 2  # 精确 + 旧口径都算
+    assert role_used_tool_calls(state, "researcher", "s2") == 1
 
 
 def test_local_list_root_default(tmp_path: Path) -> None:

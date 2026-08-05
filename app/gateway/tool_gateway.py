@@ -37,7 +37,12 @@ def _source_type_of(tool_name: str) -> str:
 
 
 def _new_record(
-    task_id: str, tool_name: str, args: dict[str, Any], key: str, role: str | None
+    task_id: str,
+    tool_name: str,
+    args: dict[str, Any],
+    key: str,
+    role: str | None,
+    subtask_id: str | None = None,
 ) -> dict[str, Any]:
     return {
         "id": uuid.uuid4().hex[:12],
@@ -46,6 +51,7 @@ def _new_record(
         "args": {k: redact(str(v)) for k, v in args.items()},
         "idempotency_key": key,
         "role": role,
+        "subtask_id": subtask_id,
         "ts": _now(),
     }
 
@@ -205,7 +211,14 @@ class ToolGateway:
                         break
             if hit is not None:
                 # 004 4.1：cached_success_result —— 复用已有成功结果，不重复执行副作用
-                record = _new_record(self._task_id, tool_name, args, key, role)
+                record = _new_record(
+                    self._task_id,
+                    tool_name,
+                    args,
+                    key,
+                    role,
+                    ctx.subtask_id if ctx else None,
+                )
                 record["status"] = "cached_success_result"
                 record["cached_from"] = hit["evidence_id"]
                 record["content_hash"] = hit.get("hash", "")
@@ -229,7 +242,9 @@ class ToolGateway:
                 ok=False, error="duplicate call skipped (no cached result)", status="skipped"
             )
 
-        record = _new_record(self._task_id, tool_name, args, key, role)
+        record = _new_record(
+            self._task_id, tool_name, args, key, role, ctx.subtask_id if ctx else None
+        )
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
         # handler 永不执行；审批流在 M3 实现（非只读一律拦截，防错标风险）
