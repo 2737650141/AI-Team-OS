@@ -23,6 +23,9 @@ class LLMProvider(Protocol):
     def chat(self, messages: list[dict[str, str]], model: str, max_tokens: int) -> LLMResponse:
         """同步 chat 调用；usage 必须如实返回。"""
 
+    def estimate_cost(self, max_tokens: int) -> float:
+        """调用前成本估算（用于预算预留）；无法估算时返回 0.0。"""
+
 
 class DeterministicFakeModel:
     """确定性假模型：按预设映射返回，token 计数确定（M1 默认）。"""
@@ -51,6 +54,10 @@ class DeterministicFakeModel:
             output_tokens=output_tokens,
             cost=self.cost_per_call,
         )
+
+    def estimate_cost(self, max_tokens: int) -> float:
+        """调用前成本估算（预算预留用）。"""
+        return self.cost_per_call
 
 
 class ModelGateway:
