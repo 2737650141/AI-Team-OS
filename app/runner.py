@@ -101,6 +101,16 @@ def _build_context(
 ) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
     settings = settings or load_settings()
+    if model_mode == "real" and not settings.model.enable_real:
+        # 005 7.4 / 006 3.2：真实调用必须显式开启，未启用时明确拒绝（不静默进入图内失败）
+        from app.gateway.contracts import ProviderError, ProviderErrorCode
+
+        raise ProviderError(
+            ProviderErrorCode.CONFIG_ERROR,
+            "real model calls disabled; set AI_TEAM_MODEL_ENABLE_REAL=true",
+            provider=settings.model.provider,
+            model=settings.model.default_model or "",
+        )
     budget = BudgetController(
         state.token_budget,
         state.cost_budget,
