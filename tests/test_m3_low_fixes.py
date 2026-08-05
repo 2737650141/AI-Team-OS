@@ -61,5 +61,5 @@ def test_secret_patterns_are_shared_registry() -> None:
     """四.4：统一模式集是唯一权威（SECRET_PATTERNS 非空且覆盖核心形态）。"""
     assert SECRET_PATTERNS
     joined = " ".join(p.pattern for p in SECRET_PATTERNS)
-    for marker in ("sk-", "ghp_", "AKIA", "PRIVATE KEY", "Bearer", "api[_-]?key"):
+    for marker in ("sk-", "ghp_", "AKIA", "aws[_-]?secret", "PRIVATE KEY", "Bearer", "api[_-]?key"):
         assert marker in joined
