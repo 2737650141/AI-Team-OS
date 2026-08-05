@@ -1,9 +1,10 @@
-"""任务运行器（M2）：真实 Runtime 的创建 / 澄清暂停 / 恢复 / 状态查询 / 追踪。
+"""任务运行器（M3-A）：真实 Runtime 的创建 / 澄清暂停 / 恢复 / 状态查询 / 追踪。
 
 - 状态持久化：正式 SQLite Checkpointer（thread_id = run_id）。
-- 多智能体：M2 确定性多智能体图（app/graph.py），CLI 与 API 共用本 Runtime。
+- 多智能体：M2/M3-A 图（app/graph.py），CLI 与 API 共用本 Runtime。
+- 模型模式：fake（默认，DeterministicFakeModel，离线可重复）| real（OpenAI-compatible，
+  必须 AI_TEAM_MODEL_ENABLE_REAL=true 且配置 API Key）。
 - 预算/工具网关：恢复时以 checkpoint 中的 budget_usage / idempotency_keys 重建（不清零、不重放）。
-- 暂停/恢复场景：澄清 interrupt（vague_goal → resume --clarification）。
 """
 
 from __future__ import annotations
@@ -17,12 +18,17 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from app.core.budget import BudgetController, BudgetExceeded
+from app.core.config import AppSettings, load_settings
+from app.core.context_builder import ContextBuilder
 from app.core.registry import default_registry
 from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
 from app.core.state import TaskState
 from app.gateway.audit import AuditLog
+from app.gateway.fake_provider import FakeModelProvider
 from app.gateway.model_gateway import DeterministicFakeModel, ModelGateway
+from app.gateway.openai_compatible import OpenAICompatibleProvider
+from app.gateway.router import ModelRouter, build_router
 from app.gateway.tool_gateway import ToolGateway
 from app.graph import build_graph
 from app.tools.fixture_repo import (
@@ -46,6 +52,33 @@ class RunReport:
     status: str
 
 
+@dataclass
+class RunContext:
+    budget: BudgetController
+    audit: AuditLog
+    provider: object
+    model_gateway: ModelGateway
+    tool_gateway: ToolGateway
+    router: ModelRouter
+    context: ContextBuilder
+    settings: AppSettings
+
+
+def build_provider(settings: AppSettings):
+    """按配置构造 Provider（005 7.4：real 模式必须显式开启）。"""
+    if settings.model.provider == "openai_compatible":
+        return OpenAICompatibleProvider(
+            base_url=settings.model.base_url,
+            api_key=settings.model.api_key,
+            default_model=settings.model.default_model,
+            enable_real=settings.model.enable_real,
+            timeout_seconds=settings.model.timeout_seconds,
+            temperature=settings.model.temperature,
+            max_output_tokens=settings.model.max_output_tokens,
+        )
+    return FakeModelProvider()
+
+
 def _open_conn(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(str(data_dir / "checkpoints.db"), check_same_thread=False)
@@ -55,16 +88,25 @@ def _build_context(
     state: TaskState,
     data_dir: Path,
     model_responses: dict[str, str] | None = None,
-):
+    settings: AppSettings | None = None,
+    model_mode: str = "fake",
+    model_overrides: dict[str, str] | None = None,
+) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
+    settings = settings or load_settings()
     budget = BudgetController(
         state.token_budget,
         state.cost_budget,
         initial_usage=state.budget_usage,
     )
     audit = AuditLog(data_dir / "audit.jsonl")
-    fake = DeterministicFakeModel(responses=model_responses)
-    model_gateway = ModelGateway(provider=fake, budget=budget, audit=audit, task_id=state.task_id)
+    if model_mode == "real":
+        provider = build_provider(settings)
+    else:
+        provider = DeterministicFakeModel(responses=model_responses)
+    model_gateway = ModelGateway(
+        provider=provider, budget=budget, audit=audit, task_id=state.task_id
+    )
     tool_gateway = ToolGateway(
         audit=audit,
         task_id=state.task_id,
@@ -76,20 +118,30 @@ def _build_context(
     tool_gateway.register(FixtureRepositoryLookupTool(DEFAULT_REPO_FIXTURE).spec())
     tool_gateway.register(FixtureSourceLookupTool(DEFAULT_SOURCE_FIXTURE).spec())
     tool_gateway.register(DangerousWriteTool().spec())
-    return budget, audit, fake, model_gateway, tool_gateway
+    router = build_router(settings, audit=audit, task_id=state.task_id, overrides=model_overrides)
+    context = ContextBuilder(settings)
+    return RunContext(
+        budget=budget,
+        audit=audit,
+        provider=provider,
+        model_gateway=model_gateway,
+        tool_gateway=tool_gateway,
+        router=router,
+        context=context,
+        settings=settings,
+    )
 
 
-def _compile(
-    state: TaskState,
-    conn: sqlite3.Connection,
-    model_gateway: ModelGateway,
-    tool_gateway: ToolGateway,
-):
+def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
     graph = build_graph(
-        model_gateway,
-        tool_gateway,
+        ctx.model_gateway,
+        ctx.tool_gateway,
         goal=state.user_goal,
         registry=default_registry(),
+        model_mode=state.model_mode or "fake",
+        router=ctx.router,
+        context=ctx.context,
+        settings=ctx.settings,
     )
     return graph.compile(checkpointer=SqliteSaver(conn))
 
@@ -101,6 +153,9 @@ def run_task(
     project_id: str = "default",
     data_dir: Path | None = None,
     model_responses: dict[str, str] | None = None,
+    model_mode: str = "fake",
+    model_overrides: dict[str, str] | None = None,
+    settings: AppSettings | None = None,
 ) -> RunReport:
     """创建并运行任务（进程 A）。vague_goal 场景在澄清 interrupt 处暂停返回。"""
     data_dir = data_dir or Path("data")
@@ -113,13 +168,19 @@ def run_task(
         user_goal=goal,
         token_budget=token_budget,
         cost_budget=cost_budget,
+        model_mode=model_mode,
     )
-    budget, audit, fake, model_gateway, tool_gateway = _build_context(
-        state, data_dir, model_responses=model_responses
+    ctx = _build_context(
+        state,
+        data_dir,
+        model_responses=model_responses,
+        settings=settings,
+        model_mode=model_mode,
+        model_overrides=model_overrides,
     )
     conn = _open_conn(data_dir)
     try:
-        compiled = _compile(state, conn, model_gateway, tool_gateway)
+        compiled = _compile(ctx, state, conn)
         result = compiled.invoke(state.model_dump(), config={"configurable": {"thread_id": run_id}})
         state = TaskState.model_validate(result)
         if "__interrupt__" in result:
@@ -134,9 +195,9 @@ def run_task(
                 task_id,
                 run_id,
                 state,
-                budget.usage,
-                fake.call_count,
-                len(tool_gateway.tool_calls),
+                ctx.budget.usage,
+                getattr(ctx.provider, "call_count", 0),
+                len(ctx.tool_gateway.tool_calls),
                 "paused",
             )
         # 图已设置最终状态（completed / failed），runner 不覆盖
@@ -151,7 +212,7 @@ def run_task(
                 "current_status": "failed",
                 "failure_code": "budget_exceeded",
                 "final_result": str(exc),
-                "budget_usage": budget.usage,
+                "budget_usage": ctx.budget.usage,
             },
         )
     finally:
@@ -160,9 +221,9 @@ def run_task(
         task_id,
         run_id,
         state,
-        budget.usage,
-        fake.call_count,
-        len(tool_gateway.tool_calls),
+        ctx.budget.usage,
+        getattr(ctx.provider, "call_count", 0),
+        len(ctx.tool_gateway.tool_calls),
         state.current_status,
     )
 
@@ -171,6 +232,9 @@ def resume_task(
     run_id: str,
     payload: ResumePayload | ClarificationPayload | None = None,
     data_dir: Path | None = None,
+    model_mode: str = "fake",
+    model_overrides: dict[str, str] | None = None,
+    settings: AppSettings | None = None,
 ) -> RunReport:
     """从 SQLite checkpoint 恢复（进程 B）。
 
@@ -208,8 +272,14 @@ def resume_task(
                 )
         elif isinstance(payload, ClarificationPayload):
             raise RuntimeError("run is not awaiting clarification")
-        budget, audit, fake, model_gateway, tool_gateway = _build_context(state, data_dir)
-        compiled = _compile(state, conn, model_gateway, tool_gateway)
+        ctx = _build_context(
+            state,
+            data_dir,
+            settings=settings,
+            model_mode=state.model_mode or model_mode,
+            model_overrides=model_overrides,
+        )
+        compiled = _compile(ctx, state, conn)
         try:
             result = compiled.invoke(
                 Command(resume=payload), config={"configurable": {"thread_id": run_id}}
@@ -222,7 +292,7 @@ def resume_task(
                     "current_status": "failed",
                     "failure_code": "budget_exceeded",
                     "final_result": str(exc),
-                    "budget_usage": budget.usage,
+                    "budget_usage": ctx.budget.usage,
                 },
             )
             state.current_status = "failed"
@@ -232,9 +302,9 @@ def resume_task(
                 state.task_id,
                 run_id,
                 state,
-                budget.usage,
-                fake.call_count,
-                len(tool_gateway.tool_calls),
+                ctx.budget.usage,
+                getattr(ctx.provider, "call_count", 0),
+                len(ctx.tool_gateway.tool_calls),
                 "failed",
             )
         state = TaskState.model_validate(result)
@@ -243,9 +313,9 @@ def resume_task(
             state.task_id,
             run_id,
             state,
-            budget.usage,
-            fake.call_count,
-            len(tool_gateway.tool_calls),
+            ctx.budget.usage,
+            getattr(ctx.provider, "call_count", 0),
+            len(ctx.tool_gateway.tool_calls),
             state.current_status,
         )
     finally:
@@ -290,6 +360,7 @@ def trace_task(run_id: str, data_dir: Path | None = None) -> dict:
             "run_id": run_id,
             "current_status": state.current_status,
             "failure_code": state.failure_code,
+            "model_mode": state.model_mode,
             "clarified_goal": state.clarified_goal,
             "clarification_history": [c.model_dump() for c in state.clarification_history],
             "plan": state.plan,
@@ -305,3 +376,62 @@ def trace_task(run_id: str, data_dir: Path | None = None) -> dict:
         }
     finally:
         conn.close()
+
+
+def provider_health(settings: AppSettings | None = None) -> dict:
+    """Provider 健康（005 十二/十六）：不发起真实请求。"""
+    settings = settings or load_settings()
+    provider = build_provider(settings)
+    health = provider.health_check()
+    return {
+        "provider": health.provider,
+        "status": health.status,
+        "model": health.model,
+        "message": health.message,
+        "checked_at": health.checked_at,
+        "real_enabled": settings.model.enable_real,
+    }
+
+
+def dry_run(
+    goal: str,
+    token_budget: int,
+    cost_budget: float,
+    settings: AppSettings | None = None,
+) -> dict:
+    """dry-run（005 十六）：显示预计模型调用与预算，不真正调用。"""
+    settings = settings or load_settings()
+    from app.graph import plan_scenario_for
+
+    scenario = plan_scenario_for(goal)
+    if scenario == "parallel_three_topics":
+        research_calls = 3
+    elif scenario == "github_compare_plan":
+        research_calls = 3
+    else:
+        research_calls = 1
+    roles = {
+        "planner": 1,
+        "researcher": research_calls,
+        "reviewer": research_calls,
+        "supervisor": 1,
+    }
+    calls: list[dict[str, object]] = []
+    router = build_router(settings)
+    for role, count in roles.items():
+        model = router.resolve(role)
+        calls.append({"role": role, "model": model or "(default)", "expected_calls": count})
+    estimated_tokens = sum(
+        int(str(c["expected_calls"])) * settings.model.max_output_tokens * 2 for c in calls
+    )
+    return {
+        "goal": goal,
+        "mode": "dry-run",
+        "real_enabled": settings.model.enable_real,
+        "provider": settings.model.provider,
+        "model_calls": calls,
+        "estimated_max_tokens": estimated_tokens,
+        "token_budget": token_budget,
+        "cost_budget": cost_budget,
+        "note": "dry-run 不发起任何真实模型调用",
+    }
