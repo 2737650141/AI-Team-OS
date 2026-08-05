@@ -1,4 +1,4 @@
-"""CLI（M1 + 003-A 二）：run / resume / status。"""
+"""CLI（M2）：run / resume / status / trace。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,14 @@ import argparse
 from pathlib import Path
 
 from app.core.resume import ResumePayload
-from app.runner import RunReport, resume_task, run_task, status_task
+from app.core.schemas import ClarificationPayload
+from app.runner import (
+    RunReport,
+    resume_task,
+    run_task,
+    status_task,
+    trace_task,
+)
 
 
 def _print_report(report: RunReport) -> None:
@@ -23,22 +30,29 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="ai-team-os", description="AI Team OS 任务 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="运行一个任务")
-    run.add_argument("goal", help="用户目标")
+    run = sub.add_parser("run", help="运行一个任务（如 github_compare_team / vague_goal）")
+    run.add_argument(
+        "goal", help="用户目标（支持场景：github_compare_team / vague_goal / 测试场景名）"
+    )
     run.add_argument("--budget-tokens", type=int, default=10000)
     run.add_argument("--budget-cost", type=float, default=1.0)
     run.add_argument("--project-id", default="default")
-    run.add_argument("--pause-after", default=None, help="在节点边界暂停（当前支持 agent）")
     run.add_argument("--data-dir", default=None)
 
-    resume = sub.add_parser("resume", help="恢复暂停的任务")
+    resume = sub.add_parser("resume", help="恢复暂停的任务（澄清挂起时须带 --clarification）")
     resume.add_argument("run_id", help="run_id（= checkpoint thread_id）")
-    resume.add_argument("--action", default="continue")
+    resume.add_argument(
+        "--clarification", default=None, help="澄清答案（ClarificationPayload.answer）"
+    )
     resume.add_argument("--data-dir", default=None)
 
     status = sub.add_parser("status", help="查询任务状态")
     status.add_argument("run_id", help="run_id（= checkpoint thread_id）")
     status.add_argument("--data-dir", default=None)
+
+    trace = sub.add_parser("trace", help="任务运行追踪（完整结构化状态）")
+    trace.add_argument("run_id", help="run_id（= checkpoint thread_id）")
+    trace.add_argument("--data-dir", default=None)
 
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
@@ -53,15 +67,27 @@ def main(argv: list[str] | None = None) -> None:
                 args.budget_cost,
                 args.project_id,
                 data_dir=data_dir,
-                pause_after=args.pause_after,
             )
         )
     elif args.command == "resume":
-        _print_report(
-            resume_task(args.run_id, payload=ResumePayload(action=args.action), data_dir=data_dir)
-        )
+        if args.clarification:
+            # 澄清挂起时从 checkpoint 读取 pending_clarification_id 构造 ClarificationPayload
+            snapshot = status_task(args.run_id, data_dir=data_dir)
+            pending_id = snapshot.state.pending_clarification_id
+            if not pending_id:
+                parser.error(f"run {args.run_id} 不在澄清挂起状态，--clarification 不适用")
+            payload: ResumePayload | ClarificationPayload = ClarificationPayload(
+                clarification_id=pending_id, answer=args.clarification
+            )
+        else:
+            payload = ResumePayload(action="continue")
+        _print_report(resume_task(args.run_id, payload=payload, data_dir=data_dir))
     elif args.command == "status":
         _print_report(status_task(args.run_id, data_dir=data_dir))
+    elif args.command == "trace":
+        import json
+
+        print(json.dumps(trace_task(args.run_id, data_dir=data_dir), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

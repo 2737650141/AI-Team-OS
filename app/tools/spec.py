@@ -35,3 +35,4 @@ class ToolResult:
     data: Any = None
     error: str | None = None
     status: str = "ok"  # ok | blocked | error | skipped
+    evidence_id: str | None = None  # 成功调用产生的 evidence 记录 id（gateway 生成）

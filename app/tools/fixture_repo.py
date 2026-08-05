@@ -36,6 +36,30 @@ class FixtureRepositoryLookupTool:
         return self._data[repo_name]
 
 
+class FixtureSourceLookupTool:
+    """从本地 Fixture 读取多来源陈述（GT-05 冲突来源核查，safe + read_only）。"""
+
+    NAME = "fixture_source_lookup"
+
+    def __init__(self, fixture_path: Path) -> None:
+        self._data: dict[str, Any] = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            name=self.NAME,
+            description="从本地 Fixture 读取来源陈述（含相互矛盾的来源，不访问网络）",
+            input_schema={"source_id": "str: 来源 ID，如 langgraph_maintained"},
+            risk_level=RiskLevel.SAFE,
+            read_only=True,
+            handler=self.handler,
+        )
+
+    def handler(self, source_id: str) -> dict[str, Any]:
+        if source_id not in self._data:
+            raise KeyError(f"fixture 中无来源 {source_id}")
+        return self._data[source_id]
+
+
 class DangerousWriteTool:
     """演示用危险写工具。M1 中 handler 永不执行（GT-10 M1 验收）。"""
 

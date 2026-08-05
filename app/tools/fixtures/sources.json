@@ -1,0 +1,23 @@
+{
+  "langgraph_maintained": {
+    "source_id": "langgraph_maintained",
+    "name": "langgraph",
+    "claim": "积极维护，2026-08 仍有活跃提交",
+    "detail": "langchain-ai/langgraph 官方仓库，最后 push 2026-08-02",
+    "confidence": 0.9
+  },
+  "langgraph_abandoned": {
+    "source_id": "langgraph_abandoned",
+    "name": "langgraph",
+    "claim": "已停止维护",
+    "detail": "某第三方博客声称 langgraph 归档",
+    "confidence": 0.3
+  },
+  "crewai_active": {
+    "source_id": "crewai_active",
+    "name": "crewai",
+    "claim": "crewAI 仓库积极维护",
+    "detail": "crewAIInc/crewAI，最后 push 2026-08-04",
+    "confidence": 0.9
+  }
+}
