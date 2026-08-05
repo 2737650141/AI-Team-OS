@@ -133,9 +133,19 @@ def run_task(
             )
         state.current_status = "completed"
     except BudgetExceeded as exc:
+        # 失败状态写回 checkpoint（与暂停路径的 update_state 一致），跨进程 status 可读
         state.current_status = "failed"
         state.failure_code = "budget_exceeded"
         state.final_result = str(exc)
+        compiled.update_state(
+            {"configurable": {"thread_id": run_id}},
+            {
+                "current_status": "failed",
+                "failure_code": "budget_exceeded",
+                "final_result": str(exc),
+                "budget_usage": budget.usage,
+            },
+        )
     finally:
         conn.close()
     return RunReport(
@@ -166,6 +176,12 @@ def resume_task(
             raise KeyError(f"run not found: {run_id}")
         # 恢复前 Schema 校验：未知枚举值 / schema 版本在 TaskState 边界拒绝
         state = TaskState.model_validate(checkpoint.checkpoint["channel_values"])
+        # 前置校验：仅 paused 状态可恢复（completed/failed 显式拒绝）
+        if state.current_status != "paused":
+            raise RuntimeError(
+                f"run {run_id} is not paused "
+                f"(current_status={state.current_status!r}); resume rejected"
+            )
         budget, audit, fake, model_gateway, tool_gateway = _build_context(state, data_dir)
         compiled = _compile(state, conn, model_gateway, tool_gateway)
         result = compiled.invoke(

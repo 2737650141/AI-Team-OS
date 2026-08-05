@@ -115,3 +115,34 @@ def test_resume_missing_run_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(KeyError, match="run not found"):
         resume_task("no-such-run", data_dir=tmp_path / "data")
+
+
+def test_resume_completed_run_rejected(tmp_path: Path) -> None:
+    """对已 completed 的 run 恢复必须拒绝（前置校验，review should-fix）。"""
+    from app.runner import resume_task, run_task
+
+    report = run_task(
+        "already-done",
+        token_budget=5000,
+        cost_budget=1.0,
+        data_dir=tmp_path / "data",
+    )
+    assert report.status == "completed"
+    with pytest.raises(RuntimeError, match="not paused"):
+        resume_task(report.run_id, data_dir=tmp_path / "data")
+
+
+def test_budget_failure_persisted_to_checkpoint(tmp_path: Path) -> None:
+    """预算失败状态写回 checkpoint：跨进程 status 可读到 failed（review should-fix）。"""
+    from app.runner import run_task, status_task
+
+    report = run_task(
+        "expensive goal that will blow the tiny budget",
+        token_budget=50,
+        cost_budget=0.01,
+        data_dir=tmp_path / "data",
+    )
+    assert report.status == "failed"
+    snapshot = status_task(report.run_id, data_dir=tmp_path / "data")
+    assert snapshot.status == "failed"
+    assert snapshot.state.failure_code == "budget_exceeded"

@@ -8,17 +8,11 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ResumePayload(BaseModel):
-    """恢复值。action 禁止为 None，恢复前经 Schema 校验。"""
+    """恢复值。action 为 str（字段层拒绝 None），恢复前经 Schema 校验。"""
 
     action: str = Field(default="continue", min_length=1)
     note: str | None = None
-
-    @model_validator(mode="after")
-    def _reject_none_action(self) -> "ResumePayload":
-        if self.action is None:
-            raise ValueError("resume action must not be None")
-        return self
