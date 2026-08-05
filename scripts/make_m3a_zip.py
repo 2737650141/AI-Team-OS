@@ -43,6 +43,33 @@ def main() -> None:
     scanned = 0
     total_bytes = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 独立文件（pyproject/.gitignore/.env.example/.github）
+        for name in INCLUDE_FILES:
+            p = ROOT / name
+            if not p.exists():
+                continue
+            if p.is_dir():
+                for sub in sorted(p.rglob("*")):
+                    if sub.is_dir() or "__pycache__" in sub.parts:
+                        continue
+                    text = sub.read_text(encoding="utf-8", errors="replace")
+                    scanned += 1
+                    hits = scan_text(text, sub.name)
+                    if hits:
+                        print(f"SENSITIVE BLOCKED: {sub} -> {hits}")
+                        raise SystemExit(1)
+                    zf.write(sub, sub.relative_to(ROOT).as_posix())
+                    count += 1
+            else:
+                text = p.read_text(encoding="utf-8", errors="replace")
+                scanned += 1
+                hits = scan_text(text, p.name)
+                if hits:
+                    print(f"SENSITIVE BLOCKED: {p} -> {hits}")
+                    raise SystemExit(1)
+                zf.write(p, p.relative_to(ROOT).as_posix())
+                count += 1
+                total_bytes += len(text.encode("utf-8"))
         for base in INCLUDE_DIRS:
             root = ROOT / base
             if not root.exists():
