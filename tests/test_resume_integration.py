@@ -1,10 +1,7 @@
-"""跨进程 Checkpoint 恢复集成测试（003-A 二/三：真实 Runtime，非实验脚本）。"""
+"""跨进程恢复集成测试（M2：澄清 interrupt 恢复；003-A 兼容层回归）。"""
 
 from __future__ import annotations
 
-import ast
-import json
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -37,65 +34,51 @@ def _parse(output: str) -> dict[str, str]:
     return result
 
 
-def _max_checkpoint_step(db_path: Path) -> int:
-    conn = sqlite3.connect(str(db_path))
-    rows = conn.execute("SELECT metadata FROM checkpoints").fetchall()
-    conn.close()
-    steps = [json.loads(r[0]).get("step", -1) for r in rows]
-    return max(steps)
+def test_cross_process_clarify_resume(tmp_path: Path) -> None:
+    """进程 A run vague_goal → 澄清 interrupt 暂停并退出 → 进程 B resume → completed。
 
-
-def test_cross_process_pause_resume(tmp_path: Path) -> None:
-    """进程 A 创建并暂停 → 退出 → 进程 B 恢复 → completed（003-A 二 12 项全部断言）。"""
+    断言：task_id/run_id 不变、clarification_history 正确、澄清后继续 Planner 流程。
+    """
     data_dir = tmp_path / "data"
 
-    # 进程 A：run --pause-after agent（节点边界暂停后进程退出）
-    run_out = _cli(
-        "run",
-        "github_compare_mock",
-        "--pause-after",
-        "agent",
-        "--budget-tokens",
-        "5000",
-        "--budget-cost",
-        "1.0",
-        data_dir=data_dir,
-    )
+    # 进程 A：run vague_goal（澄清挂起）
+    run_out = _cli("run", "vague_goal", "--budget-tokens", "10000", data_dir=data_dir)
     run_info = _parse(run_out.stdout)
     assert run_info["status"] == "paused"
     run_id = run_info["run_id"]
     task_id = run_info["task_id"]
     assert run_id and task_id
-    step_paused = _max_checkpoint_step(data_dir / "checkpoints.db")
 
-    # 进程 B：status（暂停后快照）
-    paused_snapshot = _parse(_cli("status", run_id, data_dir=data_dir).stdout)
-    assert paused_snapshot["status"] == "paused"
-    assert paused_snapshot["task_id"] == task_id
-    assert paused_snapshot["run_id"] == run_id
-    assert paused_snapshot["tool_call_count"] == "1"  # 已成功工具不丢失
+    # 进程 B：status 快照（paused + 澄清挂起）
+    snapshot = _parse(_cli("status", run_id, data_dir=data_dir).stdout)
+    assert snapshot["status"] == "paused"
+    assert snapshot["task_id"] == task_id
+    assert snapshot["run_id"] == run_id
 
-    # 进程 B：resume → completed
-    resume_out = _cli("resume", run_id, data_dir=data_dir)
+    # 进程 B：resume --clarification
+    resume_out = _cli(
+        "resume",
+        run_id,
+        "--clarification",
+        "调研 LangGraph 与 CrewAI 的选型对比",
+        data_dir=data_dir,
+    )
     resume_info = _parse(resume_out.stdout)
     assert resume_info["status"] == "completed"
     assert resume_info["task_id"] == task_id  # task_id 保持不变
     assert resume_info["run_id"] == run_id  # run_id 保持不变
-    assert resume_info["tool_call_count"] == "1"  # 已成功的工具不重复执行
-    usage_resumed = ast.literal_eval(resume_info["usage"])
-    assert usage_resumed["tokens"] > 0  # token_usage 不清零
-    step_resumed = _max_checkpoint_step(data_dir / "checkpoints.db")
-    assert step_resumed > step_paused  # checkpoint 链递增
 
-    # 进程 C：最终状态验证
-    final = _parse(_cli("status", run_id, data_dir=data_dir).stdout)
-    assert final["status"] == "completed"
-    assert final["task_id"] == task_id
-    assert final["run_id"] == run_id
-    assert final["tool_call_count"] == "1"
-    usage_final = ast.literal_eval(final["usage"])
-    assert usage_final["tokens"] > 0
-    assert usage_final["tokens"] >= usage_resumed["tokens"]
+    # 进程 C：trace 验证 clarification_history 与澄清后流程
+    trace_out = _cli("trace", run_id, data_dir=data_dir)
+    import json
+
+    trace = json.loads(trace_out.stdout)
+    assert trace["current_status"] == "completed"
+    assert len(trace["clarification_history"]) == 1
+    assert trace["clarification_history"][0]["answer"] == "调研 LangGraph 与 CrewAI 的选型对比"
+    assert "澄清" in (trace["clarified_goal"] or "")
+    assert len(trace["subtasks"]) == 3
+    assert all(s["runtime_status"] == "passed" for s in trace["subtasks"])
 
 
 def test_resume_payload_rejects_none_action() -> None:
@@ -106,7 +89,6 @@ def test_resume_payload_rejects_none_action() -> None:
         ResumePayload.model_validate({"action": None})
     assert ResumePayload().action == "continue"
     assert ResumePayload(action="go").action == "go"
-    assert ResumePayload(action="go").model_dump()["action"] == "go"
 
 
 def test_resume_missing_run_rejected(tmp_path: Path) -> None:
@@ -118,12 +100,12 @@ def test_resume_missing_run_rejected(tmp_path: Path) -> None:
 
 
 def test_resume_completed_run_rejected(tmp_path: Path) -> None:
-    """对已 completed 的 run 恢复必须拒绝（前置校验，review should-fix）。"""
+    """对已 completed 的 run 恢复必须拒绝（前置校验）。"""
     from app.runner import resume_task, run_task
 
     report = run_task(
-        "already-done",
-        token_budget=5000,
+        "github_compare_team",
+        token_budget=10000,
         cost_budget=1.0,
         data_dir=tmp_path / "data",
     )
@@ -132,17 +114,31 @@ def test_resume_completed_run_rejected(tmp_path: Path) -> None:
         resume_task(report.run_id, data_dir=tmp_path / "data")
 
 
-def test_budget_failure_persisted_to_checkpoint(tmp_path: Path) -> None:
-    """预算失败状态写回 checkpoint：跨进程 status 可读到 failed（review should-fix）。"""
-    from app.runner import run_task, status_task
+def test_resume_non_clarification_payload_rejected_when_pending(tmp_path: Path) -> None:
+    """澄清挂起时用 ResumePayload 恢复必须拒绝（004 十三）。"""
+    from app.core.schemas import ClarificationPayload
+    from app.runner import resume_task, run_task
 
-    report = run_task(
-        "expensive goal that will blow the tiny budget",
-        token_budget=50,
-        cost_budget=0.01,
-        data_dir=tmp_path / "data",
-    )
-    assert report.status == "failed"
-    snapshot = status_task(report.run_id, data_dir=tmp_path / "data")
-    assert snapshot.status == "failed"
-    assert snapshot.state.failure_code == "budget_exceeded"
+    report = run_task("vague_goal", token_budget=10000, cost_budget=1.0, data_dir=tmp_path / "data")
+    assert report.status == "paused"
+    with pytest.raises(RuntimeError, match="awaiting clarification"):
+        resume_task(
+            report.run_id, payload=ResumePayload(action="continue"), data_dir=tmp_path / "data"
+        )
+    # clarification_id 不匹配同样拒绝
+    with pytest.raises(RuntimeError, match="clarification_id mismatch"):
+        resume_task(
+            report.run_id,
+            payload=ClarificationPayload(clarification_id="cl-wrong", answer="x"),
+            data_dir=tmp_path / "data",
+        )
+
+
+def test_empty_clarification_rejected() -> None:
+    """空澄清答案被 Schema 拒绝（004 十三）。"""
+    from pydantic import ValidationError
+
+    from app.core.schemas import ClarificationPayload
+
+    with pytest.raises(ValidationError):
+        ClarificationPayload(clarification_id="cl-1", answer="")

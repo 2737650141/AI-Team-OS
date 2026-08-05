@@ -17,11 +17,10 @@ def test_create_and_get_task() -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "completed"
-    task_id = body["task_id"]
 
-    got = client.get(f"/tasks/{task_id}")
+    got = client.get(f"/tasks/{body['run_id']}")
     assert got.status_code == 200
-    assert got.json()["task_id"] == task_id
+    assert got.json()["run_id"] == body["run_id"]
     assert got.json()["final_result"] is not None
 
 

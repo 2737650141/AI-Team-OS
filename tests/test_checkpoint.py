@@ -32,13 +32,17 @@ def _make_compiled(tmp_path: Path):
     tool_gateway.register(DangerousWriteTool().spec())
     conn = sqlite3.connect(str(tmp_path / "checkpoints.db"), check_same_thread=False)
     saver = SqliteSaver(conn)
-    return build_graph(gateway, tool_gateway).compile(checkpointer=saver)
+    return build_graph(gateway, tool_gateway, goal="hello world github compare").compile(
+        checkpointer=saver
+    )
 
 
 def test_sqlite_checkpoint_roundtrip(tmp_path: Path) -> None:
     """任务状态经 SQLite Checkpoint 持久化，可从同一 thread 恢复。"""
     compiled = _make_compiled(tmp_path)
-    state = TaskState(task_id="t1", user_goal="hello", token_budget=10000, cost_budget=1.0)
+    state = TaskState(
+        task_id="t1", user_goal="hello world github compare", token_budget=10000, cost_budget=1.0
+    )
 
     result = compiled.invoke(state.model_dump(), config={"configurable": {"thread_id": "t1"}})
     final = TaskState.model_validate(result)
@@ -100,7 +104,9 @@ def test_unknown_status_rejected() -> None:
 def test_checkpoint_holds_stable_string(tmp_path: Path) -> None:
     """保存后新进程反序列化：checkpoint 中状态为稳定字符串而非 Enum 实例（003-A 四）。"""
     compiled = _make_compiled(tmp_path)
-    state = TaskState(task_id="t4", user_goal="hello", token_budget=10000, cost_budget=1.0)
+    state = TaskState(
+        task_id="t4", user_goal="hello world github compare", token_budget=10000, cost_budget=1.0
+    )
     compiled.invoke(state.model_dump(), config={"configurable": {"thread_id": "t4"}})
 
     conn2 = sqlite3.connect(str(tmp_path / "checkpoints.db"), check_same_thread=False)
