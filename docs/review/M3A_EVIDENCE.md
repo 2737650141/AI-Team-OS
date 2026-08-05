@@ -2,7 +2,10 @@
 
 阶段：M3-A 真实模型网关、角色模型路由与生产级输出治理（总管令 005）
 分支：phase-3a/real-model-gateway（自 main 430c5d6 创建）
-提交：97830ad → 772a309（7 个提交，见 artifacts/review/m3a-git-log.txt）
+提交：97830ad → 252d19a（9 个提交：97830ad 缓存复用 / 4846652 Provider 契约 /
+5132e7b OpenAI-compatible+路由 / 88d0872 预算+重试 / 70b2b70 LLM 角色+CLI/API /
+bbeeb7f 测试 / 772a309 文档 / e8b4db3 证据+打包 / 252d19a 打包脚本修复；
+git log 见 artifacts/review/m3a-git-log.txt）
 
 ## 1. M2 限制修复（004 4.x）
 
@@ -69,15 +72,19 @@
 
 ## 8. 双重审查
 
-- 普通 review（sa_20260805_030111... 三轮 continue_from）：最终 verdict=pass。
-  修复项：成本价格表、响应体限制、overrides 生效、max_retries 配置传递、
+- 普通 review（sa_20260805_030111 / sa_20260805_030942 / sa_20260805_031506 多轮 continue_from）：
+  最终 verdict=pass。修复项：成本价格表、响应体限制、overrides 生效、max_retries 配置传递、
   usage 缺失估算、DNS 解析失败拒绝、API 预算上限、回灌截断、ValueError→400、
-  BudgetExceeded 真实 used 值；全部有回归测试。
-- Security review（sa_20260805_025749... 两轮 continue_from）：最终 verdict=pass。
+  BudgetExceeded 真实 used 值、打包脚本 INCLUDE_FILES；全部有回归测试或复查确认。
+- Security review（sa_20260805_025749 多轮 continue_from）：最终 verdict=pass。
+  8 面逐面 review_report（API Key 泄漏无/SSRF 无 HIGH/real 开关无绕过/预算硬上限/
+  工具网关与 Reviewer 不可绕过/循环有界/打包脚本无 zip slip/mock 零网络）；
   修复项：DNS 解析失败拒绝（TOCTOU 解析侧）、API 预算上限、usage 估算记账、
   回灌截断 500 字符、mock 零 DNS；无 CRITICAL/HIGH。
 - 遗留 LOW（不阻塞，后续处理）：ModelGateway.budget property 暴露可变 BudgetController
-  （威胁面仅服务端可信代码，模型无法利用；建议后续改只读视图）。
+  （威胁面仅服务端可信代码，模型无法利用；建议后续改只读视图）；
+  连接侧 DNS rebinding TOCTOU（base_url 非客户端输入，风险可控）；
+  打包脚本 4 项纵深建议（共用过滤逻辑/PKCS#8 正则/evidence 过扫描/豁免改相对路径）。
 
 ## 9. 限制与后续阶段
 
