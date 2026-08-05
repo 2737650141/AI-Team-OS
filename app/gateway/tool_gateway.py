@@ -126,10 +126,14 @@ class ToolGateway:
         except Exception as exc:  # noqa: BLE001
             record["status"] = "error"
             self.tool_calls.append(record)
+            # 异常路径同样脱敏：错误消息可能携带用户可控内容（密钥/路径）
             self._audit.entry(
-                "tool_error", task_id=self._task_id, tool=tool_name, error=str(exc)[:300]
+                "tool_error",
+                task_id=self._task_id,
+                tool=tool_name,
+                error=redact(str(exc))[:300],
             )
-            return ToolResult(ok=False, error=str(exc), status="error")
+            return ToolResult(ok=False, error=redact(str(exc)), status="error")
 
         self._seen_keys.add(key)
         record["status"] = "ok"
