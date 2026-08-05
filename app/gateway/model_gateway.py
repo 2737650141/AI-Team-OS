@@ -75,6 +75,10 @@ class ModelGateway:
         self._audit = audit
         self._task_id = task_id
 
+    @property
+    def budget(self) -> BudgetController:
+        return self._budget
+
     def chat(
         self, messages: list[dict[str, str]], model: str = "fake", max_tokens: int = 512
     ) -> LLMResponse:

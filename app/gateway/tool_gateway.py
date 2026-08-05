@@ -1,4 +1,8 @@
-"""Tool Gateway：统一鉴权/拦截/幂等/审计（M1）。"""
+"""Tool Gateway：统一鉴权/拦截/幂等/审计（M1，003-A 二支持跨进程恢复）。
+
+记录结构统一为 ToolCallRecord 兼容字段，可整体随 TaskState 持久化；
+恢复时以 initial_* 重建内存态（幂等键、调用记录、证据、审批）。
+"""
 
 from __future__ import annotations
 
@@ -16,15 +20,41 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _new_record(
+    task_id: str, tool_name: str, args: dict[str, Any], key: str, role: str | None
+) -> dict[str, Any]:
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "task_id": task_id,
+        "tool": tool_name,
+        "args": {k: redact(str(v)) for k, v in args.items()},
+        "idempotency_key": key,
+        "role": role,
+        "ts": _now(),
+    }
+
+
 class ToolGateway:
-    def __init__(self, audit: AuditLog, task_id: str) -> None:
+    def __init__(
+        self,
+        audit: AuditLog,
+        task_id: str,
+        initial_keys: set[str] | None = None,
+        initial_calls: list[dict[str, Any]] | None = None,
+        initial_evidence: list[dict[str, Any]] | None = None,
+        initial_approvals: list[dict[str, Any]] | None = None,
+    ) -> None:
         self._audit = audit
         self._task_id = task_id
         self._tools: dict[str, ToolSpec] = {}
-        self._seen_keys: set[str] = set()
-        self.tool_calls: list[dict[str, Any]] = []
-        self.evidence: list[dict[str, Any]] = []
-        self.approvals: list[dict[str, Any]] = []
+        self._seen_keys: set[str] = set(initial_keys or ())
+        self.tool_calls: list[dict[str, Any]] = list(initial_calls or ())
+        self.evidence: list[dict[str, Any]] = list(initial_evidence or ())
+        self.approvals: list[dict[str, Any]] = list(initial_approvals or ())
+
+    @property
+    def seen_keys(self) -> set[str]:
+        return self._seen_keys
 
     def register(self, tool: ToolSpec) -> None:
         self._tools[tool.name] = tool
@@ -45,14 +75,7 @@ class ToolGateway:
             )
             return ToolResult(ok=False, error="duplicate call skipped", status="skipped")
 
-        record: dict[str, Any] = {
-            "id": uuid.uuid4().hex[:12],
-            "tool": tool_name,
-            "args": {k: redact(str(v)) for k, v in args.items()},
-            "key": key,
-            "role": role,
-            "ts": _now(),
-        }
+        record = _new_record(self._task_id, tool_name, args, key, role)
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
         # handler 永不执行；审批流在 M3 实现（非只读一律拦截，防错标风险）
@@ -78,9 +101,7 @@ class ToolGateway:
                 reason="dangerous_or_requires_approval_m1",
             )
             return ToolResult(
-                ok=False,
-                error="tool blocked: approval required (M3)",
-                status="blocked",
+                ok=False, error="dangerous tool blocked: approval required (M3)", status="blocked"
             )
 
         try:

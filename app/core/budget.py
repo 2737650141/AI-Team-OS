@@ -23,11 +23,17 @@ class BudgetController:
     4. 增加任务总预算必须经过用户审批（由 API 层执行，本类不提供修改接口）。
     """
 
-    def __init__(self, token_budget: int, cost_budget: float) -> None:
+    def __init__(
+        self,
+        token_budget: int,
+        cost_budget: float,
+        initial_usage: dict[str, float] | None = None,
+    ) -> None:
         self._token_budget = token_budget
         self._cost_budget = cost_budget
-        self._used_tokens = 0
-        self._used_cost = 0.0
+        usage = initial_usage or {}
+        self._used_tokens = int(usage.get("tokens", 0.0))
+        self._used_cost = float(usage.get("cost", 0.0))
 
     @property
     def token_budget(self) -> int:
@@ -67,8 +73,6 @@ class BudgetController:
             self._used_tokens + add_tokens > self._token_budget
             or self._used_cost + cost > self._cost_budget
         ):
-            raise BudgetExceeded(
-                "usage", float(self._used_tokens), float(self._token_budget)
-            )
+            raise BudgetExceeded("usage", float(self._used_tokens), float(self._token_budget))
         self._used_tokens += add_tokens
         self._used_cost += cost
