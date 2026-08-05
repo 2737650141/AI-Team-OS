@@ -19,7 +19,17 @@ from app.core.config import AppSettings, load_settings
 from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
 from app.gateway.contracts import ProviderError
-from app.runner import dry_run, provider_health, resume_task, run_task, status_task, trace_task
+from app.runner import (
+    dry_run,
+    evidence_list,
+    evidence_show,
+    provider_health,
+    resume_task,
+    run_task,
+    status_task,
+    tool_catalog,
+    trace_task,
+)
 
 app = FastAPI(title="AI Team OS", version="0.3.0")
 
@@ -45,6 +55,10 @@ class TaskCreate(BaseModel):
     cost_budget: float = Field(default=1.0, gt=0, le=100.0)
     model_mode: str = Field(default="fake", pattern="^(fake|real)$")
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    # 006 十五：工具画像 / 项目别名 / 允许域名（客户端不能传绝对路径或动态 MCP）
+    tool_profile: str = Field(default="readonly", pattern="^[a-z_]+$")
+    project_alias: str | None = Field(default=None, max_length=100)
+    allowed_domains: list[str] = Field(default_factory=list, max_length=20)
 
 
 class TaskResume(BaseModel):
@@ -70,8 +84,46 @@ def health() -> dict[str, Any]:
     return provider_health(_settings())
 
 
+@app.get("/tools")
+def tools() -> dict[str, Any]:
+    """006 十五：只读工具目录。"""
+    return {"tools": tool_catalog(_settings())}
+
+
+@app.get("/tools/{name}")
+def tool_info(name: str) -> dict[str, Any]:
+    """006 十五：单个工具信息。"""
+    entry = next((t for t in tool_catalog(_settings()) if t["name"] == name), None)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"unknown tool: {name}")
+    return entry
+
+
+@app.get("/tasks/{run_id}/evidence")
+def task_evidence(run_id: str) -> dict[str, Any]:
+    """006 十五：任务 Evidence 摘要。"""
+    try:
+        return evidence_list(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/evidence/{evidence_id}")
+def evidence_detail(evidence_id: str) -> dict[str, Any]:
+    """006 十五：Evidence 原始快照（已脱敏）。"""
+    try:
+        return evidence_show(evidence_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/tasks")
 def create_task(body: TaskCreate) -> dict[str, Any]:
+    overrides = dict(body.model_overrides)
+    if body.project_alias:
+        overrides["project_alias"] = body.project_alias
+    if body.allowed_domains:
+        overrides["allowed_domains"] = ";".join(body.allowed_domains)
     try:
         report = run_task(
             body.goal,
@@ -80,7 +132,7 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
             project_id=body.project_id,
             data_dir=_data_dir(),
             model_mode=body.model_mode,
-            model_overrides=body.model_overrides or None,
+            model_overrides=overrides or None,
             settings=_settings(),
         )
     except ProviderError as exc:
