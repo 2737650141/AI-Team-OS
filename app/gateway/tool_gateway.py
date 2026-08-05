@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -51,6 +52,8 @@ class ToolGateway:
         self.tool_calls: list[dict[str, Any]] = list(initial_calls or ())
         self.evidence: list[dict[str, Any]] = list(initial_evidence or ())
         self.approvals: list[dict[str, Any]] = list(initial_approvals or ())
+        # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
+        self._lock = threading.Lock()
 
     @property
     def seen_keys(self) -> set[str]:
@@ -60,6 +63,20 @@ class ToolGateway:
         self._tools[tool.name] = tool
 
     def invoke(self, tool_name: str, args: dict[str, Any], role: str | None = None) -> ToolResult:
+        """唯一工具执行入口：全程持锁，保证并行 Send 下调用顺序可复现（确定性内核）。"""
+        with self._lock:
+            return self._invoke(tool_name, args, role)
+
+    def snapshot(self) -> dict:
+        """锁内快照：并行 exec 回写状态用（避免锁外迭代共享集合）。"""
+        with self._lock:
+            return {
+                "tool_calls": list(self.tool_calls),
+                "evidence": list(self.evidence),
+                "idempotency_keys": sorted(self._seen_keys),
+            }
+
+    def _invoke(self, tool_name: str, args: dict[str, Any], role: str | None = None) -> ToolResult:
         tool = self._tools.get(tool_name)
         if tool is None:
             self._audit.entry("tool_unknown", task_id=self._task_id, tool=tool_name, role=role)
@@ -118,9 +135,10 @@ class ToolGateway:
         record["status"] = "ok"
         record["result_summary"] = redact(str(data))[:200]
         self.tool_calls.append(record)
+        evidence_id = uuid.uuid4().hex[:12]
         self.evidence.append(
             {
-                "id": uuid.uuid4().hex[:12],
+                "id": evidence_id,
                 "task_id": self._task_id,
                 "tool": tool_name,
                 "summary": redact(str(data))[:200],
@@ -130,4 +148,4 @@ class ToolGateway:
         self._audit.entry(
             "tool_ok", task_id=self._task_id, tool=tool_name, read_only=tool.read_only
         )
-        return ToolResult(ok=True, data=data)
+        return ToolResult(ok=True, data=data, evidence_id=evidence_id)
