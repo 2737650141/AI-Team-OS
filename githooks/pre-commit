@@ -1,0 +1,11 @@
+#!/bin/sh
+# SEC-01 防复发（008 2.7-5）：仅阻止含秘密的提交，不执行任何未知项目 Hook。
+# 内容安全：只调用仓库内受审查脚本 scripts/scan_staged_secrets.py。
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+PY="$ROOT/.venv/Scripts/python"
+if [ -x "$PY" ]; then
+  "$PY" "$ROOT/scripts/scan_staged_secrets.py"
+else
+  python "$ROOT/scripts/scan_staged_secrets.py"
+fi

@@ -2,11 +2,9 @@
 
 阶段：M3-B1（PDF/验收状态）+ M3-C（沙箱执行/审批/补丁/命令/回滚/Git 闭环）
 分支：phase-3c/sandbox-execution（自 main ed89ff3 创建）
-提交（14 个）：ecc94f9(PDF) → dfc1518(acceptance) → f709af4(workspace+approval) →
-3fd70c4(sandbox tools+patch+command) → 3d7779a(git) → 539267a(executor 启用) →
-e38b29b(runtime+rollback+CLI/API) → 86ea660(reasonix 移除) → 95531a8(文档) →
-f0f83fa(security 修复) → 386ece3(review round1 修复) → 71c980c(review round2 修复) →
-dbd276e(EVIDENCE 定稿) → ecbfa4c(打包脚本)；git log 见
+提交：15 个功能提交（含文档与打包收尾）；**SEC-01 历史重写后哈希已变化，
+原哈希对照表见 docs/security/SECURITY_INCIDENT_001.md §7**；git log 见
+artifacts/review/m3c-git-log.txt（20 条全量）
 artifacts/review/m3c-git-log.txt
 
 ## 一、M3-B1 封板补齐

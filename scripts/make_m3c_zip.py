@@ -17,7 +17,7 @@ from app.core.secrets import SECRET_PATTERNS
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "artifacts" / "review"
-ZIP_NAME = "m3c-source.zip"
+ZIP_NAME = "m3c-source-clean.zip"  # SEC-01（008 2.6）：历史清理后重生成，旧 zip 已删除
 
 # 源码/文档（与 M3-A/M3-B 一致）
 INCLUDE_DIRS = ["app", "tests", "docs", "scripts", "fixtures", ".github"]
@@ -95,7 +95,7 @@ def main() -> int:
         for p in files:
             zf.write(p, p.relative_to(ROOT).as_posix())
     size = zip_path.stat().st_size
-    print(f"m3c-source.zip: {len(files)} files, {size} bytes, sensitive scan: clean")
+    print(f"{ZIP_NAME}: {len(files)} files, {size} bytes, sensitive scan: clean")
     return 0
 
 
