@@ -38,7 +38,7 @@ def test_no_leaked_blob_in_object_db() -> None:
     """泄漏 blob 从对象库移除（fsck --full --no-reflogs 无引用、无悬空）。"""
     fsck = _git("fsck", "--full", "--no-reflogs")
     assert LEAKED_BLOB not in fsck
-    assert "unreachable" not in fsck.lower() or "reasonix" not in fsck.lower()
+    assert "reasonix" not in fsck.lower()
 
 
 def test_no_reflog_reference() -> None:
@@ -80,6 +80,9 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     assert mod.scan_text(placeholder) == []
     # 真实 sk- 命中 → 阻塞
     assert len(mod.scan_text(real)) >= 1
+    # HIGH 修复（sa_20260808_095002）：'# SK-PLACEHOLDER' 注释不得掩护真实密钥
+    sneaky = 'api_key="' + "sk-" + "b" * 30 + '"  # SK-PLACEHOLDER'
+    assert len(mod.scan_text(sneaky)) >= 1
     # SECRET_PATTERNS 本身（运行时脱敏）仍覆盖 sk- 假密钥（防御纵深）
     assert any(p.search("sk-" + "a" * 20) for p in SECRET_PATTERNS)
 

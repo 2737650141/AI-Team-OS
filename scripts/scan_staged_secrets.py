@@ -20,19 +20,18 @@ ROOT = Path(__file__).resolve().parent.parent
 EXEMPT_PREFIXES = (re.compile(r"SK-PLACEHOLDER", re.I), re.compile(r"TEST-TOKEN-"))
 
 
-def _is_exempt(line: str) -> bool:
-    return any(p.search(line) for p in EXEMPT_PREFIXES)
+def _is_exempt_token(matched: str) -> bool:
+    """豁免仅当匹配区域本身含测试前缀（防止 '# SK-PLACEHOLDER' 注释掩护真实密钥）。"""
+    return any(p.search(matched) for p in EXEMPT_PREFIXES)
 
 
 def scan_text(text: str) -> list[str]:
-    """逐行扫描，返回命中秘密模式且非测试前缀豁免的报告列表（空 = 干净）。"""
+    """逐行扫描：命中秘密模式且匹配区域不含测试前缀豁免 → 报告（空 = 干净）。"""
     hits: list[str] = []
     for line in text.splitlines():
-        if _is_exempt(line):
-            continue
         for pat in SECRET_PATTERNS:
             m = pat.search(line)
-            if m:
+            if m and not _is_exempt_token(m.group(0)):
                 hits.append(f"{pat.pattern[:50]} matched in: {line[:40]}...")
                 break
     return hits

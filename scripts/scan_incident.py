@@ -12,17 +12,16 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
 
+# 共享秘密模式（与运行时脱敏同源，避免漂移）；subject 输出经 redact 脱敏
+from app.core.secrets import SECRET_PATTERNS, redact
+
 ROOT = Path(__file__).resolve().parent.parent
-SECRET_RE = re.compile(
-    r"(sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|"
-    r"AI_TEAM_MODEL_API_KEY\s*=\s*[^\s]{8,})"
-)
+SECRET_RE = None  # 不再维护私有模式：扫描用 SECRET_PATTERNS（见 credential_fingerprint 提取）
 
 
 def sh(*args: str) -> str:
@@ -64,7 +63,8 @@ def main() -> int:
             encoding="utf-8",
             errors="replace",
         ).stdout
-        m = SECRET_RE.search(raw)
+        # 用共享模式提取首个凭据；只输出指纹（绝不输出原文）
+        m = next((p.search(raw) for p in SECRET_PATTERNS if p.search(raw)), None)
         if m:
             print(f"credential_fingerprint=sha256:{fingerprint(m.group(0))}")
             print("credential_type=API key (sk-) / provider=openai-compatible (unset base_url)")
@@ -75,7 +75,7 @@ def main() -> int:
     print("\n== git reflog --all (reasonix.toml 相关提交引用) ==")
     reflog = sh("reflog", "--all", "--format=%H %gs")
     leaked_heads = set(commits)
-    hit = [ln for ln in reflog.splitlines() if ln.split()[0] in leaked_heads]
+    hit = [redact(ln) for ln in reflog.splitlines() if ln.split()[0] in leaked_heads]
     print(hit if hit else "(no reflog reference to leaked commits)")
 
     # 3. stash

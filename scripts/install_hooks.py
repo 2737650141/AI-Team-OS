@@ -21,6 +21,12 @@ def main() -> int:
         print(f"missing template: {src}")
         return 1
     dst_dir.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        import time
+
+        backup = dst.with_name(f"pre-commit.bak-{int(time.time())}")
+        shutil.copy2(dst, backup)
+        print(f"backed up existing hook: {backup}")
     shutil.copy2(src, dst)
     print(f"installed pre-commit hook: {dst}")
     return 0
