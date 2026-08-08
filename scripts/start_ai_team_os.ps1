@@ -19,7 +19,7 @@ Write-Host ""
 
 # 后端（FastAPI）
 $Backend = Start-Process -FilePath (Join-Path $Root ".venv\Scripts\python.exe") `
-    -ArgumentList "-m", "uvicorn", "app.api.server:app", "--host", "127.0.0.1", "--port", "8000" `
+    -ArgumentList "-m", "app.api.server", "--host", "127.0.0.1", "--port", "8000" `
     -WorkingDirectory $Root -PassThru -WindowStyle Hidden
 
 Start-Sleep -Seconds 2

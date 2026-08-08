@@ -50,6 +50,16 @@ SENSITIVE_EXEMPT = {
 }
 
 
+# security_review LOW（sa_20260808_122950）：名称级排除——无匹配 pattern 的凭据文件也绝不打包
+NAME_EXCLUDES = {".env*", "*.pem", "*.key", "*.p12", "*.pfx", "*.p8", "*.jks", "*.keystore"}
+
+
+def _name_excluded(p: Path) -> bool:
+    import fnmatch as _fn
+
+    return any(_fn.fnmatch(p.name.lower(), pat.lower()) for pat in NAME_EXCLUDES)
+
+
 def iter_files() -> list[Path]:
     files: list[Path] = []
     for d in INCLUDE_DIRS:
@@ -57,7 +67,11 @@ def iter_files() -> list[Path]:
         if not base.exists():
             continue
         for p in sorted(base.rglob("*")):
-            if p.is_file() and not any(part in EXCLUDE_DIRS for part in p.parts):
+            if (
+                p.is_file()
+                and not any(part in EXCLUDE_DIRS for part in p.parts)
+                and not _name_excluded(p)
+            ):
                 files.append(p)
     for name in INCLUDE_FILES:
         p = ROOT / name

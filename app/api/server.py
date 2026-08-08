@@ -705,3 +705,27 @@ def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> 
         raise HTTPException(
             status_code=400, detail="http base_url only allowed for local providers"
         )
+
+
+# security_review LOW（sa_20260808_122950）：控制面无认证——拒绝非 loopback 绑定
+def _assert_loopback_bind(host: str) -> None:
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit(
+            f"refusing to bind API to {host!r}: no-auth control plane requires "
+            "loopback (use 127.0.0.1 / localhost / ::1)"
+        )
+
+
+if __name__ == "__main__":
+    import argparse
+
+    _ap = argparse.ArgumentParser(
+        prog="ai-team-os-api", description="AI Team OS Web Control Center API"
+    )
+    _ap.add_argument("--host", default="127.0.0.1")
+    _ap.add_argument("--port", type=int, default=8000)
+    _args = _ap.parse_args()
+    _assert_loopback_bind(_args.host)
+    import uvicorn
+
+    uvicorn.run("app.api.server:app", host=_args.host, port=_args.port)
