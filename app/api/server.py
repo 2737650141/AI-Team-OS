@@ -440,19 +440,24 @@ def settings_status() -> dict[str, Any]:
     from app.core.config import allowed_read_roots
 
     settings = _settings()
-    real_enabled = getattr(settings.model, "enable_real", False)
+    # 005 7.4：real 模式显式开启 = env 开关 或 网页已保存 openai_compatible 凭据
+    web_key = _secret_resolver().resolve("openai_compatible.api_key") or ""
+    real_effective = getattr(settings.model, "enable_real", False) or bool(web_key)
     return {
         "model_provider": {
             "name": "openai_compatible",
-            "status": "Configured" if real_enabled else "Missing",
-            "base_url_configured": bool(getattr(settings.model, "base_url", None)),
-            "api_key_configured": bool(getattr(settings.model, "api_key", None)),
+            "status": "Configured" if real_effective else "Missing",
+            "base_url_configured": bool(
+                getattr(settings.model, "base_url", None)
+                or _secret_resolver().resolve("openai_compatible.base_url")
+            ),
+            "api_key_configured": bool(getattr(settings.model, "api_key", None) or web_key),
         },
         "github": {
             "status": "Configured" if os.environ.get("AI_TEAM_GITHUB_TOKEN") else "Missing",
             "token_configured": bool(os.environ.get("AI_TEAM_GITHUB_TOKEN")),
         },
-        "real_model": {"status": "Enabled" if real_enabled else "Disabled"},
+        "real_model": {"status": "Enabled" if real_effective else "Disabled"},
         "allowed_read_roots": {"count": len(allowed_read_roots())},
         "mcp": {"servers": 0, "status": "Disabled"},
         "network_isolation": "Best Effort",

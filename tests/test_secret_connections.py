@@ -159,3 +159,82 @@ def test_ollama_local_provider_allowed(tmp_path: Path, monkeypatch) -> None:
         # 测试连接（本地 provider 无凭据 → healthy）
         t = client.post("/settings/connections/ollama/test")
         assert t.json()["status"] == "healthy"
+
+
+# ---------- 010-B：网页保存凭据驱动真实模式（build_provider 回退 + real 校验） ----------
+def test_web_saved_credentials_drive_real_provider(tmp_path: Path) -> None:
+    """网页保存的 openai_compatible 凭据对真实任务生效（build_provider 回退）。"""
+    from app.core.config import AppSettings
+    from app.core.secret_store import default_resolver
+    from app.runner import _web_configured_credentials, build_provider
+
+    data_dir = tmp_path / "data"
+    resolver = default_resolver(data_dir)
+    resolver.set("openai_compatible.base_url", "https://8.8.8.8/v1", "secure")
+    resolver.set("openai_compatible.api_key", "SK-PLACEHOLDER-web-key-123456", "secure")
+    resolver.set("openai_compatible.default_model", "web-model", "secure")
+
+    settings = AppSettings()  # env 未配置（enable_real=False）
+    url, key, model = _web_configured_credentials(settings, data_dir)
+    assert url == "https://8.8.8.8/v1"
+    assert key == "SK-PLACEHOLDER-web-key-123456"
+    assert model == "web-model"
+
+    provider = build_provider(settings, data_dir)
+    from app.gateway.openai_compatible import OpenAICompatibleProvider
+
+    assert isinstance(provider, OpenAICompatibleProvider)
+    # enable_real 仍为 False（未显式开启）→ provider 拒绝调用；凭据回退不改变开关语义
+    assert provider._enable_real is False
+
+
+def test_web_saved_credentials_satisfy_real_gate(tmp_path: Path, monkeypatch) -> None:
+    """runner：网页已保存凭据时，real 模式校验通过（无需 env 开关）。"""
+    import app.core.events as _evmod
+    from app.core.config import AppSettings
+    from app.core.secret_store import default_resolver
+    from app.runner import _build_context
+
+    _evmod._store = None
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    from app.core.state import TaskState
+
+    data_dir = tmp_path / "data"
+    resolver = default_resolver(data_dir)
+    resolver.set("openai_compatible.base_url", "https://8.8.8.8/v1", "secure")
+    resolver.set("openai_compatible.api_key", "SK-PLACEHOLDER-web-key-123456", "secure")
+
+    state = TaskState(
+        task_id="t1",
+        run_id="r1",
+        goal="g",
+        user_goal="g",
+        model_mode="real",
+        token_budget=1000,
+        cost_budget=0.1,
+    )
+    ctx = _build_context(state, data_dir, settings=AppSettings(), model_mode="real")
+    assert ctx.provider is not None  # 校验通过（未抛 ProviderError）
+
+    # 未保存凭据且未开启开关 → 仍拒绝（005 7.4 兼容）
+    import pytest
+
+    from app.gateway.contracts import ProviderError
+
+    monkeypatch.delenv("AI_TEAM_OS_DATA_DIR", raising=False)
+    empty_dir = tmp_path / "empty"
+    with pytest.raises(ProviderError):
+        _build_context(
+            TaskState(
+                task_id="t2",
+                run_id="r2",
+                goal="g",
+                user_goal="g",
+                model_mode="real",
+                token_budget=1000,
+                cost_budget=0.1,
+            ),
+            empty_dir,
+            settings=AppSettings(),
+            model_mode="real",
+        )

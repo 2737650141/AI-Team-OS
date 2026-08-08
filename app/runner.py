@@ -76,13 +76,47 @@ class RunContext:
     sandbox: SandboxContext | None = None  # 007 四-十三：沙箱执行上下文
 
 
-def build_provider(settings: AppSettings):
-    """按配置构造 Provider（005 7.4：real 模式必须显式开启）。"""
+def _web_configured_credentials(
+    settings: AppSettings, data_dir: Path | None = None
+) -> tuple[str, str, str]:
+    """网页 Connections 保存的凭据回退（010-B 用户要求：网页配置对真实任务生效）。
+
+    优先级：env/config（settings.model.*）→ SecretStore（openai_compatible）。
+    返回 (base_url, api_key, default_model)；未配置则空串。
+    """
+    base_url = settings.model.base_url
+    api_key = settings.model.api_key
+    default_model = settings.model.default_model
+    if base_url and api_key:
+        return base_url, api_key, default_model
+    try:
+        from app.core.secret_store import default_resolver
+
+        resolver = default_resolver(data_dir)
+        store_base = resolver.resolve("openai_compatible.base_url") or ""
+        store_key = resolver.resolve("openai_compatible.api_key") or ""
+        store_model = resolver.resolve("openai_compatible.default_model") or ""
+    except Exception:  # noqa: BLE001 密钥解析失败不阻断 env 配置路径
+        store_base = store_key = store_model = ""
+    return (
+        base_url or store_base,
+        api_key or store_key,
+        default_model or store_model,
+    )
+
+
+def build_provider(settings: AppSettings, data_dir: Path | None = None):
+    """按配置构造 Provider（005 7.4：real 模式必须显式开启）。
+
+    base_url/api_key/default_model 支持 SecretStore 回退（网页 Connections 保存后
+    对真实任务生效；env/config 优先）。
+    """
     if settings.model.provider == "openai_compatible":
+        base_url, api_key, default_model = _web_configured_credentials(settings, data_dir)
         return OpenAICompatibleProvider(
-            base_url=settings.model.base_url,
-            api_key=settings.model.api_key,
-            default_model=settings.model.default_model,
+            base_url=base_url,
+            api_key=api_key,
+            default_model=default_model,
             enable_real=settings.model.enable_real,
             timeout_seconds=settings.model.timeout_seconds,
             temperature=settings.model.temperature,
@@ -107,13 +141,19 @@ def _build_context(
 ) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
     settings = settings or load_settings()
-    if model_mode == "real" and not settings.model.enable_real:
+    # 005 7.4：real 模式必须显式开启——env 开关 AI_TEAM_MODEL_ENABLE_REAL=true，
+    # 或网页 Connections 已保存 openai_compatible 凭据（用户显式配置，010-B 交付）
+    real_effective = settings.model.enable_real or bool(
+        _web_configured_credentials(settings, data_dir)[1]
+    )
+    if model_mode == "real" and not real_effective:
         # 005 7.4 / 006 3.2：真实调用必须显式开启，未启用时明确拒绝（不静默进入图内失败）
         from app.gateway.contracts import ProviderError, ProviderErrorCode
 
         raise ProviderError(
             ProviderErrorCode.CONFIG_ERROR,
-            "real model calls disabled; set AI_TEAM_MODEL_ENABLE_REAL=true",
+            "real model calls disabled; set AI_TEAM_MODEL_ENABLE_REAL=true "
+            "or save an OpenAI-compatible API key in Settings -> Connections",
             provider=settings.model.provider,
             model=settings.model.default_model or "",
         )
@@ -124,7 +164,7 @@ def _build_context(
     )
     audit = AuditLog(data_dir / "audit.jsonl")
     if model_mode == "real":
-        provider = build_provider(settings)
+        provider = build_provider(settings, data_dir)
     else:
         provider = DeterministicFakeModel(responses=model_responses)
     model_gateway = ModelGateway(
