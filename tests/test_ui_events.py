@@ -174,3 +174,37 @@ def test_events_endpoint_after_replay(tmp_path: Path, monkeypatch) -> None:
     after = store.list_events(run_id="r1")[0].sequence
     tail = store.list_events(run_id="r1", after_sequence=after)
     assert [e.event_type for e in tail] == ["plan_created"]
+
+
+# ---------- review 复查（sa_20260808_120531 round2）：SSE 帧格式与终态 ----------
+def test_events_sse_frame_format() -> None:
+    """SSE 帧：默认 message 事件（无 event: 行）、id=sequence、data=JSON。"""
+    from app.api.server import _format_sse_frame
+
+    frame = _format_sse_frame(7, {"event_type": "plan_created", "summary": "x"})
+    assert frame.startswith("id: 7\n")
+    assert "\nevent: " not in frame  # 默认 message 事件
+    assert '"event_type": "plan_created"' in frame
+    assert frame.endswith("\n\n")
+
+
+def test_events_sse_terminal_frame_shape() -> None:
+    """终态通知帧：完整 RuntimeEvent 形状（event_type/sequence），客户端据此关闭连接。"""
+    from app.api.server import _format_sse_frame
+
+    payload = {
+        "event_type": "task_status_changed",
+        "task_id": "r1",
+        "run_id": "r1",
+        "sequence": 9,
+        "ts": "{}",
+        "summary": "task completed",
+        "actor_type": "system",
+        "actor_id": "r1",
+        "status": "completed",
+    }
+    frame = _format_sse_frame(9, payload)
+    assert '"event_type": "task_status_changed"' in frame
+    assert '"sequence": 9' in frame
+    assert '"status": "completed"' in frame
+    assert "\nevent: " not in frame

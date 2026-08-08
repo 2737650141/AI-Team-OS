@@ -93,6 +93,15 @@ export function subscribeEvents(
     es.addEventListener("message", (msg) => {
       try {
         const ev = JSON.parse((msg as MessageEvent<string>).data) as import("./types").RuntimeEvent;
+        // 终态通知（task_status_changed，虚拟 sequence）：关闭连接停止自动重连
+        if (ev.event_type === "task_status_changed") {
+          es.close();
+          closed = true;
+          onDone?.();
+          return;
+        }
+        // 容忍/忽略非事件消息：缺 sequence 或 event_type（心跳等）不进 Activity Feed
+        if (typeof ev.sequence !== "number" || typeof ev.event_type !== "string") return;
         if (ev.sequence > lastId) lastId = ev.sequence;
         onEvent(ev);
       } catch {

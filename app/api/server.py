@@ -460,6 +460,13 @@ def settings_status() -> dict[str, Any]:
     }
 
 
+def _format_sse_frame(sequence: int, data: dict) -> str:
+    """SSE 帧：默认 message 事件（无 event: 行）→ 客户端 message 监听直接接收。"""
+    import json as _json
+
+    return f"id: {sequence}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @app.get("/tasks/{run_id}/events")
 def task_events(run_id: str, after: int = 0) -> Any:
     """SSE 实时事件（010 第十四部分）：`after` 支持 replay（客户端 ?after=<seq>）。
@@ -492,22 +499,28 @@ def task_events(run_id: str, after: int = 0) -> Any:
         while True:
             events = store.list_events(run_id=run_id, after_sequence=last)
             for ev in events:
-                data = _json.dumps(ev.model_dump(), ensure_ascii=False)
-                # 无 event: 行 → 默认 message 事件（客户端 message 监听接收）
-                yield f"id: {ev.sequence}\ndata: {data}\n\n"
+                yield _format_sse_frame(ev.sequence, ev.model_dump())
                 last = ev.sequence
                 idle = 0
             if not events:
                 idle += 1
                 if idle >= 3:
-                    # 任务终态后补发状态事件再结束；否则保持心跳
+                    # 任务终态后补发状态事件再结束（客户端据此关闭连接停止重连）
                     try:
                         st = status_task(run_id, data_dir=_data_dir())
                         if st.state.current_status in ("completed", "failed"):
-                            payload = _json.dumps(
-                                {"status": st.state.current_status}, ensure_ascii=False
-                            )
-                            yield f"id: {last}\ndata: {payload}\n\n"
+                            payload = {
+                                "event_type": "task_status_changed",
+                                "task_id": run_id,
+                                "run_id": run_id,
+                                "sequence": last + 1,  # 虚拟序列：仅用于终态通知
+                                "ts": _json.dumps({"now": True}),  # 占位，客户端只读类型/序列
+                                "summary": f"task {st.state.current_status}",
+                                "actor_type": "system",
+                                "actor_id": run_id,
+                                "status": st.state.current_status,
+                            }
+                            yield _format_sse_frame(last + 1, payload)
                             return
                     except KeyError:
                         return
