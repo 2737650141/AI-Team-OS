@@ -25,7 +25,7 @@ def _is_exempt_token(matched: str) -> bool:
 
     防止 `sk-<real>SK-PLACEHOLDER`（嵌入标记）绕过（sa_20260808_100103 LOW-1）。
     """
-    val = matched.split("=", 1)[-1].strip("'\" \t")
+    val = re.split(r"[=:]", matched, maxsplit=1)[-1].strip("'\" \t")
     up = val.upper()
     return up.startswith("SK-PLACEHOLDER") or up.startswith("TEST-TOKEN-")
 

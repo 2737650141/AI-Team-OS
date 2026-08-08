@@ -78,6 +78,8 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     real = "AI_TEAM_MODEL_API_KEY=" + "sk-" + "a" * 30  # 拼接避免完整假密钥入 staged diff
     # 测试前缀豁免 → 放行
     assert mod.scan_text(placeholder) == []
+    # 冒号形式（sa_20260808_100458 LOW）
+    assert mod.scan_text("token: TEST-TOKEN-abcdefgh123456") == []
     # 真实 sk- 命中 → 阻塞
     assert len(mod.scan_text(real)) >= 1
     # HIGH 修复（sa_20260808_095002）：'# SK-PLACEHOLDER' 注释不得掩护真实密钥
