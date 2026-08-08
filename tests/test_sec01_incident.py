@@ -87,7 +87,15 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     report = mod.scan_text('k = "' + "sk-" + "c" * 30 + '"')
     assert report and "c" * 30 not in report[0]
     # MEDIUM：多行 PEM 私钥命中（整段 DOTALL 扫描；拼接避免完整标记入 staged diff）
-    pem = "-----BEGIN " + "PRIVATE KEY-----\n" + "MIIB" + "A" * 40 + "\n-----END " + "PRIVATE KEY-----\n"
+    pem = (
+        "-----BEGIN "
+        + "PRIVATE KEY-----\n"
+        + "MIIB"
+        + "A" * 40
+        + "\n"
+        + "-----END "
+        + "PRIVATE KEY-----\n"
+    )
     assert len(mod.scan_text(pem)) >= 1
     # SECRET_PATTERNS 本身（运行时脱敏）仍覆盖 sk- 假密钥（防御纵深）
     assert any(p.search("sk-" + "a" * 20) for p in SECRET_PATTERNS)

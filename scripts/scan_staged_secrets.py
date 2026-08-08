@@ -40,11 +40,12 @@ def scan_text(text: str) -> list[str]:
             if m and not _is_exempt_token(m.group(0)):
                 hits.append(f"{pat.pattern[:50]} in: {redact(line)[:40]}")
                 break
-    # 多行模式（PEM 私钥整块）对整段文本匹配
+    # 多行模式（PEM 私钥整块）对整段文本匹配；豁免按匹配内容判断
     for pat in SECRET_PATTERNS:
         if not (pat.flags & re.DOTALL):
             continue
-        if pat.search(text) and not _is_exempt_token("BEGIN"):
+        m = pat.search(text)
+        if m and not _is_exempt_token(m.group(0)):
             hits.append(f"{pat.pattern[:50]} matched (multiline block)")
     return hits
 
