@@ -163,14 +163,23 @@ def get_task(run_id: str) -> dict[str, Any]:
         report = status_task(run_id, data_dir=_data_dir())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    state = report.state
     return {
         "task_id": report.task_id,
         "run_id": report.run_id,
         "status": report.status,
-        "model_mode": report.state.model_mode,
-        "clarified_goal": report.state.clarified_goal,
-        "pending_clarification_id": report.state.pending_clarification_id,
-        "final_result": report.state.final_result,
+        "current_status": state.current_status,
+        "model_mode": state.model_mode,
+        "goal": state.user_goal,
+        "clarified_goal": state.clarified_goal,
+        "pending_clarification_id": state.pending_clarification_id,
+        "final_result": state.final_result,
+        "plan": state.plan,
+        "subtasks": [s.model_dump() for s in state.subtasks],
+        "token_budget": state.token_budget,
+        "cost_budget": state.cost_budget,
+        "budget_usage": state.budget_usage,
+        "rework_count": state.rework_count,
         "usage": report.usage,
         "tool_call_count": report.tool_call_count,
     }

@@ -35,3 +35,9 @@ third_party_eval/
 artifacts/
 runtime/
 reasonix.toml
+
+# 前端
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
