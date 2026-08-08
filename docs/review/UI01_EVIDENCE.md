@@ -98,11 +98,22 @@ tools / evidence / settings / memory（9 张，无 Secret/真实敏感文件）
 
 ## 十三、最终验证
 
-- pytest：321 passed + 2 skipped（最后提交 c5488dc 后）。
-- ruff check/format --check（app tests scripts）：全绿 95 文件。
+- pytest：321 passed + 2 skipped（最后提交 b7b3f3c 后）。
+- ruff check/format --check（app tests scripts）：全绿 94 文件。
 - mypy app：55 source files no issues。
 - Frontend：typecheck ✓ / lint ✓ / Vitest 4 passed / build ✓（dist 241KB / gzip 75KB）。
-- E2E：Playwright 1 passed（demo lifecycle：创建→Approval→Approve→Completed→刷新恢复）。
+- E2E：Playwright 1 passed（demo lifecycle：创建→Approval→Approve→Completed→刷新恢复；
+  前置：后端带 AI_TEAM_ALLOWED_READ_ROOTS=fixtures，见 DEMO_MODE.md）。
 - git status 干净；无 remote；未 push；git diff --check 通过。
 - 证据包：artifacts/review/ui01-source.zip（敏感扫描 clean）。
 - 截图：artifacts/demo/ui/ 9 张（E2E 复跑后刷新）。
+
+## 十四、交付检查补漏（010 六十五）
+
+- UI-01 已普通 merge 回 main（a990464 --no-ff，55 files +9110/-5，无冲突；
+  后续 b7b3f3c 文档补漏）。phase-ui/web-control-center 分支保留。
+- 启动依赖审计：start_ai_team_os.ps1 自动设置 AI_TEAM_ALLOWED_READ_ROOTS=fixtures；
+  文档补齐 E2E 前置条件（缺省时沙箱任务 500）。
+- .gitignore 补 web/.vite/（vite 缓存）。
+- 交付检查全部通过：SEC-01 CLOSED、组件清单完整、测试/双审/证据包/截图/文档
+  齐全、main 为完整交付基线、无 remote 未 push、不进入 M4（Memory 占位）。
