@@ -93,9 +93,9 @@
 ## 9. 当前状态
 
 - 历史清理：完成（log/reflog/fsck/stash/工作树全 clean，证据 zip 无泄漏条目）。
-- 证据包：`artifacts/review/m3c-source-clean.zip`（139 files，扫描 clean）已重生成，旧 `m3c-source.zip` 已删除。
-- 凭据轮换：**待用户确认**。
-- 结论：`SEC-01 CODE REMEDIATED / BLOCKED_BY_SECRET_ROTATION`。
+- 证据包：`artifacts/review/m3c-source-clean.zip`（144 files，扫描 clean）已重生成，旧 `m3c-source.zip` 已删除。
+- 凭据轮换：**用户已确认完成**（`AI_TEAM_SECRET_ROTATION_CONFIRMED=true`，010 1.1 实测）。
+- 结论：**`SEC-01 CLOSED`（`CLOSED_BY_USER_ROTATION_CONFIRMATION`）**——用户已在外部 Provider 后台吊销/轮换旧泄漏凭据；系统不负责验证第三方后台状态（010 1.3）。
 
 ## 10. 备份位置
 
