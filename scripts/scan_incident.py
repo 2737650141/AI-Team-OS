@@ -76,6 +76,8 @@ def main() -> int:
     leaked_heads = set(commits)
     hit = [redact(ln) for ln in reflog.splitlines() if ln.split()[0] in leaked_heads]
     print(hit if hit else "(no reflog reference to leaked commits)")
+    if hit:
+        findings.append("reflog references leaked commits")
 
     # 3. stash
     print("\n== git stash list ==")
@@ -94,6 +96,8 @@ def main() -> int:
     if blob:
         dangling_hit = any(blob in ln for ln in fsck.splitlines())
         print(f"leaked_blob_dangling={dangling_hit}")
+        if dangling_hit:
+            findings.append("leaked blob dangling in object DB")
 
     # 5. 证据 zip / artifacts 中的 reasonix.toml 条目
     print("\n== artifacts zips ==")

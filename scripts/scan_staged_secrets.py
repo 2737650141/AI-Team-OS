@@ -67,7 +67,8 @@ def scan_text(text: str) -> list[str]:
 
 def main() -> int:
     r = subprocess.run(
-        ["git", "diff", "--cached", "--no-color"],
+        # 只扫新增/修改行（--diff-filter=ACMRT）：删除含秘密文件的清理提交不被阻塞
+        ["git", "diff", "--cached", "--no-color", "--diff-filter=ACMRT"],
         cwd=ROOT,
         capture_output=True,
         text=True,

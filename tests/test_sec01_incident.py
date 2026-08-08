@@ -122,8 +122,10 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
 
 def test_scan_incident_script_runs() -> None:
     """脱敏定位脚本可运行（clean 时退出 0）。"""
+    import sys
+
     r = subprocess.run(
-        [str(ROOT / ".venv" / "Scripts" / "python"), str(ROOT / "scripts" / "scan_incident.py")],
+        [sys.executable, str(ROOT / "scripts" / "scan_incident.py")],
         cwd=ROOT,
         capture_output=True,
         text=True,

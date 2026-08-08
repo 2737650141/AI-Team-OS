@@ -68,7 +68,7 @@
 7. 真实配置位于仓库外（环境变量，`env_file=None`；`.env.example` 仅占位）✓
 8. 配置对象 `repr=False` ✓（M3-B）
 9. 错误/审计/Trace 统一 `redact()` ✓（M3-B）
-10. Incident 回归测试：`tests/test_sec01_incident.py` 7 项 ✓
+10. Incident 回归测试：`tests/test_sec01_incident.py` 8 项 ✓
 
 ## 7. 原提交对照表（历史重写后）
 
