@@ -4,9 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api, subscribeEvents } from "../api/client";
 import { useI18n } from "../i18n";
+import { displayLabel } from "../i18n/labels";
 
 export function Logs() {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const [events, setEvents] = useState<import("../api/types").RuntimeEvent[]>([]);
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
   const firstRun = (tasks.data ?? [])[0]?.run_id;
@@ -52,9 +53,9 @@ export function Logs() {
           {filtered.map((e) => (
             <div key={e.event_id} className="feed-item">
               <span className="feed-time">{e.timestamp}</span>
-              <span className="feed-actor">{e.actor_type}</span>
-              <span className="feed-type">{e.event_type}</span>
-              <span className="feed-summary">{e.summary}</span>
+              <span className="feed-actor">{displayLabel(e.actor_type, lang)}</span>
+              <span className="feed-type">{displayLabel(e.event_type, lang)}</span>
+              <span className="feed-summary">{String(e.payload_safe.subtask_id ?? "")}</span>
             </div>
           ))}
           {filtered.length === 0 && <p className="muted">{t("logs.noEvents")}</p>}

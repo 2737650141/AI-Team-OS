@@ -2,11 +2,11 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
-import { StatusBadge } from "../components/StatusBadge";
 import { useI18n } from "../i18n";
+import { displayLabel } from "../i18n/labels";
 
 export function Tools() {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const tools = useQuery({ queryKey: ["tools"], queryFn: api.tools });
   return (
     <div className="page">
@@ -25,13 +25,13 @@ export function Tools() {
             {(tools.data ?? []).map((tool) => (
               <tr key={tool.name}>
                 <td>
-                  <code>{tool.name}</code>
+                  <span title={tool.name}>{displayLabel(tool.name, lang)}</span>
                 </td>
                 <td>{tool.description}</td>
                 <td>
-                  <StatusBadge status={(tool.risk_level ?? "low").toLowerCase()} />
+                  {displayLabel((tool.risk_level ?? "low").toLowerCase(), lang)}
                 </td>
-                <td>{tool.read_only ? "yes" : "no"}</td>
+                <td>{tool.read_only ? t("common.yes") : t("common.no")}</td>
               </tr>
             ))}
             {(tools.data ?? []).length === 0 && (

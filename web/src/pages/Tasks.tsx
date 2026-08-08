@@ -35,7 +35,7 @@ export function Tasks() {
                 <td>
                   <StatusBadge status={tr.status} />
                 </td>
-                <td>{tr.model_mode}</td>
+                <td>{tr.model_mode === "fake" ? t("dash.demo") : t("dash.real")}</td>
                 <td>{tr.tokens}</td>
                 <td>${tr.cost.toFixed(4)}</td>
               </tr>

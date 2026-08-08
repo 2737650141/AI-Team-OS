@@ -1,42 +1,41 @@
-// Evidence（010 二十一）
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { api } from "../api/client";
+import { EvidenceCard } from "../components/EvidenceCard";
 import { useI18n } from "../i18n";
+import { displayLabel } from "../i18n/labels";
 
 export function Evidence() {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
-  const firstRun = (tasks.data ?? [])[0]?.run_id;
+  const [selectedRun, setSelectedRun] = useState("");
+  const runId = selectedRun || (tasks.data ?? [])[0]?.run_id || "";
   const evidence = useQuery({
-    queryKey: ["evidence", firstRun],
-    queryFn: () => api.evidence(firstRun!),
-    enabled: !!firstRun,
+    queryKey: ["evidence", runId],
+    queryFn: () => api.evidence(runId),
+    enabled: !!runId,
   });
   return (
-    <div className="page">
-      <h1>{t("ev.title")}</h1>
-      <div className="card">
-        {!firstRun && <p className="muted">{t("ev.noTasks")}</p>}
-        {(evidence.data ?? []).map((e) => (
-          <details key={e.evidence_id} className="evidence-card">
-            <summary>
-              <code>{e.evidence_id}</code> · {e.title ?? e.summary ?? e.tool ?? "Evidence"}
-            </summary>
-            <div className="evidence-detail muted">
-              <div>source: {e.source ?? e.source_uri ?? e.tool ?? "—"}</div>
-              <div>type: {e.source_type ?? e.tool ?? "—"}</div>
-              <div>{t("ev.reliability")}: {e.reliability ?? "recorded"}</div>
-              <div>{t("ev.hash")}: <code>{e.hash ?? "—"}</code></div>
-              <div>claims: {e.claims?.length ?? 0}</div>
-              <div>retrieved: {e.retrieved_at ?? e.ts ?? "—"}</div>
-            </div>
-          </details>
-        ))}
-        {(evidence.data ?? []).length === 0 && firstRun && (
-          <p className="muted">{t("ev.noEvidence")}</p>
+    <div className="page evidence-page">
+      <div className="page-heading">
+        <div>
+          <h1>{t("ev.title")}</h1>
+          <p className="muted">{t("ev.intro")}</p>
+        </div>
+        {(tasks.data ?? []).length > 0 && (
+          <select aria-label={t("ev.chooseTask")} value={runId} onChange={(event) => setSelectedRun(event.target.value)}>
+            {(tasks.data ?? []).slice(0, 50).map((task) => (
+              <option key={task.run_id} value={task.run_id}>
+                {displayLabel(task.goal, lang)} · {task.run_id.slice(0, 8)}
+              </option>
+            ))}
+          </select>
         )}
       </div>
+      {!runId && <div className="card"><p className="muted">{t("ev.noTasks")}</p></div>}
+      {(evidence.data ?? []).map((item) => <EvidenceCard key={item.evidence_id} evidence={item} />)}
+      {runId && !evidence.isLoading && (evidence.data ?? []).length === 0 && <div className="card"><p className="muted">{t("ev.noEvidence")}</p></div>}
     </div>
   );
 }

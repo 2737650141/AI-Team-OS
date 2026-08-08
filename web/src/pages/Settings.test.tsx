@@ -19,6 +19,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("Settings · Connections", () => {
   it("shows provider status without secrets", async () => {
     vi.spyOn(api, "settingsStatus").mockResolvedValue({ model_provider: { status: "Missing" } });
+    vi.spyOn(api, "health").mockResolvedValue({ backend: "Online", langgraph: "Online", sqlite: "Online", event_store: "Online", model_provider: "Blocked", github: "Missing", mcp: "Disabled", sandbox: "Online", network_isolation: "Best Effort" });
     vi.spyOn(api, "connections").mockResolvedValue({
       openai_compatible: {
         provider: "openai_compatible", configured: false, base_url: "",
@@ -36,16 +37,20 @@ describe("Settings · Connections", () => {
         </I18nProvider>
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(screen.getByText("连接")).toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("OpenAI 兼容")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("AI 模型")).toBeInTheDocument());
+    expect(screen.getByText("GitHub")).toBeInTheDocument();
     expect(screen.getByText("Ollama")).toBeInTheDocument();
-    // 安全显示：只显示状态，不显示 base_url / storage 细节
-    await waitFor(() => expect(screen.getByText("已配置")).toBeInTheDocument());
+    expect(screen.getAllByText("MCP").length).toBeGreaterThan(0);
+    expect(screen.getByText("沙箱")).toBeInTheDocument();
+    expect(screen.getByText("系统")).toBeInTheDocument();
+    // 安全显示：首屏只显示产品状态，不显示 base_url / storage 细节
+    await waitFor(() => expect(screen.getAllByText("已连接").length).toBeGreaterThan(0));
     expect(screen.queryByText("http://127.0.0.1:11434")).not.toBeInTheDocument();
   });
 
   it("submits api key via password field and never stores it in the DOM", async () => {
     vi.spyOn(api, "settingsStatus").mockResolvedValue({});
+    vi.spyOn(api, "health").mockResolvedValue({ backend: "Online", langgraph: "Online", sqlite: "Online", event_store: "Online", model_provider: "Blocked", github: "Missing", mcp: "Disabled", sandbox: "Online", network_isolation: "Best Effort" });
     vi.spyOn(api, "connections").mockResolvedValue({
       openai_compatible: { provider: "openai_compatible", configured: false, base_url: "", models: {}, storage: "missing", health: "missing" },
       github: { provider: "github", configured: false, base_url: "", models: {}, storage: "missing", health: "missing" },
@@ -53,7 +58,7 @@ describe("Settings · Connections", () => {
     });
     const save = vi
       .spyOn(api, "saveConnection")
-      .mockResolvedValue({ provider: "openai_compatible", configured: true });
+      .mockResolvedValue({ provider: "test_provider", configured: true });
     render(
       <QueryClientProvider client={qc()}>
         <I18nProvider>
@@ -63,6 +68,8 @@ describe("Settings · Connections", () => {
         </I18nProvider>
       </QueryClientProvider>,
     );
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "配置" })).toHaveLength(2));
+    await userEvent.click(screen.getAllByRole("button", { name: "配置" })[0]);
     const keyInputs = await screen.findAllByLabelText("API Key");
     const keyInput = keyInputs[0];
     expect(keyInput.getAttribute("type")).toBe("password");

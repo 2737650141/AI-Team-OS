@@ -374,6 +374,7 @@ class ToolGateway:
         evidence_id = uuid.uuid4().hex[:12]
         ts = _now()
         content_hash = hashlib.sha256(str(data).encode()).hexdigest()[:16]
+        evidence_record = None
         # 006 十一：Evidence 固化（先固化再返回引用，模型只拿 Evidence ID）
         if self.evidence_writer is not None:
             try:
@@ -400,6 +401,7 @@ class ToolGateway:
                 evidence_id = ev.evidence_id
                 ts = ev.retrieved_at
                 content_hash = ev.content_hash
+                evidence_record = ev
             except EvidenceQuotaExceeded:
                 # Evidence 配额超限：结果不固化（记录仍保留），按 blocked 语义返回
                 record["status"] = "blocked"
@@ -415,17 +417,30 @@ class ToolGateway:
                     error=redact(str(exc))[:200],
                 )
                 return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
-        self.evidence.append(
-            {
-                "id": evidence_id,
-                "task_id": self._task_id,
-                "tool": tool_name,
-                "summary": redact(str(data))[:200],
-                "ts": ts,
-                "idempotency_key": key,
-                "content_hash": content_hash,
-            }
-        )
+        evidence_payload: dict[str, Any] = {
+            "id": evidence_id,
+            "task_id": self._task_id,
+            "tool": tool_name,
+            "summary": redact(str(data))[:200],
+            "ts": ts,
+            "idempotency_key": key,
+            "content_hash": content_hash,
+            "subtask_id": ctx.subtask_id if ctx else None,
+        }
+        if evidence_record is not None:
+            evidence_payload.update(
+                {
+                    "source_type": evidence_record.source_type,
+                    "source_uri": evidence_record.source_uri,
+                    "title": evidence_record.title,
+                    "content_length": evidence_record.content_length,
+                    "reliability": evidence_record.reliability,
+                    "freshness": evidence_record.freshness,
+                    "snapshot_ref": evidence_record.snapshot_ref,
+                    "truncated": evidence_record.truncated,
+                }
+            )
+        self.evidence.append(evidence_payload)
         self._result_cache[key] = {
             "data": data,
             "evidence_id": evidence_id,

@@ -674,7 +674,10 @@ def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
         for t in tasks
         if t.get("status") in ("paused", "running")
     )
-    evidence_count = sum(len(evidence_list(t.get("run_id") or "", data_dir)) for t in tasks)
+    evidence_count = sum(
+        int(evidence_list(t.get("run_id") or "", data_dir).get("evidence_count", 0))
+        for t in tasks
+    )
     total_tokens = sum(int(t.get("tokens") or 0) for t in tasks)
     total_cost = sum(float(t.get("cost") or 0.0) for t in tasks)
     tool_calls = sum(int(t.get("tool_calls") or 0) for t in tasks)
@@ -828,22 +831,63 @@ def tool_catalog(settings: AppSettings | None = None) -> list[dict]:
 
 
 def evidence_list(run_id: str, data_dir: Path | None = None) -> dict:
-    """006 十四：任务 Evidence 摘要（不展示快照原文）。"""
+    """任务 Evidence 产品化摘要：来源、完整性与 Claim 关联，不含快照原文。"""
+    data_dir = data_dir or Path("data")
     trace = trace_task(run_id, data_dir=data_dir)
+    claim_index: dict[str, list[dict[str, Any]]] = {}
+    subtask_index = {s.get("subtask_id"): s for s in trace.get("subtasks", [])}
+    for subtask in trace.get("subtasks", []):
+        result = subtask.get("execution_result") or {}
+        for claim in result.get("claims", []):
+            for evidence_id in claim.get("evidence_ids", []):
+                claim_index.setdefault(evidence_id, []).append(
+                    {
+                        "claim_id": claim.get("claim_id"),
+                        "text": claim.get("text"),
+                        "confidence": claim.get("confidence"),
+                        "subtask_id": subtask.get("subtask_id"),
+                        "subtask_title": subtask.get("title"),
+                        "agent": subtask.get("assigned_role"),
+                    }
+                )
+
+    def present(e: dict[str, Any]) -> dict[str, Any]:
+        evidence_id = e.get("id") or ""
+        subtask = subtask_index.get(e.get("subtask_id")) or {}
+        snapshot_ref = e.get("snapshot_ref")
+        snapshot_path = data_dir / "runtime" / snapshot_ref if snapshot_ref else None
+        snapshot_available = bool(snapshot_path and snapshot_path.is_file())
+        return {
+            "evidence_id": evidence_id,
+            "tool": e.get("tool"),
+            "source_uri": e.get("source_uri") or e.get("tool"),
+            "source_type": e.get("source_type") or "tool",
+            "title": e.get("title") or e.get("tool") or "Evidence",
+            "summary": e.get("summary", "")[:300],
+            "retrieved_at": e.get("ts"),
+            "truncated": bool(e.get("truncated", False)),
+            "content_hash": e.get("content_hash", ""),
+            "content_length": int(e.get("content_length") or 0),
+            "reliability": e.get("reliability"),
+            "freshness": e.get("freshness"),
+            "snapshot_status": (
+                "truncated"
+                if e.get("truncated")
+                else "available"
+                if snapshot_available
+                else "missing"
+            ),
+            "snapshot_ref": snapshot_ref,
+            "subtask_id": e.get("subtask_id"),
+            "subtask_title": subtask.get("title"),
+            "agent": subtask.get("assigned_role"),
+            "claims": claim_index.get(evidence_id, []),
+        }
+
     return {
         "run_id": run_id,
         "evidence_count": len(trace["evidence"]),
-        "evidence": [
-            {
-                "evidence_id": e.get("id"),
-                "tool": e.get("tool"),
-                "source_uri": e.get("source_uri"),
-                "summary": e.get("summary", "")[:200],
-                "ts": e.get("ts"),
-                "truncated": e.get("truncated", False),
-            }
-            for e in trace["evidence"]
-        ],
+        "evidence": [present(e) for e in trace["evidence"]],
     }
 
 
@@ -911,7 +955,33 @@ def diff_of(run_id: str, data_dir: Path | None = None) -> dict:
     if not diffs:
         return {"ok": False, "error": "no diff artifact found"}
     latest = diffs[-1]
-    return {"ok": True, "artifact_id": latest.artifact_id, "diff": writer.read_content(latest)}
+    content = writer.read_content(latest)
+    files: list[dict[str, str]] = []
+    seen: set[str] = set()
+    old_path = ""
+    for line in content.splitlines():
+        if line.startswith("diff --git a/"):
+            parts = line.split()
+            if len(parts) >= 4:
+                path = parts[3].removeprefix("b/")
+                if path not in seen:
+                    files.append({"path": path, "status": "M"})
+                    seen.add(path)
+        elif line.startswith("--- "):
+            old_path = line[4:].strip().removeprefix("a/")
+        elif line.startswith("+++ "):
+            new_path = line[4:].strip().removeprefix("b/")
+            path = new_path if new_path != "/dev/null" else old_path
+            status = "A" if old_path == "/dev/null" else "D" if new_path == "/dev/null" else "M"
+            if path and path not in seen:
+                files.append({"path": path, "status": status})
+                seen.add(path)
+    return {
+        "ok": True,
+        "artifact_id": latest.artifact_id,
+        "diff": content,
+        "files": files,
+    }
 
 
 def artifacts_of(run_id: str, data_dir: Path | None = None) -> list[dict]:
@@ -1021,11 +1091,16 @@ def evidence_show(evidence_id: str, data_dir: Path | None = None) -> dict:
     if not matches:
         raise KeyError(f"evidence not found: {evidence_id}")
     path = matches[0]
+    snapshot = path.read_text(encoding="utf-8", errors="replace")[:100_000]
+    import hashlib
+
     return {
         "evidence_id": evidence_id,
-        "snapshot": path.read_text(encoding="utf-8", errors="replace")[:100_000],
+        "snapshot": snapshot,
         "snapshot_ref": path.relative_to(data_dir).as_posix(),
         "size": path.stat().st_size,
+        "content_hash": hashlib.sha256(path.read_bytes()).hexdigest()[:32],
+        "truncated_for_display": path.stat().st_size > len(snapshot.encode("utf-8")),
     }
 
 

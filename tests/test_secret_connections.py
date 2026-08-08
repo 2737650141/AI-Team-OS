@@ -31,8 +31,10 @@ def _reset_resolver():
     import app.api.server as srv
 
     srv._resolver = None
+    srv._CONNECTION_HEALTH.clear()
     yield
     srv._resolver = None
+    srv._CONNECTION_HEALTH.clear()
 
 
 def test_session_store_not_persisted(tmp_path: Path) -> None:
@@ -159,6 +161,60 @@ def test_ollama_local_provider_allowed(tmp_path: Path, monkeypatch) -> None:
         # 测试连接（本地 provider 无凭据 → healthy）
         t = client.post("/settings/connections/ollama/test")
         assert t.json()["status"] == "healthy"
+
+
+def test_isolated_test_provider_full_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    """Test Provider: save → test → discover → replace → remove, without network access."""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    first_key = "test-only-first-key"
+    second_key = "test-only-replacement-key"
+    with TestClient(app) as client:
+        saved = client.put(
+            "/settings/connections/test_provider",
+            json={
+                "api_key": first_key,
+                "storage_mode": "session",
+                "models": {"default": "jarvis-test-small"},
+            },
+        )
+        assert saved.status_code == 200 and saved.json()["configured"] is True
+        assert first_key not in str(saved.json())
+        assert client.post("/settings/connections/test_provider/test").json()["status"] == "healthy"
+        models = client.get("/settings/connections/test_provider/models").json()
+        assert models["supported"] is True
+        assert "jarvis-test-pro" in models["models"]
+
+        replaced = client.put(
+            "/settings/connections/test_provider",
+            json={"api_key": second_key, "storage_mode": "session"},
+        )
+        assert replaced.status_code == 200
+        assert first_key not in str(client.get("/settings/connections").json())
+        assert second_key not in str(client.get("/settings/connections").json())
+        assert client.delete(
+            "/settings/connections/test_provider/credential"
+        ).json()["configured"] is False
+
+
+def test_github_test_provider_does_not_touch_real_github_credential(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """GitHub Test uses a separate SecretStore key from the user's real GitHub connection."""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    with TestClient(app) as client:
+        client.put(
+            "/settings/connections/github",
+            json={"api_key": "real-placeholder", "storage_mode": "session"},
+        )
+        client.put(
+            "/settings/connections/github_test",
+            json={"api_key": "test-placeholder", "storage_mode": "session"},
+        )
+        assert client.post("/settings/connections/github_test/test").json()["status"] == "healthy"
+        client.delete("/settings/connections/github_test/credential")
+        status = client.get("/settings/connections").json()
+        assert status["github_test"]["configured"] is False
+        assert status["github"]["configured"] is True
 
 
 # ---------- 010-B：网页保存凭据驱动真实模式（build_provider 回退 + real 校验） ----------

@@ -14,6 +14,7 @@ const MAP: Record<string, string> = {
   idle: "badge-green",
   failed: "badge-red",
   rejected: "badge-red",
+  cancelled: "badge-gray",
   error: "badge-red",
 };
 

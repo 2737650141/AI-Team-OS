@@ -63,6 +63,9 @@ export interface AgentInfo {
   status?: string;
   current_task?: string | null;
   last_action?: string | null;
+  current_action?: string | null;
+  current_subtask?: string | null;
+  latest_completed?: string | null;
 }
 
 export interface ToolInfo {
@@ -141,8 +144,31 @@ export interface EvidenceView {
   title?: string;
   retrieved_at?: string;
   reliability?: string;
-  hash?: string;
-  claims?: string[];
+  content_hash?: string;
+  content_length?: number;
+  freshness?: string | null;
+  snapshot_status?: string;
+  snapshot_ref?: string | null;
+  subtask_id?: string | null;
+  subtask_title?: string | null;
+  agent?: string | null;
+  claims?: Array<{
+    claim_id?: string;
+    text?: string;
+    confidence?: number;
+    subtask_id?: string;
+    subtask_title?: string;
+    agent?: string;
+  }>;
+}
+
+export interface EvidenceDetail {
+  evidence_id: string;
+  snapshot: string;
+  snapshot_ref: string;
+  size: number;
+  content_hash: string;
+  truncated_for_display: boolean;
 }
 
 export interface ArtifactDetail {
@@ -163,4 +189,17 @@ export interface ConnectionStatus {
   storage: string;
   health: string;
   local_provider?: boolean;
+  test_provider?: boolean;
+}
+
+export interface ModelDiscovery {
+  supported: boolean;
+  models: string[];
+  manual_allowed: boolean;
+  status?: string;
+}
+
+export interface DiffFile {
+  path: string;
+  status: "M" | "A" | "D" | string;
 }

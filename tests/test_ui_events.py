@@ -99,7 +99,9 @@ def test_tasks_agents_health_settings_endpoints(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
     with TestClient(app) as client:
         assert client.get("/tasks").status_code == 200
-        assert client.get("/agents").status_code == 200
+        agents = client.get("/agents")
+        assert agents.status_code == 200
+        assert {"current_action", "current_subtask", "latest_completed"} <= set(agents.json()[0])
         assert client.get("/system/health").status_code == 200
         r = client.get("/settings/status")
         assert r.status_code == 200

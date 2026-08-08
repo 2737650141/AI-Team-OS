@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { ApprovalView } from "../api/types";
 import { useI18n } from "../i18n";
+import { displayLabel } from "../i18n/labels";
 import { StatusBadge } from "./StatusBadge";
 
 export function ApprovalCard({
@@ -13,10 +14,13 @@ export function ApprovalCard({
   approval: ApprovalView;
   onDecision: () => void;
 }) {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const decisionReason = approval.decision_reason === "superseded by user decision"
+    ? (lang === "zh" ? "已由后续用户决定替代" : "Superseded by a later user decision")
+    : approval.decision_reason;
 
   const decide = async (decision: "approve" | "reject") => {
     setBusy(true);
@@ -38,8 +42,8 @@ export function ApprovalCard({
     <div className="card approval-card">
       <div className="approval-head">
         <StatusBadge status={approval.status} />
-        <strong>{approval.action_type}</strong>
-        <span className={`risk risk-${approval.risk_level}`}>{approval.risk_level}</span>
+        <strong>{displayLabel(approval.action_type, lang)}</strong>
+        <span className={`risk risk-${approval.risk_level}`}>{displayLabel(approval.risk_level, lang)}</span>
       </div>
       <p className="muted">{approval.summary}</p>
       <div className="tags">
@@ -47,8 +51,8 @@ export function ApprovalCard({
           <code key={p}>{p}</code>
         ))}
       </div>
-      {approval.decision_reason && (
-        <p className="muted">{t("ap.decisionReason")}: {approval.decision_reason}</p>
+      {decisionReason && (
+        <p className="muted">{t("ap.decisionReason")}: {decisionReason}</p>
       )}
       {approval.status === "pending" && (
         <div className="approval-actions">

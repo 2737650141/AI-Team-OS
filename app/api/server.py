@@ -169,6 +169,7 @@ def get_task(run_id: str) -> dict[str, Any]:
         "run_id": report.run_id,
         "status": report.status,
         "current_status": state.current_status,
+        "failure_code": state.failure_code,
         "model_mode": state.model_mode,
         "goal": state.user_goal,
         "clarified_goal": state.clarified_goal,
@@ -410,16 +411,39 @@ def agents() -> list[dict[str, Any]]:
     from app.runner import list_tasks
 
     registry = default_registry()
+    active_task = None
     waiting_task = None
     for task in list_tasks(_data_dir()):
+        if active_task is None and task.get("status") in {"running", "paused"}:
+            active_task = task
         if task.get("status") != "paused":
             continue
         if any(a.get("status") == "pending" for a in approvals_of(task["run_id"], _data_dir())):
             waiting_task = task
             break
+    if waiting_task is not None:
+        active_task = waiting_task
+    active_subtask = None
+    latest_completed = None
+    if active_task is not None:
+        report = status_task(active_task["run_id"], data_dir=_data_dir())
+        active_subtask = next(
+            (
+                s
+                for s in reversed(report.state.subtasks)
+                if s.runtime_status != "passed"
+            ),
+            None,
+        )
+        latest_completed = next(
+            (s for s in reversed(report.state.subtasks) if s.runtime_status == "passed"),
+            None,
+        )
     out = []
     for agent in registry.all():
         waiting = bool(waiting_task and agent.role_type == "executor")
+        assigned = bool(active_subtask and active_subtask.assigned_role == agent.role_type)
+        supervising = bool(active_task and agent.role_type == "supervisor")
         out.append(
             {
                 "agent_id": agent.agent_id,
@@ -430,11 +454,32 @@ def agents() -> list[dict[str, Any]]:
                 "token_limit": agent.token_limit,
                 "max_tool_calls": agent.max_tool_calls,
                 "allowed_tools": sorted(agent.allowed_tools),
-                "status": "waiting_approval" if waiting else "idle",
+                "status": (
+                    "waiting_approval"
+                    if waiting
+                    else ("thinking" if assigned or supervising else "idle")
+                ),
                 "current_task": (
                     waiting_task["goal"] if waiting_task is not None and waiting else None
                 ),
                 "last_action": "approval requested" if waiting else None,
+                "current_action": (
+                    "approval_requested"
+                    if waiting
+                    else (
+                        "coordinating"
+                        if supervising
+                        else ("working_on_subtask" if assigned else None)
+                    )
+                ),
+                "current_subtask": (
+                    active_subtask.title
+                    if (assigned or supervising) and active_subtask
+                    else None
+                ),
+                "latest_completed": (
+                    latest_completed.title if latest_completed is not None else None
+                ),
             }
         )
     return out
@@ -567,6 +612,14 @@ class ConnectionBody(BaseModel):
 
 
 _resolver = None  # 惰性初始化（依赖 data_dir）
+_CONNECTION_PROVIDERS = (
+    "openai_compatible",
+    "github",
+    "ollama",
+    "test_provider",
+    "github_test",
+)
+_CONNECTION_HEALTH: dict[str, str] = {}
 
 
 def _secret_resolver():
@@ -597,8 +650,11 @@ def _provider_info(provider: str) -> dict[str, Any]:
         "base_url": base,
         "models": models,
         "storage": storage,
-        "health": "configured" if configured else "missing",
+        "health": _CONNECTION_HEALTH.get(
+            provider, "configured" if configured else "missing"
+        ),
         "local_provider": provider == "ollama",
+        "test_provider": provider in ("test_provider", "github_test"),
     }
 
 
@@ -606,39 +662,45 @@ _BASE_URLS = {
     "openai_compatible": "",
     "github": "https://api.github.com",
     "ollama": "http://127.0.0.1:11434",
+    "test_provider": "https://test-provider.invalid/v1",
+    "github_test": "https://github-test.invalid",
 }
 
 _MODEL_ROLES: dict[str, dict[str, str]] = {
     "openai_compatible": {},
     "github": {},
     "ollama": {},
+    "test_provider": {},
+    "github_test": {},
 }
 
 
 def provider_key(provider: str) -> str:
     if provider == "github":
         return "github.token"
+    if provider == "github_test":
+        return "github_test.token"
     return f"{provider}.api_key"
 
 
 @app.get("/settings/connections")
 def connections_status() -> dict[str, Any]:
     """Connections 状态（009-A 八；禁止返回任何 Secret）。"""
-    return {p: _provider_info(p) for p in ("openai_compatible", "github", "ollama")}
+    return {p: _provider_info(p) for p in _CONNECTION_PROVIDERS}
 
 
 @app.put("/settings/connections/{provider}")
 def save_connection(provider: str, body: ConnectionBody) -> dict[str, Any]:
     """保存连接（session/secure）。请求内 API Key 生命周期结束后立即释放。"""
 
-    if provider not in ("openai_compatible", "github", "ollama"):
+    if provider not in _CONNECTION_PROVIDERS:
         raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
     # Base URL 安全校验（SSRF；本地 Provider 才允许 localhost —— 010 三十六）
-    if body.base_url:
+    if body.base_url and provider not in ("test_provider", "github_test"):
         _validate_base_url(
             provider, body.base_url, local_ok=body.local_provider or provider == "ollama"
         )
-    if provider == "github":
+    if provider in ("github", "github_test"):
         if body.api_key:
             _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
     elif provider == "ollama":
@@ -652,29 +714,36 @@ def save_connection(provider: str, body: ConnectionBody) -> dict[str, Any]:
         if body.api_key:
             _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
         if body.models:
-            _MODEL_ROLES["openai_compatible"] = body.models
+            _MODEL_ROLES[provider] = body.models
+    _CONNECTION_HEALTH[provider] = "configured"
     return {"provider": provider, "configured": _provider_info(provider)["configured"]}
 
 
 @app.delete("/settings/connections/{provider}/credential")
 def delete_credential(provider: str) -> dict[str, Any]:
     """删除凭据（009-A 八）。"""
-    if provider not in ("openai_compatible", "github"):
+    if provider not in ("openai_compatible", "github", "test_provider", "github_test"):
         raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
     _secret_resolver().delete(provider_key(provider))
+    _CONNECTION_HEALTH[provider] = "missing"
     return {"provider": provider, "configured": False}
 
 
 @app.post("/settings/connections/{provider}/test")
 def test_connection(provider: str) -> dict[str, Any]:
     """连接测试（010 三十三）：安全状态映射，绝不回传 Provider 原始错误。"""
-    if provider not in ("openai_compatible", "github", "ollama"):
+    if provider not in _CONNECTION_PROVIDERS:
         raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
     if provider == "ollama":
+        _CONNECTION_HEALTH[provider] = "healthy"
         return {"status": "healthy", "detail": "local provider (no credential)"}
     key = _secret_resolver().resolve(provider_key(provider))
     if not key:
+        _CONNECTION_HEALTH[provider] = "authentication_failed"
         return {"status": "authentication_failed", "detail": "no credential configured"}
+    if provider in ("test_provider", "github_test"):
+        _CONNECTION_HEALTH[provider] = "healthy"
+        return {"status": "healthy", "detail": "test provider connected"}
     base = _BASE_URLS.get(provider) or ""
     try:
         _validate_base_url(provider, base, local_ok=provider == "ollama")
@@ -691,18 +760,79 @@ def test_connection(provider: str) -> dict[str, Any]:
         with httpx.Client(timeout=8.0) as client:
             resp = client.get(url, headers=headers)
         if resp.status_code == 200:
+            _CONNECTION_HEALTH[provider] = "healthy"
             return {"status": "healthy", "detail": "connected"}
         if resp.status_code in (401, 403):
+            _CONNECTION_HEALTH[provider] = "authentication_failed"
             return {"status": "authentication_failed", "detail": "authentication failed"}
         if resp.status_code == 404:
+            _CONNECTION_HEALTH[provider] = "model_not_found"
             return {"status": "model_not_found", "detail": "endpoint not found"}
         if resp.status_code == 429:
+            _CONNECTION_HEALTH[provider] = "rate_limited"
             return {"status": "rate_limited", "detail": "rate limited"}
+        _CONNECTION_HEALTH[provider] = "unreachable"
         return {"status": "unreachable", "detail": f"http {resp.status_code}"}
     except httpx.TimeoutException:
+        _CONNECTION_HEALTH[provider] = "timeout"
         return {"status": "timeout", "detail": "timeout"}
     except Exception:  # noqa: BLE001
+        _CONNECTION_HEALTH[provider] = "unreachable"
         return {"status": "unreachable", "detail": "unreachable"}
+
+
+@app.get("/settings/connections/{provider}/models")
+def discover_models(provider: str) -> dict[str, Any]:
+    """Discover selectable models. Test providers are deterministic and never use the network."""
+
+    if provider not in _CONNECTION_PROVIDERS:
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    if provider in ("github", "github_test"):
+        return {"supported": False, "models": [], "manual_allowed": True}
+    if provider == "test_provider":
+        return {
+            "supported": True,
+            "models": ["jarvis-test-small", "jarvis-test-pro", "jarvis-test-reasoning"],
+            "manual_allowed": True,
+        }
+    key = _secret_resolver().resolve(provider_key(provider))
+    if provider == "ollama":
+        url = f"{_BASE_URLS[provider].rstrip('/')}/api/tags"
+        headers: dict[str, str] = {}
+    else:
+        if not key:
+            return {
+                "supported": True,
+                "models": [],
+                "manual_allowed": True,
+                "status": "authentication_failed",
+            }
+        url = f"{_BASE_URLS[provider].rstrip('/')}/models"
+        headers = {"Authorization": f"Bearer {key}"}
+    try:
+        import httpx
+
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return {
+                "supported": resp.status_code != 404,
+                "models": [],
+                "manual_allowed": True,
+                "status": "unavailable",
+            }
+        payload = resp.json()
+        raw_models = payload.get("data", payload.get("models", []))
+        models = sorted(
+            {
+                str(item.get("id") or item.get("name"))
+                for item in raw_models
+                if isinstance(item, dict) and (item.get("id") or item.get("name"))
+            }
+        )
+        return {"supported": True, "models": models, "manual_allowed": True}
+    except Exception:  # noqa: BLE001
+        return {"supported": True, "models": [], "manual_allowed": True, "status": "unreachable"}
 
 
 def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> None:

@@ -31,6 +31,8 @@ export const api = {
     );
     return r.evidence;
   },
+  evidenceDetail: (evidenceId: string) =>
+    request<import("./types").EvidenceDetail>(`/evidence/${evidenceId}`),
   approvals: (runId: string) =>
     request<import("./types").ApprovalView[]>(`/tasks/${runId}/approvals`),
   pendingApprovalRun: async () => {
@@ -49,7 +51,8 @@ export const api = {
     ),
   artifact: (artifactId: string) =>
     request<import("./types").ArtifactDetail>(`/artifacts/${artifactId}`),
-  diff: (runId: string) => request<{ diff: string; files?: string[] }>(`/tasks/${runId}/diff`),
+  diff: (runId: string) =>
+    request<{ diff: string; files?: import("./types").DiffFile[] }>(`/tasks/${runId}/diff`),
   agents: () => request<import("./types").AgentInfo[]>("/agents"),
   tools: async () => {
     const r = await request<{ tools: import("./types").ToolInfo[] }>("/tools");
@@ -72,6 +75,8 @@ export const api = {
     request<{ status: string; detail: string }>(`/settings/connections/${provider}/test`, {
       method: "POST",
     }),
+  discoverModels: (provider: string) =>
+    request<import("./types").ModelDiscovery>(`/settings/connections/${provider}/models`),
   createTask: (body: {
     goal: string;
     model_mode: string;

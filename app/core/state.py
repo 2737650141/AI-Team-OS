@@ -91,6 +91,16 @@ class Evidence(BaseModel):
     tool: str
     summary: str
     ts: str
+    subtask_id: str | None = None
+    source_type: str | None = None
+    source_uri: str | None = None
+    title: str = ""
+    content_hash: str = ""
+    content_length: int = 0
+    reliability: float | None = None
+    freshness: str | None = None
+    snapshot_ref: str | None = None
+    truncated: bool = False
 
 
 class Approval(BaseModel):

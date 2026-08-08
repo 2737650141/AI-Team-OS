@@ -52,9 +52,9 @@ describe("Dashboard", () => {
     });
     renderDashboard();
     // 等待数据渲染（health 值经 StatusBadge 翻译为中文）
-    await waitFor(() => expect(screen.getAllByText("在线").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByText("进行中")).toBeInTheDocument());
     expect(screen.getByText("系统健康")).toBeInTheDocument();
-    expect(screen.getByText("进行中")).toBeInTheDocument();
+    expect(screen.getAllByText("在线").length).toBeGreaterThan(0);
   });
 
   it("creates a task and navigates to detail", async () => {

@@ -7,9 +7,10 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
 import { useI18n } from "../i18n";
+import { displayLabel } from "../i18n/labels";
 
 export function Dashboard() {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const qc = useQueryClient();
   const nav = useNavigate();
   const dash = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 3000 });
@@ -17,6 +18,13 @@ export function Dashboard() {
   const [mode, setMode] = useState("fake");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [project, setProject] = useState("");
+  const activeSummary = dash.data?.recent_tasks.find((task) => ["running", "paused"].includes(task.status));
+  const activeDetail = useQuery({
+    queryKey: ["dashboard-active-task", activeSummary?.run_id],
+    queryFn: () => api.task(activeSummary!.run_id),
+    enabled: !!activeSummary,
+    refetchInterval: 3000,
+  });
 
   const create = useMutation({
     mutationFn: (body: { goal: string; model_mode: string; project_alias?: string }) =>
@@ -32,6 +40,28 @@ export function Dashboard() {
   return (
     <div className="page">
       <h1>{t("dash.title")}</h1>
+      <section className={`card command-overview ${activeSummary ? "team-working" : ""}`}>
+        <div className="command-title">
+          <div>
+            <span className="eyebrow">JARVIS Control Surface</span>
+            <h2>{activeSummary ? t("dash.teamWorking") : t("dash.teamReady")}</h2>
+          </div>
+          <StatusBadge status={activeSummary?.status ?? "online"} />
+        </div>
+        <div className="overview-grid">
+          <Overview label={t("dash.systemStatus")} value={data?.system.backend ? displayLabel(data.system.backend.toLowerCase(), lang) : t("dash.loading")} />
+          <Overview label={t("dash.activeAiTeam")} value={activeSummary ? t("st.active") : t("st.idle")} />
+          <Overview label={t("dash.pendingApproval")} value={String(data?.metrics.pending_approvals ?? 0)} />
+          <Overview label={t("dash.currentTask")} value={activeSummary ? displayLabel(activeSummary.goal, lang) : t("dash.none")} />
+        </div>
+        {activeSummary && (
+          <div className="working-context">
+            <span><small>{t("dash.currentPhase")}</small><strong>{displayLabel(activeSummary.status, lang)}</strong></span>
+            <span><small>{t("dash.currentAgent")}</small><strong>{displayLabel(activeDetail.data?.subtasks.find((subtask) => ["running", "executed", "rejected"].includes(subtask.status))?.role ?? (activeSummary.status === "paused" ? "executor" : "supervisor"), lang)}</strong></span>
+            <span><small>{t("dash.currentSubtask")}</small><strong>{activeDetail.data?.subtasks.find((subtask) => ["running", "executed", "rejected"].includes(subtask.status))?.title ?? t("dash.coordinating")}</strong></span>
+          </div>
+        )}
+      </section>
       {/* New Task（010 八/二十三） */}
       <div className="card new-task">
         <input
@@ -103,7 +133,7 @@ export function Dashboard() {
           ) : data
             ? Object.entries(data.system).map(([k, v]) => (
                 <div key={k} className="health-item">
-                  <span>{k}</span>
+                  <span>{displayLabel(k, lang)}</span>
                   <StatusBadge status={v.toLowerCase()} />
                 </div>
               ))
@@ -144,11 +174,11 @@ export function Dashboard() {
           <tbody>
             {(data?.recent_tasks ?? []).map((tr) => (
               <tr key={tr.run_id} onClick={() => nav(`/tasks/${tr.run_id}`)} className="clickable">
-                <td>{tr.goal}</td>
+                <td>{displayLabel(tr.goal, lang)}</td>
                 <td>
                   <StatusBadge status={tr.status} />
                 </td>
-                <td>{tr.model_mode}</td>
+                <td>{tr.model_mode === "fake" ? t("dash.demo") : t("dash.real")}</td>
                 <td>{tr.tokens}</td>
                 <td>${tr.cost.toFixed(4)}</td>
               </tr>
@@ -170,12 +200,14 @@ export function Dashboard() {
         <div className="agent-grid">
           {(data?.agent_team ?? []).map((a) => (
             <div key={a.role} className="agent-card">
-              <strong>{a.role}</strong>
+              <strong>{displayLabel(a.role, lang)}</strong>
               <StatusBadge status={a.status} />
               <span className="muted">{a.model}</span>
               <span className="muted">
                 {a.tokens} {t("dash.tokenUnit")}
               </span>
+              {a.current_task && <span className="muted">{t("dash.currentTask")}: {displayLabel(a.current_task, lang)}</span>}
+              {a.last_action && <span className="muted">{t("agents.lastAction")}: {displayLabel(a.last_action, lang)}</span>}
             </div>
           ))}
         </div>
@@ -191,4 +223,8 @@ function Metric({ label, value }: { label: string; value: string | number }) {
       <span className="metric-label">{label}</span>
     </div>
   );
+}
+
+function Overview({ label, value }: { label: string; value: string }) {
+  return <div className="overview-item"><span>{label}</span><strong>{value}</strong></div>;
 }
