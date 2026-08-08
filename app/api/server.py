@@ -496,3 +496,176 @@ def task_events(run_id: str) -> Any:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ============ Connections / Secret 管理（010 三十~三十六 / 009-A） ============
+
+
+class ConnectionBody(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=2000)
+    models: dict[str, str] | None = (
+        None  # 角色 → 模型（default/supervisor/planner/researcher/executor/reviewer）
+    )
+    storage_mode: str = Field(default="session", pattern="^(session|secure)$")
+    local_provider: bool = False  # 仅 Ollama 本地 Provider 允许 localhost（010 三十六）
+
+
+_resolver = None  # 惰性初始化（依赖 data_dir）
+
+
+def _secret_resolver():
+    global _resolver
+    if _resolver is None:
+        from app.core.secret_store import default_resolver
+
+        _resolver = default_resolver(_data_dir())
+    return _resolver
+
+
+def _provider_info(provider: str) -> dict[str, Any]:
+    """Provider 状态（绝不包含 Secret 值/片段）。"""
+
+    resolver = _secret_resolver()
+    base = _BASE_URLS.get(provider, "")
+    models = _MODEL_ROLES.get(provider, {})
+    if provider == "ollama":
+        configured = True  # 本地 Provider 无需密钥
+        storage = "local_provider"
+        base = base or "http://127.0.0.1:11434"
+    else:
+        configured = resolver.resolve(provider_key(provider)) is not None
+        storage = resolver.store_mode(provider_key(provider))
+    return {
+        "provider": provider,
+        "configured": configured,
+        "base_url": base,
+        "models": models,
+        "storage": storage,
+        "health": "configured" if configured else "missing",
+        "local_provider": provider == "ollama",
+    }
+
+
+_BASE_URLS = {
+    "openai_compatible": "",
+    "github": "https://api.github.com",
+    "ollama": "http://127.0.0.1:11434",
+}
+
+_MODEL_ROLES: dict[str, dict[str, str]] = {
+    "openai_compatible": {},
+    "github": {},
+    "ollama": {},
+}
+
+
+def provider_key(provider: str) -> str:
+    if provider == "github":
+        return "github.token"
+    return f"{provider}.api_key"
+
+
+@app.get("/settings/connections")
+def connections_status() -> dict[str, Any]:
+    """Connections 状态（009-A 八；禁止返回任何 Secret）。"""
+    return {p: _provider_info(p) for p in ("openai_compatible", "github", "ollama")}
+
+
+@app.put("/settings/connections/{provider}")
+def save_connection(provider: str, body: ConnectionBody) -> dict[str, Any]:
+    """保存连接（session/secure）。请求内 API Key 生命周期结束后立即释放。"""
+
+    if provider not in ("openai_compatible", "github", "ollama"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    # Base URL 安全校验（SSRF；本地 Provider 才允许 localhost —— 010 三十六）
+    if body.base_url:
+        _validate_base_url(
+            provider, body.base_url, local_ok=body.local_provider or provider == "ollama"
+        )
+    if provider == "github":
+        if body.api_key:
+            _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
+    elif provider == "ollama":
+        # 本地 Provider：可保存 base_url 与模型；无密钥
+        _BASE_URLS["ollama"] = body.base_url or _BASE_URLS["ollama"]
+        if body.models:
+            _MODEL_ROLES["ollama"] = body.models
+    else:
+        if body.base_url:
+            _BASE_URLS["openai_compatible"] = body.base_url
+        if body.api_key:
+            _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
+        if body.models:
+            _MODEL_ROLES["openai_compatible"] = body.models
+    return {"provider": provider, "configured": _provider_info(provider)["configured"]}
+
+
+@app.delete("/settings/connections/{provider}/credential")
+def delete_credential(provider: str) -> dict[str, Any]:
+    """删除凭据（009-A 八）。"""
+    if provider not in ("openai_compatible", "github"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    _secret_resolver().delete(provider_key(provider))
+    return {"provider": provider, "configured": False}
+
+
+@app.post("/settings/connections/{provider}/test")
+def test_connection(provider: str) -> dict[str, Any]:
+    """连接测试（010 三十三）：安全状态映射，绝不回传 Provider 原始错误。"""
+    if provider not in ("openai_compatible", "github", "ollama"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    if provider == "ollama":
+        return {"status": "healthy", "detail": "local provider (no credential)"}
+    key = _secret_resolver().resolve(provider_key(provider))
+    if not key:
+        return {"status": "authentication_failed", "detail": "no credential configured"}
+    base = _BASE_URLS.get(provider) or ""
+    try:
+        _validate_base_url(provider, base, local_ok=provider == "ollama")
+    except HTTPException as exc:
+        return {"status": "unreachable", "detail": str(exc.detail)}
+    # 轻量健康检查（用户主动触发；失败映射为安全状态）
+    try:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {key}"} if provider == "openai_compatible" else {}
+        if provider == "github":
+            headers = {"Authorization": f"Bearer {key}", "X-GitHub-Api-Version": "2022-11-28"}
+        url = f"{base.rstrip('/')}/models" if provider == "openai_compatible" else base
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code == 200:
+            return {"status": "healthy", "detail": "connected"}
+        if resp.status_code in (401, 403):
+            return {"status": "authentication_failed", "detail": "authentication failed"}
+        if resp.status_code == 404:
+            return {"status": "model_not_found", "detail": "endpoint not found"}
+        if resp.status_code == 429:
+            return {"status": "rate_limited", "detail": "rate limited"}
+        return {"status": "unreachable", "detail": f"http {resp.status_code}"}
+    except httpx.TimeoutException:
+        return {"status": "timeout", "detail": "timeout"}
+    except Exception:  # noqa: BLE001
+        return {"status": "unreachable", "detail": "unreachable"}
+
+
+def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> None:
+    """Base URL 安全校验：仅 http/https；默认拒绝 localhost（SSRF，010 十二/三十六）。"""
+    import re as _re
+
+    from app.core.ssrf import blocked_host_reason
+
+    m = _re.fullmatch(r"(https?)://([^/:]+)(?::\d{1,5})?(?:/.*)?", base_url.strip())
+    if not m:
+        raise HTTPException(status_code=400, detail="base_url must be http(s)://host[:port]")
+    scheme, host = m.group(1), m.group(2)
+    if host in ("localhost", "127.0.0.1", "::1") and not local_ok:
+        raise HTTPException(status_code=400, detail="localhost only allowed for local providers")
+    reason = blocked_host_reason(host)
+    if reason and not (local_ok and host in ("localhost", "127.0.0.1", "::1")):
+        raise HTTPException(status_code=400, detail=f"base_url blocked: {reason}")
+    if scheme == "http" and not local_ok:
+        raise HTTPException(
+            status_code=400, detail="http base_url only allowed for local providers"
+        )
