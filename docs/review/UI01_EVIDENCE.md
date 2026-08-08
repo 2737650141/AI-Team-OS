@@ -117,3 +117,22 @@ tools / evidence / settings / memory（9 张，无 Secret/真实敏感文件）
 - .gitignore 补 web/.vite/（vite 缓存）。
 - 交付检查全部通过：SEC-01 CLOSED、组件清单完整、测试/双审/证据包/截图/文档
   齐全、main 为完整交付基线、无 remote 未 push、不进入 M4（Memory 占位）。
+
+## 十五、010-B 用户实机验收（UI-01 延续）
+
+- i18n（010-B 九）：中/英双语言，默认中文，localStorage（aios.lang）记忆；
+  全界面同步切换（导航/菜单/按钮/状态徽章/提示/错误/Approval/Diff/Plan/Tests/
+  Reviewer/Settings/Setup/Logs/Tools/Evidence/Memory）；右上角切换器。
+  提交 20acaa7。
+- Demo 入口（010-B 五）：Dashboard Try Demo Mode 一键按钮（sandbox_code_fix）。
+- 一键启动（010-B 三）：start_ai_team_os.ps1 补齐 Python 检查/健康等待/失败提示/
+  自动开浏览器；npm 启动改 cmd /c 包装（Start-Process 直启 npm 静默失败）；
+  ReadKey 非交互保护（85ae53c）。桌面入口 Start AI Team OS.cmd（010-B 十三）。
+- 验收 E2E（e2e/ui010b*.spec.ts）：首页中文默认 + Try Demo + 中英切换 +
+  Settings 安全显示（无 sk-/reasonix/.create_token）；Demo 任务
+  （run 496187744ea64471）审批页就绪（批准/拒绝/Diff 可见），未自动 Approve，
+  等待用户本人操作（010-B 六）。
+- 截图：artifacts/demo/ui/ 12 张（含 ui010b-home-zh/home-en/settings/approval）。
+- 刷新恢复（010-B 十一）与后端重启恢复（010-B 十二）由既有 E2E/测试覆盖。
+- 服务验证：backend 8000 / frontend 5173 / proxy /api 全 200；ps1 完整实际运行
+  [OK] Backend + [OK] Frontend。全量 pytest 321 passed。
