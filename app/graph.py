@@ -202,6 +202,17 @@ def build_graph(
                     )
                 validate_plan(plan_obj, registry, state.token_budget)
                 subtasks = [SubtaskState(**s.model_dump()) for s in plan_obj.subtasks]
+                from app.core.events import emit as event_emit
+
+                event_emit(
+                    task_id=state.task_id,
+                    run_id=state.run_id,
+                    event_type="plan_created",
+                    actor_type="planner",
+                    actor_id="planner",
+                    summary=f"plan created: {len(subtasks)} subtasks",
+                    payload_safe={"subtask_count": len(subtasks)},
+                )
                 return {
                     "plan": plan_obj.model_dump(),
                     "subtasks": subtasks,
@@ -246,6 +257,8 @@ def build_graph(
                                 "subtask": s.model_dump(),
                                 "all_subtasks": [x.model_dump() for x in state.subtasks],
                                 "review_scenario": review_scenario,
+                                "task_id": state.task_id,
+                                "run_id": state.run_id,
                             },
                         },
                     )
@@ -261,7 +274,20 @@ def build_graph(
         subtask = SubtaskState.model_validate(payload["subtask"])
         all_subtasks = [SubtaskState.model_validate(x) for x in payload["all_subtasks"]]
         scenario = payload.get("review_scenario") or review_scenario
+        task_id = payload.get("task_id") or payload.get("subtask_id") or "unknown"
+        run_id = payload.get("run_id") or task_id
         running = subtask.model_copy(update={"runtime_status": "running"})
+        from app.core.events import emit as event_emit
+
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="subtask_started",
+            actor_type=running.assigned_role,
+            actor_id=subtask.subtask_id,
+            summary=f"subtask started: {subtask.title}",
+            payload_safe={"subtask_id": subtask.subtask_id, "role": running.assigned_role},
+        )
         if running.assigned_role == "executor":
             # 007 十二/十三：Executor 工作流（审批 interrupt 在此节点内）
             if executor_agent is None:
@@ -280,6 +306,18 @@ def build_graph(
                     "evidence_refs": result.evidence_refs,
                 }
             )
+            event_emit(
+                task_id=task_id,
+                run_id=run_id,
+                event_type="subtask_completed",
+                actor_type="executor",
+                actor_id=subtask.subtask_id,
+                summary=f"executor finished: {result.summary}",
+                payload_safe={
+                    "subtask_id": subtask.subtask_id,
+                    "status": result.metadata.get("status", "executed"),
+                },
+            )
             return {"subtasks": [updated], **tool_gateway.snapshot()}
         if running.assigned_role != "researcher":
             # 防御：M2 不支持的执行角色模拟 reject 语义（递增 rework_count），
@@ -289,6 +327,15 @@ def build_graph(
                     "runtime_status": "rejected",
                     "rework_count": running.rework_count + 1,
                 }
+            )
+            event_emit(
+                task_id=task_id,
+                run_id=run_id,
+                event_type="subtask_completed",
+                actor_type=running.assigned_role,
+                actor_id=subtask.subtask_id,
+                summary=f"subtask rejected (unsupported role): {subtask.subtask_id}",
+                payload_safe={"subtask_id": subtask.subtask_id, "status": "rejected"},
             )
             return {"subtasks": [updated], **tool_gateway.snapshot()}
         if llm_researcher is not None:
@@ -301,6 +348,19 @@ def build_graph(
                 "execution_result": result,
                 "evidence_refs": result.evidence_refs,
             }
+        )
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="subtask_completed",
+            actor_type="researcher",
+            actor_id=subtask.subtask_id,
+            summary=f"research finished: {len(result.claims)} claims",
+            payload_safe={
+                "subtask_id": subtask.subtask_id,
+                "claims": len(result.claims),
+                "evidence": len(result.evidence_refs),
+            },
         )
         # 回写工具调用/证据/幂等键（去重 reducer 合并，并行 exec 并发安全；快照在锁内生成）
         return {"subtasks": [updated], **tool_gateway.snapshot()}
@@ -347,6 +407,34 @@ def build_graph(
                 )
             updated_subtasks.append(updated)
             all_results.append(result)
+        # 事件：review 结果（每个评审子任务一条）+ 返工开始
+        from app.core.events import emit as event_emit
+
+        executed_sids = [s.subtask_id for s in state.subtasks if s.runtime_status == "executed"]
+        for sid, res in zip(executed_sids, all_results):
+            event_emit(
+                task_id=state.task_id,
+                run_id=state.run_id,
+                event_type="review_passed" if res.verdict == "pass" else "review_rejected",
+                actor_type="reviewer",
+                actor_id="reviewer",
+                summary=f"{sid} {res.verdict}: {len(res.issues)} issues",
+                payload_safe={"subtask_id": sid, "verdict": res.verdict, "issues": len(res.issues)},
+            )
+        rejected_now = [s for s in updated_subtasks if s.runtime_status == "rejected"]
+        if rejected_now:
+            event_emit(
+                task_id=state.task_id,
+                run_id=state.run_id,
+                event_type="rework_started",
+                actor_type="supervisor",
+                actor_id="supervisor",
+                summary=f"rework started for: {[s.subtask_id for s in rejected_now]}",
+                payload_safe={
+                    "subtasks": [s.subtask_id for s in rejected_now],
+                    "rework_count": max((s.rework_count for s in rejected_now), default=0),
+                },
+            )
         return {
             "subtasks": updated_subtasks,
             "review_history": all_results,

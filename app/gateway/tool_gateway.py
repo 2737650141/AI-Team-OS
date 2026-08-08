@@ -69,9 +69,11 @@ class ToolGateway:
         policy: ToolPolicy | None = None,
         evidence_writer: EvidenceWriter | None = None,
         approval_service: ApprovalService | None = None,
+        run_id: str | None = None,
     ) -> None:
         self._audit = audit
         self._task_id = task_id
+        self._run_id = run_id or task_id  # 事件/审计 run 关联（UI SSE）
         self._tools: dict[str, ToolSpec] = {}
         self._seen_keys: set[str] = set(initial_keys or ())
         self.tool_calls: list[dict[str, Any]] = list(initial_calls or ())
@@ -107,7 +109,40 @@ class ToolGateway:
     ) -> ToolResult:
         """唯一工具执行入口：全程持锁，保证并行 Send 下调用顺序可复现（确定性内核）。"""
         with self._lock:
-            return self._invoke(tool_name, args, role, ctx)
+            from app.core.events import emit as event_emit
+
+            try:
+                event_emit(
+                    task_id=self._task_id,
+                    run_id=self._run_id,
+                    event_type="tool_started",
+                    actor_type=role or (ctx.role if ctx else None) or "agent",
+                    actor_id="tool_gateway",
+                    summary=f"calling {tool_name}",
+                    payload_safe={"tool": tool_name},
+                )
+            except Exception:  # noqa: BLE001  事件失败不影响工具执行
+                pass
+            result = self._invoke(tool_name, args, role, ctx)
+            try:
+                status = result.status or ("ok" if result.ok else "error")
+                event_type = "tool_blocked" if status == "blocked" else "tool_completed"
+                event_emit(
+                    task_id=self._task_id,
+                    run_id=self._run_id,
+                    event_type=event_type,
+                    actor_type=role or (ctx.role if ctx else None) or "agent",
+                    actor_id="tool_gateway",
+                    summary=f"{tool_name} -> {status}",
+                    payload_safe={
+                        "tool": tool_name,
+                        "status": status,
+                        "evidence_id": result.evidence_id,
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            return result
 
     def snapshot(self) -> dict:
         """锁内快照：并行 exec 回写状态用（避免锁外迭代共享集合）。"""

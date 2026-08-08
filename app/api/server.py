@@ -360,3 +360,139 @@ def task_rollback(run_id: str, body: RollbackBody) -> dict[str, Any]:
     except (KeyError, RollbackError) as exc:
         status = 404 if isinstance(exc, KeyError) else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+# ============ UI-01（010 第四十一部分）：Dashboard / Tasks / Agents / Health / SSE ============
+
+
+@app.get("/dashboard")
+def dashboard() -> dict[str, Any]:
+    """Dashboard 聚合（健康/指标/最近任务/Agent 团队）。"""
+    from app.runner import dashboard_data
+
+    return dashboard_data(data_dir=_data_dir())
+
+
+@app.get("/tasks")
+def tasks_list() -> list[dict[str, Any]]:
+    """任务列表（checkpoints.db 各 thread 最新状态）。"""
+    from app.runner import list_tasks
+
+    return list_tasks(data_dir=_data_dir())
+
+
+@app.get("/agents")
+def agents() -> list[dict[str, Any]]:
+    """Agent 目录（010 第二十二部分，本阶段只读）。"""
+    from app.core.registry import default_registry
+
+    registry = default_registry()
+    out = []
+    for agent in registry.all():
+        out.append(
+            {
+                "agent_id": agent.agent_id,
+                "role": agent.role_type,
+                "display_name": agent.display_name,
+                "model": agent.model_scenario,
+                "enabled": agent.enabled,
+                "token_limit": agent.token_limit,
+                "max_tool_calls": agent.max_tool_calls,
+                "allowed_tools": sorted(agent.allowed_tools),
+            }
+        )
+    return out
+
+
+@app.get("/system/health")
+def system_health() -> dict[str, str]:
+    """系统健康（010 第七部分 System Health）。"""
+    from app.runner import _system_health
+
+    return _system_health(_data_dir())
+
+
+@app.get("/settings/status")
+def settings_status() -> dict[str, Any]:
+    """安全配置状态（010 第二十五部分；绝不显示 Secret 值）。"""
+    from app.core.config import allowed_read_roots
+
+    settings = _settings()
+    real_enabled = getattr(settings.model, "enable_real", False)
+    return {
+        "model_provider": {
+            "name": "openai_compatible",
+            "status": "Configured" if real_enabled else "Missing",
+            "base_url_configured": bool(getattr(settings.model, "base_url", None)),
+            "api_key_configured": bool(getattr(settings.model, "api_key", None)),
+        },
+        "github": {
+            "status": "Configured" if os.environ.get("AI_TEAM_GITHUB_TOKEN") else "Missing",
+            "token_configured": bool(os.environ.get("AI_TEAM_GITHUB_TOKEN")),
+        },
+        "real_model": {"status": "Enabled" if real_enabled else "Disabled"},
+        "allowed_read_roots": {"count": len(allowed_read_roots())},
+        "mcp": {"servers": 0, "status": "Disabled"},
+        "network_isolation": "Best Effort",
+        "sandbox": {"status": "Online" if allowed_read_roots() else "Disabled"},
+    }
+
+
+@app.get("/tasks/{run_id}/events")
+def task_events(run_id: str) -> Any:
+    """SSE 实时事件（010 第十四部分）：Last-Event-ID 支持 replay。
+
+    轮询 EventStore（sequence > last），无新事件时保持连接（心跳注释行）。
+    """
+    from fastapi.responses import StreamingResponse
+
+    from app.core.events import get_store
+
+    store = get_store()
+    if store is None:
+        from app.core.events import init as events_init
+
+        events_init(_data_dir())
+        store = get_store()
+    # 校验 run 存在
+    try:
+        status_task(run_id, data_dir=_data_dir())
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+
+    def _stream():
+        import asyncio
+        import json as _json
+
+        last = 0
+        idle = 0
+        while True:
+            events = store.list_events(run_id=run_id, after_sequence=last)
+            for ev in events:
+                data = _json.dumps(ev.model_dump(), ensure_ascii=False)
+                yield f"id: {ev.sequence}\nevent: {ev.event_type}\ndata: {data}\n\n"
+                last = ev.sequence
+                idle = 0
+            if not events:
+                idle += 1
+                if idle >= 3:
+                    # 任务终态后补发状态事件再结束；否则保持心跳
+                    try:
+                        st = status_task(run_id, data_dir=_data_dir())
+                        if st.state.current_status in ("completed", "failed"):
+                            payload = _json.dumps(
+                                {"status": st.state.current_status}, ensure_ascii=False
+                            )
+                            yield (f"id: {last}\nevent: task_status_changed\ndata: {payload}\n\n")
+                            return
+                    except KeyError:
+                        return
+                yield ": keepalive\n\n"
+            yield f'id: {last}\nevent: ping\ndata: {{"sequence": {last}}}\n\n'
+            asyncio.sleep(1.0)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

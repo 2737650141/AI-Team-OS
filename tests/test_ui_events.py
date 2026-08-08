@@ -1,0 +1,129 @@
+"""UI-01 事件系统与 API 端点测试（010 十三/十四/二十八）。
+
+覆盖：
+- EventStore SQLite 写入 / sequence 单调 / 按 run_id 查询 / replay。
+- 事件脱敏（payload 含假密钥 → 落库无原文）。
+- run_task 生命周期事件（task_created / task_completed）。
+- /dashboard /tasks /agents /system/health /settings/status 端点。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.server import app
+from app.core.events import EventStore
+
+
+def _store(tmp_path: Path) -> EventStore:
+    return EventStore(tmp_path / "events.sqlite")
+
+
+def test_event_store_write_and_sequence(tmp_path: Path) -> None:
+    """写入 + sequence 单调递增 + 按 run_id 查询。"""
+    store = _store(tmp_path)
+    e1 = store.emit(task_id="t1", run_id="r1", event_type="task_created", summary="created")
+    e2 = store.emit(task_id="t1", run_id="r1", event_type="plan_created", summary="plan")
+    e3 = store.emit(task_id="t2", run_id="r2", event_type="task_created", summary="other")
+    assert e1.sequence < e2.sequence < e3.sequence
+    r1 = store.list_events(run_id="r1")
+    assert [e.event_type for e in r1] == ["task_created", "plan_created"]
+    # replay：after_sequence 只取新事件
+    tail = store.list_events(run_id="r1", after_sequence=e1.sequence)
+    assert [e.event_type for e in tail] == ["plan_created"]
+    assert store.count() == 3
+
+
+def test_event_payload_redacted(tmp_path: Path) -> None:
+    """事件 payload/summary 不落真实凭据（假密钥被脱敏）。"""
+    store = _store(tmp_path)
+    fake_key = "sk-" + "a" * 30
+    ev = store.emit(
+        task_id="t1",
+        run_id="r1",
+        event_type="tool_completed",
+        summary=f"tool ok {fake_key}",
+        payload_safe={"tool": "x", "token": fake_key, "nested": {"key": fake_key}},
+    )
+    assert fake_key not in ev.summary
+    assert fake_key not in ev.payload_safe.get("token", "")
+    assert fake_key not in ev.payload_safe.get("nested", {}).get("key", "")
+    # 落库后重读也无原文
+    again = store.list_events(run_id="r1")[0]
+    assert fake_key not in again.summary
+    assert "***" in again.summary
+
+
+def test_run_task_emits_lifecycle_events(tmp_path: Path, monkeypatch) -> None:
+    """run_task 生命周期事件：task_created → ... → task_completed。"""
+    from app.core.events import get_store
+    from app.core.events import init as events_init
+    from app.runner import run_task
+
+    events_init(tmp_path)
+    report = run_task(
+        "github_compare_team",
+        token_budget=10000,
+        cost_budget=1.0,
+        data_dir=tmp_path / "data",
+    )
+    store = get_store()
+    assert store is not None
+    evs = store.list_events(run_id=report.run_id)
+    types = [e.event_type for e in evs]
+    assert "task_created" in types
+    assert "task_completed" in types
+    assert "plan_created" in types
+    assert "subtask_started" in types
+    assert "subtask_completed" in types
+    assert "review_passed" in types
+
+
+def test_dashboard_endpoint(tmp_path: Path, monkeypatch) -> None:
+    """GET /dashboard 聚合（指标/健康/最近任务）。"""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    with TestClient(app) as client:
+        resp = client.get("/dashboard")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "metrics" in body and "recent_tasks" in body and "agent_team" in body
+        assert "backend" in body["system"]
+        assert body["system"]["sqlite"] in ("Online", "Degraded")
+
+
+def test_tasks_agents_health_settings_endpoints(tmp_path: Path, monkeypatch) -> None:
+    """任务列表 / Agent 目录 / 健康 / 设置状态端点。"""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    with TestClient(app) as client:
+        assert client.get("/tasks").status_code == 200
+        assert client.get("/agents").status_code == 200
+        assert client.get("/system/health").status_code == 200
+        r = client.get("/settings/status")
+        assert r.status_code == 200
+        body = r.json()
+        # 绝不返回 Secret 值（布尔状态键名允许；无任何 secret 值字段）
+        assert "api_key_configured" in body["model_provider"]
+        assert "token_configured" in body["github"]
+        assert "sk-" not in str(body)
+        assert "ghp_" not in str(body)
+
+
+def test_events_endpoint_404(tmp_path: Path, monkeypatch) -> None:
+    """未知 run_id 的 events 端点返回 404。"""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    with TestClient(app) as client:
+        resp = client.get("/tasks/nonexistent/events")
+        assert resp.status_code == 404
+
+
+@pytest.fixture(autouse=True)
+def _reset_event_store():
+    """测试间重置事件单例（避免跨测试目录串写）。"""
+    from app.core.events import _store, _store_lock
+
+    with _store_lock:
+        _store = None  # type: ignore[assignment]
+    yield
