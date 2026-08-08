@@ -40,6 +40,7 @@ SENSITIVE_EXEMPT = {
     "tests/test_m3b_github_web.py": "Mock 请求头假 Token 断言",
     "tests/test_m3b_local_evidence_mcp.py": "假密钥断言 Evidence 脱敏",
     "tests/test_m3c_runtime.py": "假 Token 断言命令环境脱敏",
+    "tests/test_sec01_incident.py": "SEC-01 回归测试（SK-PLACEHOLDER 前缀假密钥/豁免断言）",
     "tests/test_audit.py": "假密钥断言审计脱敏",
     "tests/test_m3c_sandbox.py": "假密钥断言审批/脱敏",
     "tests/test_m3c_workspace.py": "假密钥断言排除规则",
