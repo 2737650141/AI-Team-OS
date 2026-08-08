@@ -1,34 +1,44 @@
 // Settings + Connections（010 二十五/三十~三十六 / 009-A）
+// 010-B 九：i18n；010-B 十：安全显示（仅 Configured/Not configured/Healthy/Disabled）
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { useI18n } from "../i18n";
 
 export function Settings() {
+  const { t } = useI18n();
   const status = useQuery({ queryKey: ["settings"], queryFn: api.settingsStatus });
   const conns = useQuery({ queryKey: ["connections"], queryFn: api.connections });
 
   return (
     <div className="page">
-      <h1>Settings</h1>
+      <h1>{t("settings.title")}</h1>
       <div className="card">
-        <h2>System Status</h2>
+        <h2>{t("settings.systemStatus")}</h2>
         <pre className="json">{JSON.stringify(status.data ?? {}, null, 2)}</pre>
       </div>
       <div className="card">
-        <h2>Connections</h2>
-        <p className="muted">
-          Configure model providers / GitHub / Ollama. Credentials never leave this machine.
-        </p>
+        <h2>{t("settings.connections")}</h2>
+        <p className="muted">{t("settings.intro")}</p>
         <div className="conn-grid">
-          <ProviderCard provider="openai_compatible" conn={conns.data?.openai_compatible} />
-          <ProviderCard provider="github" conn={conns.data?.github} />
-          <ProviderCard provider="ollama" conn={conns.data?.ollama} local />
+          <ProviderCard
+            provider="openai_compatible"
+            conn={conns.data?.openai_compatible}
+            title={t("settings.providerOpenAI")}
+          />
+          <ProviderCard provider="github" conn={conns.data?.github} title={t("settings.providerGithub")} />
+          <ProviderCard
+            provider="ollama"
+            conn={conns.data?.ollama}
+            local
+            title={t("settings.providerOllama")}
+          />
         </div>
       </div>
       <p className="muted">
-        First-time setup? <Link to="/setup">Run the setup wizard</Link>.
+        {t("settings.setupPrompt")} <Link to="/setup">{t("settings.runWizard")}</Link>.
       </p>
     </div>
   );
@@ -38,11 +48,14 @@ function ProviderCard({
   provider,
   conn,
   local,
+  title,
 }: {
   provider: string;
   conn: import("../api/types").ConnectionStatus | undefined;
   local?: boolean;
+  title: string;
 }) {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const [baseUrl, setBaseUrl] = useState(conn?.base_url ?? "");
   const [apiKey, setApiKey] = useState("");
@@ -58,7 +71,7 @@ function ProviderCard({
     mutationFn: (body: Record<string, unknown>) => api.saveConnection(provider, body),
     onSuccess: () => {
       setApiKey(""); // 提交后立即清空前端变量（010 三十一）
-      setMsg("Saved");
+      setMsg(t("settings.saved"));
       invalidate();
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : String(e)),
@@ -66,7 +79,7 @@ function ProviderCard({
 
   const test = useMutation({
     mutationFn: () => api.testConnection(provider),
-    onSuccess: (r) => setMsg(`Test: ${r.status}`),
+    onSuccess: (r) => setMsg(`${t("settings.testPrefix")}: ${r.status}`),
     onError: (e) => setMsg(e instanceof Error ? e.message : String(e)),
   });
 
@@ -74,7 +87,7 @@ function ProviderCard({
     mutationFn: () => api.deleteCredential(provider),
     onSuccess: () => {
       setApiKey("");
-      setMsg("Credential removed");
+      setMsg(t("common.delete"));
       invalidate();
     },
   });
@@ -82,12 +95,14 @@ function ProviderCard({
   return (
     <div className="card provider-card">
       <div className="provider-head">
-        <strong>{provider}</strong>
+        <strong>{title}</strong>
         <span className={conn?.configured ? "dot green" : "dot gray"} />
-        <span className="muted">{conn?.storage ?? "missing"}</span>
+        {/* 010-B 十：只显示状态，不显示任何凭据信息 */}
+        <span className="muted">{conn?.configured ? t("settings.configured") : t("settings.notConfigured")}</span>
       </div>
+      {local && <p className="muted">{t("settings.ollamaDesc")}</p>}
       <label className="field">
-        Base URL
+        {t("settings.baseUrl")}
         <input
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
@@ -96,21 +111,21 @@ function ProviderCard({
         />
       </label>
       <label className="field">
-        API Key
+        {t("settings.apiKey")}
         <input
           type="password"
           autoComplete="off"
           spellCheck={false}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          placeholder={conn?.configured ? "•••••••• (configured)" : "Enter API key"}
+          placeholder={t("settings.maskEmpty")}
         />
       </label>
       <div className="field">
-        Storage
+        {t("settings.storage")}
         <label className="seg">
           <button className={mode === "secure" ? "on" : ""} onClick={() => setMode("secure")}>
-            Save on this PC
+            {t("settings.saveOnThisPC")}
           </button>
           <button className={mode === "session" ? "on" : ""} onClick={() => setMode("session")}>
             Session only
@@ -119,7 +134,7 @@ function ProviderCard({
       </div>
       <div className="provider-actions">
         <button className="btn" disabled={test.isPending} onClick={() => test.mutate()}>
-          Test Connection
+          {t("settings.testConnection")}
         </button>
         <button
           className="btn btn-primary"
@@ -133,10 +148,10 @@ function ProviderCard({
             })
           }
         >
-          Save securely
+          {t("settings.saveSecurely")}
         </button>
         <button className="btn btn-danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
-          Remove
+          {t("common.delete")}
         </button>
       </div>
       {msg && <p className="msg">{msg}</p>}

@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { api } from "../api/client";
 import type { ApprovalView } from "../api/types";
+import { useI18n } from "../i18n";
 import { StatusBadge } from "./StatusBadge";
 
 export function ApprovalCard({
@@ -12,6 +13,7 @@ export function ApprovalCard({
   approval: ApprovalView;
   onDecision: () => void;
 }) {
+  const { t } = useI18n();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -23,7 +25,7 @@ export function ApprovalCard({
       await (decision === "approve"
         ? api.approve(approval.approval_id, reason || undefined)
         : api.reject(approval.approval_id, reason || undefined));
-      setMsg(decision === "approve" ? "Approved" : "Rejected by user");
+      setMsg(decision === "approve" ? t("ap.approved") : t("ap.rejected"));
       onDecision();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
@@ -49,15 +51,15 @@ export function ApprovalCard({
         <div className="approval-actions">
           <input
             type="text"
-            placeholder="Reason (optional)"
+            placeholder={t("ap.reasonPlaceholder")}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
           <button className="btn btn-danger" disabled={busy} onClick={() => decide("reject")}>
-            Reject
+            {t("ap.reject")}
           </button>
           <button className="btn btn-primary" disabled={busy} onClick={() => decide("approve")}>
-            Approve
+            {t("ap.approve")}
           </button>
         </div>
       )}

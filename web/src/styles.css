@@ -161,3 +161,45 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .radio { display: flex; gap: 8px; align-items: center; }
 .radio input { width: auto; }
 .filter-input { max-width: 420px; }
+
+/* 010-B 九：右上角语言切换 */
+.lang-switch {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  gap: 4px;
+  background: var(--bg, #111);
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 2px;
+}
+.lang-btn {
+  background: transparent;
+  border: none;
+  color: #999;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lang-btn.on { background: var(--accent, #2b6cff); color: #fff; }
+
+/* 010-B 五：Try Demo Mode 明显入口 */
+.demo-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.btn-demo {
+  background: linear-gradient(135deg, #2b6cff, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-demo:disabled { opacity: 0.5; cursor: not-allowed; }

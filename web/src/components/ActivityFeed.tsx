@@ -1,5 +1,6 @@
 // 活动流（010 十二）：结构化事件，只显示 Action/Tool/Decision/Status/Evidence/Result
 import type { RuntimeEvent } from "../api/types";
+import { useI18n } from "../i18n";
 
 const ICON: Record<string, string> = {
   planner: "🧭",
@@ -21,9 +22,10 @@ function time(ts: string): string {
 }
 
 export function ActivityFeed({ events }: { events: RuntimeEvent[] }) {
+  const { t } = useI18n();
   return (
     <div className="feed">
-      {events.length === 0 && <p className="muted">No activity yet.</p>}
+      {events.length === 0 && <p className="muted">{t("feed.noActivity")}</p>}
       {events.map((ev) => (
         <div key={ev.event_id} className="feed-item">
           <span className="feed-time">{time(ev.timestamp)}</span>

@@ -1,4 +1,5 @@
 // Settings/Connections 前端测试（010 四十九：Secret 表单）
+// i18n 默认中文（010-B 九）；provider 显示标题（OpenAI 兼容 / Ollama）
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -6,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
+import { I18nProvider } from "../i18n";
 import { Settings } from "./Settings";
 
 const qc = () =>
@@ -27,14 +29,19 @@ describe("Settings · Connections", () => {
     });
     render(
       <QueryClientProvider client={qc()}>
-        <MemoryRouter>
-          <Settings />
-        </MemoryRouter>
+        <I18nProvider>
+          <MemoryRouter>
+            <Settings />
+          </MemoryRouter>
+        </I18nProvider>
       </QueryClientProvider>,
     );
-    await waitFor(() => expect(screen.getByText("Connections")).toBeInTheDocument());
-    expect(screen.getByText("openai_compatible")).toBeInTheDocument();
-    expect(screen.getByText("ollama")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("连接")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("OpenAI 兼容")).toBeInTheDocument());
+    expect(screen.getByText("Ollama")).toBeInTheDocument();
+    // 安全显示：只显示状态，不显示 base_url / storage 细节
+    await waitFor(() => expect(screen.getByText("已配置")).toBeInTheDocument());
+    expect(screen.queryByText("http://127.0.0.1:11434")).not.toBeInTheDocument();
   });
 
   it("submits api key via password field and never stores it in the DOM", async () => {
@@ -49,16 +56,18 @@ describe("Settings · Connections", () => {
       .mockResolvedValue({ provider: "openai_compatible", configured: true });
     render(
       <QueryClientProvider client={qc()}>
-        <MemoryRouter>
-          <Settings />
-        </MemoryRouter>
+        <I18nProvider>
+          <MemoryRouter>
+            <Settings />
+          </MemoryRouter>
+        </I18nProvider>
       </QueryClientProvider>,
     );
     const keyInputs = await screen.findAllByLabelText("API Key");
     const keyInput = keyInputs[0];
     expect(keyInput.getAttribute("type")).toBe("password");
     await userEvent.type(keyInput, "SK-PLACEHOLDER-test-value");
-    await userEvent.click(screen.getAllByRole("button", { name: /Save securely/ })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: /安全保存/ })[0]);
     await waitFor(() => expect(save).toHaveBeenCalled());
     // 提交后表单清空（不残留 Secret 值）
     await waitFor(() => expect((keyInput as HTMLInputElement).value).toBe(""));

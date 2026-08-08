@@ -1,15 +1,5 @@
 // 工作流时间线（010 十部分）：Goal→Clarification→Planning→Research→Execution→Approval→Testing→Review→Completed
-const STAGES = [
-  { id: "goal", label: "Goal" },
-  { id: "clarification", label: "Clarification" },
-  { id: "planning", label: "Planning" },
-  { id: "research", label: "Research" },
-  { id: "execution", label: "Execution" },
-  { id: "approval", label: "Approval" },
-  { id: "testing", label: "Testing" },
-  { id: "review", label: "Review" },
-  { id: "completed", label: "Completed" },
-];
+import { useI18n } from "../i18n";
 
 function stageState(index: number, status: string): string {
   if (status === "completed" || status === "passed") return "done";
@@ -35,6 +25,18 @@ function statusToIndex(status: string): number {
 }
 
 export function Timeline({ status }: { status: string }) {
+  const { t } = useI18n();
+  const STAGES = [
+    { id: "goal", label: t("tl.goal") },
+    { id: "clarification", label: t("tl.clarification") },
+    { id: "planning", label: t("tl.planning") },
+    { id: "research", label: t("tl.research") },
+    { id: "execution", label: t("tl.execution") },
+    { id: "approval", label: t("tl.approval") },
+    { id: "testing", label: t("tl.testing") },
+    { id: "review", label: t("tl.review") },
+    { id: "completed", label: t("tl.completed") },
+  ];
   return (
     <div className="timeline">
       {STAGES.map((s, i) => {

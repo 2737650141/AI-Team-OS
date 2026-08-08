@@ -3,39 +3,41 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { useI18n } from "../i18n";
 
 export function Tools() {
+  const { t } = useI18n();
   const tools = useQuery({ queryKey: ["tools"], queryFn: api.tools });
   return (
     <div className="page">
-      <h1>Tools</h1>
+      <h1>{t("tools.title")}</h1>
       <div className="card">
         <table className="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Description</th>
-              <th>Risk</th>
-              <th>Read Only</th>
+              <th>{t("tools.name")}</th>
+              <th>{t("tools.description")}</th>
+              <th>{t("tools.risk")}</th>
+              <th>{t("tools.readOnly")}</th>
             </tr>
           </thead>
           <tbody>
-            {(tools.data ?? []).map((t) => (
-              <tr key={t.name}>
+            {(tools.data ?? []).map((tool) => (
+              <tr key={tool.name}>
                 <td>
-                  <code>{t.name}</code>
+                  <code>{tool.name}</code>
                 </td>
-                <td>{t.description}</td>
+                <td>{tool.description}</td>
                 <td>
-                  <StatusBadge status={(t.risk_level ?? "low").toLowerCase()} />
+                  <StatusBadge status={(tool.risk_level ?? "low").toLowerCase()} />
                 </td>
-                <td>{t.read_only ? "yes" : "no"}</td>
+                <td>{tool.read_only ? "yes" : "no"}</td>
               </tr>
             ))}
             {(tools.data ?? []).length === 0 && (
               <tr>
                 <td colSpan={4} className="muted">
-                  No tools registered.
+                  {t("tools.empty")}
                 </td>
               </tr>
             )}

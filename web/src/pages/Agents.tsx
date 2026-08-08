@@ -3,12 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { useI18n } from "../i18n";
 
 export function Agents() {
+  const { t } = useI18n();
   const agents = useQuery({ queryKey: ["agents"], queryFn: api.agents });
   return (
     <div className="page">
-      <h1>Agents</h1>
+      <h1>{t("agents.title")}</h1>
       <div className="agent-grid">
         {(agents.data ?? []).map((a) => (
           <div key={a.agent_id} className="card agent-card">
@@ -21,7 +23,7 @@ export function Agents() {
               token limit: {a.token_limit} · tools: {a.allowed_tools.length}
             </span>
             <details>
-              <summary>Allowed tools</summary>
+              <summary>{t("agents.allowedTools")}</summary>
               <ul>
                 {a.allowed_tools.map((t) => (
                   <li key={t}>{t}</li>

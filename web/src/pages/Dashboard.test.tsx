@@ -1,4 +1,5 @@
 // Dashboard 组件测试（010 四十八：Dashboard / Task creation / Secret form）
+// i18n 默认中文（010-B 九）：断言使用中文文案
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -6,6 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
+import { I18nProvider } from "../i18n";
 import { Dashboard } from "./Dashboard";
 
 const qc = () =>
@@ -16,9 +18,11 @@ const qc = () =>
 function renderDashboard() {
   return render(
     <QueryClientProvider client={qc()}>
-      <MemoryRouter>
-        <Dashboard />
-      </MemoryRouter>
+      <I18nProvider>
+        <MemoryRouter>
+          <Dashboard />
+        </MemoryRouter>
+      </I18nProvider>
     </QueryClientProvider>,
   );
 }
@@ -47,10 +51,10 @@ describe("Dashboard", () => {
       agent_team: [],
     });
     renderDashboard();
-    // 等待数据渲染（health 值经 StatusBadge 转小写，多个 online 状态）
-    await waitFor(() => expect(screen.getAllByText("online").length).toBeGreaterThan(0));
-    expect(screen.getByText("System Health")).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
+    // 等待数据渲染（health 值经 StatusBadge 翻译为中文）
+    await waitFor(() => expect(screen.getAllByText("在线").length).toBeGreaterThan(0));
+    expect(screen.getByText("系统健康")).toBeInTheDocument();
+    expect(screen.getByText("进行中")).toBeInTheDocument();
   });
 
   it("creates a task and navigates to detail", async () => {
@@ -68,10 +72,10 @@ describe("Dashboard", () => {
       .mockResolvedValue({ run_id: "run123", task_id: "t1", status: "paused" });
     renderDashboard();
     await userEvent.type(
-      screen.getByPlaceholderText("What do you want the AI team to do?"),
+      screen.getByPlaceholderText("你想让 AI 团队做什么？"),
       "hello world",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Start Task" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始任务" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ goal: "hello world", model_mode: "fake" })));
   });
 });

@@ -3,8 +3,10 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
+import { useI18n } from "../i18n";
 
 export function Setup() {
+  const { t } = useI18n();
   const [step, setStep] = useState(1);
   const [provider, setProvider] = useState("openai_compatible");
   const [baseUrl, setBaseUrl] = useState("");
@@ -21,7 +23,7 @@ export function Setup() {
         local_provider: provider === "ollama",
       });
       setApiKey("");
-      setMsg("Saved");
+      setMsg(t("settings.saved"));
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     }
@@ -32,18 +34,27 @@ export function Setup() {
       // 先保存当前表单（否则 Test 拿不到刚输入的 Key，sa_20260808_120531）
       if (baseUrl || apiKey) await save();
       const r = await api.testConnection(provider);
-      setTestMsg(`Test: ${r.status}`);
+      setTestMsg(`${t("settings.testPrefix")}: ${r.status}`);
     } catch (e) {
       setTestMsg(e instanceof Error ? e.message : String(e));
     }
   };
 
+  const STEPS = [
+    t("setup.stepProvider"),
+    t("setup.stepConnection"),
+    t("setup.stepTest"),
+    t("setup.stepModels"),
+    t("setup.stepGithub"),
+    t("setup.stepDone"),
+  ];
+
   return (
     <div className="page narrow">
-      <h1>Welcome to AI Team OS</h1>
-      <p className="muted">No API key required — you can always try Demo Mode.</p>
+      <h1>{t("setup.welcome")}</h1>
+      <p className="muted">{t("setup.noKeyRequired")}</p>
       <div className="steps">
-        {["Provider", "Connection", "Test", "Models", "GitHub", "Done"].map((s, i) => (
+        {STEPS.map((s, i) => (
           <span key={s} className={i + 1 === step ? "step on" : i + 1 < step ? "step done" : "step"}>
             {s}
           </span>
@@ -52,7 +63,7 @@ export function Setup() {
 
       {step === 1 && (
         <div className="card">
-          <h2>Step 1 · Model Provider</h2>
+          <h2>{t("setup.step1Title")}</h2>
           {(["openai_compatible", "ollama"] as const).map((p) => (
             <label key={p} className="radio">
               <input
@@ -60,20 +71,20 @@ export function Setup() {
                 checked={provider === p}
                 onChange={() => setProvider(p)}
               />
-              {p === "openai_compatible" ? "OpenAI Compatible" : "Ollama (local, no key)"}
+              {p === "openai_compatible" ? t("setup.openaiCompatible") : t("setup.ollamaLocal")}
             </label>
           ))}
           <button className="btn btn-primary" onClick={() => setStep(2)}>
-            Next
+            {t("setup.next")}
           </button>
         </div>
       )}
 
       {step === 2 && (
         <div className="card">
-          <h2>Step 2 · API Connection</h2>
+          <h2>{t("setup.step2Title")}</h2>
           <label className="field">
-            Base URL
+            {t("settings.baseUrl")}
             <input
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -82,7 +93,7 @@ export function Setup() {
           </label>
           {provider !== "ollama" && (
             <label className="field">
-              API Key
+              {t("settings.apiKey")}
               <input
                 type="password"
                 autoComplete="off"
@@ -93,56 +104,56 @@ export function Setup() {
             </label>
           )}
           <button className="btn btn-primary" onClick={() => setStep(3)}>
-            Next
+            {t("setup.next")}
           </button>
         </div>
       )}
 
       {step === 3 && (
         <div className="card">
-          <h2>Step 3 · Test Connection</h2>
+          <h2>Step 3 · {t("setup.stepTest")}</h2>
           <button className="btn" onClick={test}>
-            Test
+            {t("settings.testConnection")}
           </button>
           {testMsg && <p className="msg">{testMsg}</p>}
           <button className="btn btn-primary" onClick={save}>
-            Save
+            {t("common.save")}
           </button>
           {msg && <p className="msg">{msg}</p>}
           <button className="btn" onClick={() => setStep(4)}>
-            Next
+            {t("setup.next")}
           </button>
         </div>
       )}
 
       {step === 4 && (
         <div className="card">
-          <h2>Step 4 · Models</h2>
-          <p className="muted">Use default model for all roles (per-role config coming in UI).</p>
+          <h2>Step 4 · {t("setup.stepModels")}</h2>
+          <p className="muted">{t("setup.modelsHint")}</p>
           <button className="btn btn-primary" onClick={() => setStep(5)}>
-            Next
+            {t("setup.next")}
           </button>
         </div>
       )}
 
       {step === 5 && (
         <div className="card">
-          <h2>Step 5 · GitHub (optional)</h2>
-          <p className="muted">Skip for now — can be added later in Settings → Connections.</p>
+          <h2>Step 5 · {t("setup.stepGithub")} ({t("setup.optional")})</h2>
+          <p className="muted">{t("setup.githubHint")}</p>
           <button className="btn btn-primary" onClick={() => setStep(6)}>
-            Next
+            {t("setup.next")}
           </button>
         </div>
       )}
 
       {step === 6 && (
         <div className="card">
-          <h2>Done</h2>
+          <h2>{t("setup.stepDone")}</h2>
           <Link className="btn btn-primary" to="/">
-            Start AI Team OS
+            {t("setup.start")}
           </Link>
-          <Link className="btn" to="/tasks">
-            Try Demo Mode
+          <Link className="btn" to="/">
+            {t("setup.tryDemo")}
           </Link>
         </div>
       )}

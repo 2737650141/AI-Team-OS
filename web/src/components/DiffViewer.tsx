@@ -1,6 +1,8 @@
 // Diff 查看器（010 十七/十三）：Unified/Split；逐行渲染，不用整段 <pre> 展示
 import { useMemo, useState } from "react";
 
+import { useI18n } from "../i18n";
+
 interface Line {
   kind: "ctx" | "add" | "del" | "hunk";
   text: string;
@@ -39,6 +41,7 @@ function parseDiff(diff: string): Line[] {
 }
 
 export function DiffViewer({ diff, files }: { diff: string; files?: string[] }) {
+  const { t } = useI18n();
   const [mode, setMode] = useState<"unified" | "split">("unified");
   const lines = useMemo(() => parseDiff(diff || ""), [diff]);
   const stats = useMemo(() => {
@@ -61,10 +64,10 @@ export function DiffViewer({ diff, files }: { diff: string; files?: string[] }) 
         </div>
         <div className="seg">
           <button className={mode === "unified" ? "on" : ""} onClick={() => setMode("unified")}>
-            Unified
+            {t("diff.unified")}
           </button>
           <button className={mode === "split" ? "on" : ""} onClick={() => setMode("split")}>
-            Split
+            {t("diff.split")}
           </button>
         </div>
       </div>

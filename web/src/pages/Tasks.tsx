@@ -4,44 +4,46 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { useI18n } from "../i18n";
 
 export function Tasks() {
+  const { t } = useI18n();
   const nav = useNavigate();
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks, refetchInterval: 3000 });
   return (
     <div className="page">
-      <h1>Tasks</h1>
+      <h1>{t("tasksPage.title")}</h1>
       <div className="card">
         <table className="table">
           <thead>
             <tr>
-              <th>Run ID</th>
-              <th>Goal</th>
-              <th>Status</th>
-              <th>Mode</th>
-              <th>Tokens</th>
-              <th>Cost</th>
+              <th>{t("tasksPage.runId")}</th>
+              <th>{t("tasksPage.goal")}</th>
+              <th>{t("tasksPage.status")}</th>
+              <th>{t("tasksPage.mode")}</th>
+              <th>{t("tasksPage.tokens")}</th>
+              <th>{t("tasksPage.cost")}</th>
             </tr>
           </thead>
           <tbody>
-            {(tasks.data ?? []).map((t) => (
-              <tr key={t.run_id} className="clickable" onClick={() => nav(`/tasks/${t.run_id}`)}>
+            {(tasks.data ?? []).map((tr) => (
+              <tr key={tr.run_id} className="clickable" onClick={() => nav(`/tasks/${tr.run_id}`)}>
                 <td>
-                  <code>{t.run_id}</code>
+                  <code>{tr.run_id}</code>
                 </td>
-                <td>{t.goal}</td>
+                <td>{tr.goal}</td>
                 <td>
-                  <StatusBadge status={t.status} />
+                  <StatusBadge status={tr.status} />
                 </td>
-                <td>{t.model_mode}</td>
-                <td>{t.tokens}</td>
-                <td>${t.cost.toFixed(4)}</td>
+                <td>{tr.model_mode}</td>
+                <td>{tr.tokens}</td>
+                <td>${tr.cost.toFixed(4)}</td>
               </tr>
             ))}
             {(tasks.data ?? []).length === 0 && (
               <tr>
                 <td colSpan={6} className="muted">
-                  No tasks yet.
+                  {t("dash.noTasks")}
                 </td>
               </tr>
             )}

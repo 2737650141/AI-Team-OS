@@ -11,8 +11,10 @@ import { PlanPanel } from "../components/PlanPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { Timeline } from "../components/Timeline";
 import { useEvents } from "../hooks/useEvents";
+import { useI18n } from "../i18n";
 
 export function TaskDetail() {
+  const { t } = useI18n();
   const { runId = "" } = useParams();
   const [refresh, setRefresh] = useState(0);
   const task = useQuery({
@@ -44,12 +46,16 @@ export function TaskDetail() {
     }
   }, [task.data?.current_status]);
 
-  if (task.isLoading) return <div className="page">Loading task…</div>;
+  if (task.isLoading) return <div className="page">{t("task.loading")}</div>;
   if (task.isError)
-    return <div className="page">Task Failed · {(task.error as Error).message}</div>;
+    return (
+      <div className="page">
+        {t("task.taskFailed")} · {(task.error as Error).message}
+      </div>
+    );
 
-  const t = task.data;
-  if (!t) return <div className="page">Loading task…</div>;
+  const taskData = task.data;
+  if (!taskData) return <div className="page">{t("task.loading")}</div>;
   const testArtifact = (artifacts.data ?? []).find((a) => a.artifact_type === "test_report");
 
   return (
@@ -57,38 +63,39 @@ export function TaskDetail() {
       {/* Header（010 9.1） */}
       <div className="card">
         <div className="task-header">
-          <h1>{t.goal}</h1>
-          <StatusBadge status={t.current_status} />
+          <h1>{taskData.goal}</h1>
+          <StatusBadge status={taskData.current_status} />
         </div>
         <div className="task-meta muted">
-          Run ID: {t.run_id} · Task: {t.task_id} · Mode: {t.model_mode} · Budget:{" "}
-          {t.token_budget} tok / ${t.cost_budget}
-          {connected && <span className="live">● live</span>}
+          {t("task.runId")}: {taskData.run_id} · {t("task.task")}: {taskData.task_id} ·{" "}
+          {t("task.mode")}: {taskData.model_mode} · {t("task.budget")}: {taskData.token_budget}{" "}
+          tok / ${taskData.cost_budget}
+          {connected && <span className="live">● {t("task.live")}</span>}
         </div>
       </div>
 
       {/* Timeline（010 十） */}
       <div className="card">
-        <h2>Workflow</h2>
-        <Timeline status={t.current_status} />
+        <h2>{t("task.workflow")}</h2>
+        <Timeline status={taskData.current_status} />
       </div>
 
       {/* Plan（010 十一） */}
       <div className="card">
-        <h2>Plan</h2>
-        <PlanPanel subtasks={t.subtasks ?? []} />
+        <h2>{t("task.plan")}</h2>
+        <PlanPanel subtasks={taskData.subtasks ?? []} />
       </div>
 
       {/* Activity Feed（010 十二） */}
       <div className="card">
-        <h2>Activity</h2>
+        <h2>{t("task.activity")}</h2>
         <ActivityFeed events={events} />
       </div>
 
       {/* Approval（010 十六/十八） */}
       {(approvals.data ?? []).length > 0 && (
         <div className="card">
-          <h2>Approvals</h2>
+          <h2>{t("task.approvals")}</h2>
           {(approvals.data ?? []).map((a) => (
             <ApprovalCard
               key={a.approval_id}
@@ -102,7 +109,7 @@ export function TaskDetail() {
       {/* Diff（010 十七） */}
       {diff.data?.diff && (
         <div className="card">
-          <h2>Diff</h2>
+          <h2>{t("task.diff")}</h2>
           <DiffViewer diff={diff.data.diff} files={diff.data.files} />
         </div>
       )}
@@ -110,25 +117,32 @@ export function TaskDetail() {
       {/* Tests（010 十九） */}
       {testArtifact && (
         <div className="card">
-          <h2>Tests</h2>
+          <h2>{t("task.tests")}</h2>
           <p>
             pytest · <StatusBadge status={testArtifact.artifact_type} />
-            <span className="muted"> artifact {testArtifact.artifact_id}</span>
+            <span className="muted">
+              {" "}
+              {t("task.artifact")} {testArtifact.artifact_id}
+            </span>
           </p>
         </div>
       )}
 
       {/* Reviewer（010 二十） */}
       <div className="card">
-        <h2>Reviewer</h2>
-        {t.rework_count > 0 && <p>Rework #{t.rework_count}</p>}
-        {t.current_status === "completed" && <p className="green">Review passed — task completed.</p>}
+        <h2>{t("task.reviewer")}</h2>
+        {taskData.rework_count > 0 && (
+          <p>
+            {t("task.rework")} {taskData.rework_count}
+          </p>
+        )}
+        {taskData.current_status === "completed" && <p className="green">{t("task.reviewPassed")}</p>}
       </div>
 
       {/* Evidence（010 二十一） */}
       <div className="card">
-        <h2>Evidence</h2>
-        {(evidence.data ?? []).length === 0 && <p className="muted">No evidence.</p>}
+        <h2>{t("task.evidence")}</h2>
+        {(evidence.data ?? []).length === 0 && <p className="muted">{t("task.noEvidence")}</p>}
         {(evidence.data ?? []).map((e) => (
           <div key={e.evidence_id} className="evidence-row">
             <code>{e.evidence_id}</code> <span>{e.title}</span>{" "}
@@ -138,7 +152,7 @@ export function TaskDetail() {
           </div>
         ))}
       </div>
-
     </div>
   );
 }
+

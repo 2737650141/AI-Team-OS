@@ -1,4 +1,6 @@
-// 状态徽章（010 十：gray/blue/yellow/green/red）
+// 状态徽章（010 十：gray/blue/yellow/green/red）；显示文案随语言切换（010-B 九）
+import { useI18n } from "../i18n";
+
 const MAP: Record<string, string> = {
   pending: "badge-gray",
   running: "badge-blue",
@@ -16,5 +18,7 @@ const MAP: Record<string, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  return <span className={`badge ${MAP[status] ?? "badge-gray"}`}>{status}</span>;
+  const { t } = useI18n();
+  const label = t(`st.${status}`);
+  return <span className={`badge ${MAP[status] ?? "badge-gray"}`}>{label === `st.${status}` ? status : label}</span>;
 }

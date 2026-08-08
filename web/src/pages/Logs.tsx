@@ -2,10 +2,11 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../api/client";
-import { subscribeEvents } from "../api/client";
+import { api, subscribeEvents } from "../api/client";
+import { useI18n } from "../i18n";
 
 export function Logs() {
+  const { t } = useI18n();
   const [events, setEvents] = useState<import("../api/types").RuntimeEvent[]>([]);
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
   const firstRun = (tasks.data ?? [])[0]?.run_id;
@@ -39,11 +40,11 @@ export function Logs() {
 
   return (
     <div className="page">
-      <h1>Logs</h1>
+      <h1>{t("logs.title")}</h1>
       <div className="card">
         <input
           className="filter-input"
-          placeholder="Filter: event type / actor / text"
+          placeholder={t("logs.filterPlaceholder")}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -56,7 +57,7 @@ export function Logs() {
               <span className="feed-summary">{e.summary}</span>
             </div>
           ))}
-          {filtered.length === 0 && <p className="muted">No events (SSE live tail).</p>}
+          {filtered.length === 0 && <p className="muted">{t("logs.noEvents")}</p>}
         </div>
       </div>
     </div>

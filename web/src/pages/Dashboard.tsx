@@ -1,12 +1,15 @@
 // Dashboard（010 七/八）：System Health + Metrics + New Task + Recent Tasks + Agent Team
+// 010-B 五：提供明显 Demo 入口（Try Demo Mode）；010-B 九：i18n
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../api/client";
 import { StatusBadge } from "../components/StatusBadge";
+import { useI18n } from "../i18n";
 
 export function Dashboard() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const nav = useNavigate();
   const dash = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 3000 });
@@ -28,12 +31,12 @@ export function Dashboard() {
 
   return (
     <div className="page">
-      <h1>Dashboard</h1>
+      <h1>{t("dash.title")}</h1>
       {/* New Task（010 八/二十三） */}
       <div className="card new-task">
         <input
           className="goal-input"
-          placeholder="What do you want the AI team to do?"
+          placeholder={t("dash.placeholder")}
           value={goal}
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
@@ -45,10 +48,10 @@ export function Dashboard() {
         <div className="new-task-row">
           <label className="seg">
             <button className={mode === "fake" ? "on" : ""} onClick={() => setMode("fake")}>
-              Demo
+              {t("dash.demo")}
             </button>
             <button className={mode === "real" ? "on" : ""} onClick={() => setMode("real")}>
-              Real
+              {t("dash.real")}
             </button>
           </label>
           <button
@@ -58,13 +61,30 @@ export function Dashboard() {
               create.mutate({ goal, model_mode: mode, project_alias: project || undefined })
             }
           >
-            Start Task
+            {t("dash.startTask")}
           </button>
         </div>
+        {/* 010-B 五：明显 Demo 入口 */}
+        <div className="demo-entry">
+          <button
+            className="btn btn-demo"
+            disabled={create.isPending}
+            onClick={() =>
+              create.mutate({
+                goal: "sandbox_code_fix",
+                model_mode: "fake",
+                project_alias: project || "sample-python",
+              })
+            }
+          >
+            🚀 Try Demo Mode
+          </button>
+          <span className="muted">{t("dash.demoHint")}</span>
+        </div>
         <details open={showAdvanced} onToggle={(e) => setShowAdvanced(e.currentTarget.open)}>
-          <summary>Advanced</summary>
+          <summary>{t("dash.advanced")}</summary>
           <label className="field">
-            Project
+            {t("dash.project")}
             <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="sample-python" />
           </label>
         </details>
@@ -73,7 +93,7 @@ export function Dashboard() {
 
       {/* System Health（010 八） */}
       <div className="card">
-        <h2>System Health</h2>
+        <h2>{t("dash.systemHealth")}</h2>
         <div className="health-grid">
           {data
             ? Object.entries(data.system).map(([k, v]) => (
@@ -82,56 +102,56 @@ export function Dashboard() {
                   <StatusBadge status={v.toLowerCase()} />
                 </div>
               ))
-            : "Loading…"}
+            : t("dash.loading")}
         </div>
       </div>
 
       {/* Metrics（010 八） */}
       <div className="card">
-        <h2>Metrics</h2>
+        <h2>{t("dash.metrics")}</h2>
         {data && (
           <div className="metrics-grid">
-            <Metric label="Active" value={data.metrics.active_tasks} />
-            <Metric label="Completed" value={data.metrics.completed_tasks} />
-            <Metric label="Failed" value={data.metrics.failed_tasks} />
-            <Metric label="Pending Approvals" value={data.metrics.pending_approvals} />
-            <Metric label="Evidence" value={data.metrics.evidence_count} />
-            <Metric label="Tool Calls" value={data.metrics.tool_calls} />
-            <Metric label="Tokens" value={data.metrics.tokens} />
-            <Metric label="Cost" value={`$${data.metrics.cost.toFixed(4)}`} />
+            <Metric label={t("dash.active")} value={data.metrics.active_tasks} />
+            <Metric label={t("dash.completed")} value={data.metrics.completed_tasks} />
+            <Metric label={t("dash.failed")} value={data.metrics.failed_tasks} />
+            <Metric label={t("dash.pendingApprovals")} value={data.metrics.pending_approvals} />
+            <Metric label={t("dash.evidence")} value={data.metrics.evidence_count} />
+            <Metric label={t("dash.toolCalls")} value={data.metrics.tool_calls} />
+            <Metric label={t("dash.tokens")} value={data.metrics.tokens} />
+            <Metric label={t("dash.cost")} value={`$${data.metrics.cost.toFixed(4)}`} />
           </div>
         )}
       </div>
 
       {/* Recent Tasks（010 八） */}
       <div className="card">
-        <h2>Recent Tasks</h2>
+        <h2>{t("dash.recentTasks")}</h2>
         <table className="table">
           <thead>
             <tr>
-              <th>Goal</th>
-              <th>Status</th>
-              <th>Model</th>
-              <th>Tokens</th>
-              <th>Cost</th>
+              <th>{t("dash.goal")}</th>
+              <th>{t("dash.status")}</th>
+              <th>{t("dash.model")}</th>
+              <th>{t("dash.tokens")}</th>
+              <th>{t("dash.cost")}</th>
             </tr>
           </thead>
           <tbody>
-            {(data?.recent_tasks ?? []).map((t) => (
-              <tr key={t.run_id} onClick={() => nav(`/tasks/${t.run_id}`)} className="clickable">
-                <td>{t.goal}</td>
+            {(data?.recent_tasks ?? []).map((tr) => (
+              <tr key={tr.run_id} onClick={() => nav(`/tasks/${tr.run_id}`)} className="clickable">
+                <td>{tr.goal}</td>
                 <td>
-                  <StatusBadge status={t.status} />
+                  <StatusBadge status={tr.status} />
                 </td>
-                <td>{t.model_mode}</td>
-                <td>{t.tokens}</td>
-                <td>${t.cost.toFixed(4)}</td>
+                <td>{tr.model_mode}</td>
+                <td>{tr.tokens}</td>
+                <td>${tr.cost.toFixed(4)}</td>
               </tr>
             ))}
             {(data?.recent_tasks ?? []).length === 0 && (
               <tr>
                 <td colSpan={5} className="muted">
-                  No tasks yet — try the demo.
+                  {t("dash.noTasks")}
                 </td>
               </tr>
             )}
@@ -141,14 +161,16 @@ export function Dashboard() {
 
       {/* Agent Team（010 八） */}
       <div className="card">
-        <h2>Agent Team</h2>
+        <h2>{t("dash.agentTeam")}</h2>
         <div className="agent-grid">
           {(data?.agent_team ?? []).map((a) => (
             <div key={a.role} className="agent-card">
               <strong>{a.role}</strong>
               <StatusBadge status={a.status} />
               <span className="muted">{a.model}</span>
-              <span className="muted">{a.tokens} tokens</span>
+              <span className="muted">
+                {a.tokens} {t("dash.tokenUnit")}
+              </span>
             </div>
           ))}
         </div>
