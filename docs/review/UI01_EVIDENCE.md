@@ -74,7 +74,15 @@ tools / evidence / settings / memory（9 张，无 Secret/真实敏感文件）
 
 ## 十一、双重审查
 
-（最终验证后填写：普通 review + security review 结论）
+- 普通 review（sa_20260808_120531，2 轮）：第 1 轮 3 blocking（SSE 命名事件不达
+  客户端、sync generator 热循环、replay 未实现）+ 3 should-fix（resolver env
+  别名、subtask 字段映射、Setup 先保存）+ nits；第 2 轮发现 SSE 终态重连循环
+  should-fix → 全部修复（4538b7a / f021041：默认 message 帧、time.sleep 节流、
+  ?after= replay、终态完整形状 + 客户端 es.close()）。复查 verdict=pass。
+- security_review（sa_20260808_122950，2 轮）：无 HIGH/MEDIUM；4 LOW 全部处理
+  ——zip 名称级排除（.env*/*.pem/*.key/…）、loopback bind guard（__main__ 拒绝
+  非回环 host）、已知 LOW 记录（DNS-rebinding TOCTOU、SSE 每流占用线程池线程）。
+  复查 verdict=pass。
 
 ## 十二、已知限制
 
@@ -83,7 +91,18 @@ tools / evidence / settings / memory（9 张，无 Secret/真实敏感文件）
 - 真实 Provider 健康检查在无凭据时不可测（Test Connection 显示状态映射）。
 - M4 Memory 仅占位；未实现长期保存。
 - E2E 覆盖 demo 主流程；更多场景（rework/UI-07 reject 文件不变）由 component/API 测试覆盖。
+- SSE sync generator 每连接占用一个线程池线程（任务终态自动关闭）；并发连接数高时
+  需改 async 实现（已知 LOW）。
+- test_connection 存在 DNS-rebinding TOCTOU（校验与连接分离解析），本地单用户场景
+  风险可接受（已知 LOW）。
 
 ## 十三、最终验证
 
-（封板时填写：pytest/ruff/mypy + typecheck/lint/test/build + git status/remote）
+- pytest：321 passed + 2 skipped（最后提交 c5488dc 后）。
+- ruff check/format --check（app tests scripts）：全绿 95 文件。
+- mypy app：55 source files no issues。
+- Frontend：typecheck ✓ / lint ✓ / Vitest 4 passed / build ✓（dist 241KB / gzip 75KB）。
+- E2E：Playwright 1 passed（demo lifecycle：创建→Approval→Approve→Completed→刷新恢复）。
+- git status 干净；无 remote；未 push；git diff --check 通过。
+- 证据包：artifacts/review/ui01-source.zip（敏感扫描 clean）。
+- 截图：artifacts/demo/ui/ 9 张（E2E 复跑后刷新）。
