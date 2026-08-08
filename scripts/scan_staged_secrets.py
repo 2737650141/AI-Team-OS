@@ -12,24 +12,35 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app.core.secrets import SECRET_PATTERNS, redact
+from app.core.secrets import SECRET_PATTERNS
 
 ROOT = Path(__file__).resolve().parent.parent
 
 # 明确测试前缀豁免（008 2.7-6）：测试假密钥必须使用这些前缀，扫描放行
-EXEMPT_PREFIXES = (re.compile(r"SK-PLACEHOLDER", re.I), re.compile(r"TEST-TOKEN-"))
+EXEMPT_PREFIXES = ("SK-PLACEHOLDER", "TEST-TOKEN-")  # 前缀锚定（值起点）
 
 
 def _is_exempt_token(matched: str) -> bool:
-    """豁免仅当匹配区域本身含测试前缀（防止 '# SK-PLACEHOLDER' 注释掩护真实密钥）。"""
-    return any(p.search(matched) for p in EXEMPT_PREFIXES)
+    """豁免仅当匹配**值**以测试前缀开头（前缀锚定，非子串搜索）。
+
+    防止 `sk-<real>SK-PLACEHOLDER`（嵌入标记）绕过（sa_20260808_100103 LOW-1）。
+    """
+    val = matched.split("=", 1)[-1].strip("'\" \t")
+    up = val.upper()
+    return up.startswith("SK-PLACEHOLDER") or up.startswith("TEST-TOKEN-")
+
+
+def _fingerprint(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 def scan_text(text: str) -> list[str]:
     """逐行扫描 + 整段 DOTALL 扫描（多行 PEM 私钥）。
 
-    命中秘密模式且匹配区域不含测试前缀豁免 → 报告（报告行内容经 redact 脱敏，
-    绝不回显凭据原文，SEC-01 原则）。空列表 = 干净。
+    命中秘密模式且匹配值不含测试前缀豁免 → 报告（只报模式 + 内容 sha256 指纹，
+    绝不回显凭据原文，sa_20260808_100103 LOW-2）。空列表 = 干净。
     """
     hits: list[str] = []
     for line in text.splitlines():
@@ -38,7 +49,7 @@ def scan_text(text: str) -> list[str]:
                 continue  # 多行模式在整段扫描处理
             m = pat.search(line)
             if m and not _is_exempt_token(m.group(0)):
-                hits.append(f"{pat.pattern[:50]} in: {redact(line)[:40]}")
+                hits.append(f"{pat.pattern[:50]} matched (sha256:{_fingerprint(line)})")
                 break
     # 多行模式（PEM 私钥整块）对整段文本匹配；豁免按匹配内容判断
     for pat in SECRET_PATTERNS:
@@ -46,7 +57,7 @@ def scan_text(text: str) -> list[str]:
             continue
         m = pat.search(text)
         if m and not _is_exempt_token(m.group(0)):
-            hits.append(f"{pat.pattern[:50]} matched (multiline block)")
+            hits.append(f"{pat.pattern[:50]} matched multiline (sha256:{_fingerprint(text)})")
     return hits
 
 

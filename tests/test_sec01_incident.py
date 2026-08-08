@@ -83,9 +83,12 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     # HIGH 修复（sa_20260808_095002）：'# SK-PLACEHOLDER' 注释不得掩护真实密钥
     sneaky = 'api_key="' + "sk-" + "b" * 30 + '"  # SK-PLACEHOLDER'
     assert len(mod.scan_text(sneaky)) >= 1
-    # MEDIUM（sa_20260808_095532）：报告内容脱敏——不包含真实密钥原文
+    # LOW（sa_20260808_100103）：嵌入 SK-PLACEHOLDER 的真实密钥（值不以测试前缀开头）仍阻塞
+    embedded = "sk-" + "a" * 20 + "SK-PLACEHOLDER"
+    assert len(mod.scan_text(embedded)) >= 1
+    # MEDIUM（sa_20260808_095532）：报告只含指纹——不包含真实密钥原文
     report = mod.scan_text('k = "' + "sk-" + "c" * 30 + '"')
-    assert report and "c" * 30 not in report[0]
+    assert report and "c" * 30 not in report[0] and "sha256:" in report[0]
     # MEDIUM：多行 PEM 私钥命中（整段 DOTALL 扫描；拼接避免完整标记入 staged diff）
     pem = (
         "-----BEGIN "
