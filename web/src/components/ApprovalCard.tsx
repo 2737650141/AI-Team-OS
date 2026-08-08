@@ -37,7 +37,7 @@ export function ApprovalCard({
       <div className="approval-head">
         <StatusBadge status={approval.status} />
         <strong>{approval.action_type}</strong>
-        <span className="risk risk-{approval.risk_level}">{approval.risk_level}</span>
+        <span className={`risk risk-${approval.risk_level}`}>{approval.risk_level}</span>
       </div>
       <p className="muted">{approval.summary}</p>
       <div className="tags">

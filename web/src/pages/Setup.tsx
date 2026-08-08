@@ -29,6 +29,8 @@ export function Setup() {
 
   const test = async () => {
     try {
+      // 先保存当前表单（否则 Test 拿不到刚输入的 Key，sa_20260808_120531）
+      if (baseUrl || apiKey) await save();
       const r = await api.testConnection(provider);
       setTestMsg(`Test: ${r.status}`);
     } catch (e) {

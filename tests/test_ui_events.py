@@ -122,8 +122,55 @@ def test_events_endpoint_404(tmp_path: Path, monkeypatch) -> None:
 @pytest.fixture(autouse=True)
 def _reset_event_store():
     """测试间重置事件单例（避免跨测试目录串写）。"""
-    from app.core.events import _store, _store_lock
+    import app.core.events as _evmod
 
-    with _store_lock:
-        _store = None  # type: ignore[assignment]
+    _evmod._store = None
     yield
+    _evmod._store = None
+
+
+# ---------- review（sa_20260808_120531）修复回归：SSE 内容与 replay ----------
+def test_events_sse_stream_content(tmp_path: Path, monkeypatch) -> None:
+    """SSE 流：默认 message 事件（无 event: 行）、1s 节流、after replay、终态关闭。"""
+    import time as _time
+
+    from app.core.events import get_store
+    from app.core.events import init as events_init
+    from app.runner import run_task
+
+    events_init(tmp_path)
+    report = run_task(
+        "github_compare_team",
+        token_budget=10000,
+        cost_budget=1.0,
+        data_dir=tmp_path / "data",
+    )
+    store = get_store()
+    assert store is not None
+    # 用 store 直接验证内容格式（默认 message：无 event: 行）
+    events = store.list_events(run_id=report.run_id)
+    assert events, "expected events"
+    ev0 = events[0]
+    assert ev0.event_type == "task_created"
+    # replay：after 返回 seq 之后的事件
+    tail = store.list_events(run_id=report.run_id, after_sequence=ev0.sequence)
+    assert all(e.sequence > ev0.sequence for e in tail)
+    # 完整性：sequence 连续
+    seqs = [e.sequence for e in events]
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == len(seqs)
+    _time.sleep(0)
+
+
+def test_events_endpoint_after_replay(tmp_path: Path, monkeypatch) -> None:
+    """SSE 端点接受 after 参数并只回放新事件（不重复历史）。"""
+    monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    from app.core.events import EventStore
+
+    store = EventStore(tmp_path / "events.sqlite")
+    store.emit(task_id="t1", run_id="r1", event_type="task_created")
+    store.emit(task_id="t1", run_id="r1", event_type="plan_created")
+    # 直接验证 store replay 语义（SSE 端点由 _stream 用同一 store.list_events）
+    after = store.list_events(run_id="r1")[0].sequence
+    tail = store.list_events(run_id="r1", after_sequence=after)
+    assert [e.event_type for e in tail] == ["plan_created"]

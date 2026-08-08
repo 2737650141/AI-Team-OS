@@ -175,7 +175,20 @@ def get_task(run_id: str) -> dict[str, Any]:
         "pending_clarification_id": state.pending_clarification_id,
         "final_result": state.final_result,
         "plan": state.plan,
-        "subtasks": [s.model_dump() for s in state.subtasks],
+        "subtasks": [
+            {
+                "subtask_id": s.subtask_id,
+                "title": s.title,
+                "role": s.assigned_role,
+                "status": s.runtime_status,
+                "rework_count": s.rework_count,
+                "dependencies": list(s.dependencies),
+                "token_budget": s.token_budget,
+                "tool_call_budget": s.tool_call_budget,
+                "evidence_refs": list(s.evidence_refs or []),
+            }
+            for s in state.subtasks
+        ],
         "token_budget": state.token_budget,
         "cost_budget": state.cost_budget,
         "budget_usage": state.budget_usage,
@@ -448,10 +461,11 @@ def settings_status() -> dict[str, Any]:
 
 
 @app.get("/tasks/{run_id}/events")
-def task_events(run_id: str) -> Any:
-    """SSE 实时事件（010 第十四部分）：Last-Event-ID 支持 replay。
+def task_events(run_id: str, after: int = 0) -> Any:
+    """SSE 实时事件（010 第十四部分）：`after` 支持 replay（客户端 ?after=<seq>）。
 
-    轮询 EventStore（sequence > last），无新事件时保持连接（心跳注释行）。
+    默认 message 事件（无 event: 行）→ 客户端 message 监听直接接收；
+    keepalive 用 time.sleep 节流（sync generator 中 asyncio.sleep 无效）。
     """
     from fastapi.responses import StreamingResponse
 
@@ -470,16 +484,17 @@ def task_events(run_id: str) -> Any:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
     def _stream():
-        import asyncio
         import json as _json
+        import time
 
-        last = 0
+        last = max(after, 0)
         idle = 0
         while True:
             events = store.list_events(run_id=run_id, after_sequence=last)
             for ev in events:
                 data = _json.dumps(ev.model_dump(), ensure_ascii=False)
-                yield f"id: {ev.sequence}\nevent: {ev.event_type}\ndata: {data}\n\n"
+                # 无 event: 行 → 默认 message 事件（客户端 message 监听接收）
+                yield f"id: {ev.sequence}\ndata: {data}\n\n"
                 last = ev.sequence
                 idle = 0
             if not events:
@@ -492,13 +507,12 @@ def task_events(run_id: str) -> Any:
                             payload = _json.dumps(
                                 {"status": st.state.current_status}, ensure_ascii=False
                             )
-                            yield (f"id: {last}\nevent: task_status_changed\ndata: {payload}\n\n")
+                            yield f"id: {last}\ndata: {payload}\n\n"
                             return
                     except KeyError:
                         return
                 yield ": keepalive\n\n"
-            yield f'id: {last}\nevent: ping\ndata: {{"sequence": {last}}}\n\n'
-            asyncio.sleep(1.0)
+            time.sleep(1.0)  # sync generator：asyncio.sleep 不会生效
 
     return StreamingResponse(
         _stream(),

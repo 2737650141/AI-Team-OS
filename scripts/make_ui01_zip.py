@@ -83,13 +83,25 @@ def scan(files: list[Path]) -> list[str]:
         except OSError:
             continue
         for line in text.splitlines():
-            if field_decl.match(line):
+            # Pydantic 字段声明（`api_key: str | None = Field(...)`）非密钥赋值；
+            # 但**带字符串默认值**（`= "sk-..."`）的行不豁免（MEDIUM 盲点修复，
+            # sa_20260808_120306）——默认值含密钥属反模式，交由扫描拦截
+            if field_decl.match(line) and "=" not in line:
+                continue
+            if field_decl.match(line) and not re_search_string_default(line):
                 continue
             for pat in SECRET_PATTERNS:
                 if pat.search(line):
                     hits.append(f"{rel}: {pat.pattern[:40]}...")
                     break
     return hits
+
+
+def re_search_string_default(line: str) -> bool:
+    """行内是否含字符串默认值（`= "…"` / `= '…'`）。"""
+    import re as _re
+
+    return bool(_re.search(r'=\s*["\']', line))
 
 
 def main() -> int:

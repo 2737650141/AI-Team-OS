@@ -20,11 +20,6 @@ export function TaskDetail() {
     queryFn: () => api.task(runId),
     refetchInterval: 2000,
   });
-  const evs = useQuery({
-    queryKey: ["events", runId],
-    queryFn: () => api.trace(runId).then(() => []),
-    enabled: false,
-  });
   const { events, connected } = useEvents(runId);
   const evidence = useQuery({
     queryKey: ["evidence", runId],
@@ -144,8 +139,6 @@ export function TaskDetail() {
         ))}
       </div>
 
-      {/* Raw 事件调试入口（evs 未使用变量避免 noUnusedLocals） */}
-      {evs.data !== undefined && <span hidden />}
     </div>
   );
 }

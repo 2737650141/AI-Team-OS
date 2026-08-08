@@ -153,7 +153,7 @@ class SecretResolver:
         self._secure = secure
 
     def resolve(self, name: str, env_names: list[str] | None = None) -> str | None:
-        """解析密钥；env_names 为向后兼容的环境变量名列表。"""
+        """解析密钥；env_names 为向后兼容的环境变量名列表（缺省用内置别名表）。"""
         v = self._session.get_secret(name)
         if v:
             return v
@@ -161,7 +161,7 @@ class SecretResolver:
             v = self._secure.get_secret(name)
             if v:
                 return v
-        for env_name in env_names or []:
+        for env_name in env_names or _ENV_ALIASES.get(name, []):
             v = os.environ.get(env_name)
             if v:
                 return v

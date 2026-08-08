@@ -111,8 +111,6 @@ class EventStore:
         # 防御：TaskState.run_id 可为空（早期测试构造）；事件记录用 task_id 兜底
         task_id = task_id or "unknown"
         run_id = run_id or task_id
-        if not task_id:
-            task_id = "unknown"
         event = RuntimeEvent(
             event_id=uuid.uuid4().hex[:16],
             task_id=task_id,
