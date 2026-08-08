@@ -7,5 +7,6 @@ PY="$ROOT/.venv/Scripts/python"
 if [ -x "$PY" ]; then
   "$PY" "$ROOT/scripts/scan_staged_secrets.py"
 else
-  python "$ROOT/scripts/scan_staged_secrets.py"
+  # 回退：系统 python（仓库内脚本自导入 app.core.secrets）
+  cd "$ROOT" && python "$ROOT/scripts/scan_staged_secrets.py"
 fi

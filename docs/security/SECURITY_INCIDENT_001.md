@@ -33,10 +33,12 @@
 ## 4. 检测方式
 
 - `git log --all --oneline -- reasonix.toml` 定位提交。
-- `git rev-parse <commit>:reasonix.toml` 定位 Blob；内容经 `SECRET_RE` 正则识别凭据并只输出 `sha256(secret)` 前 12 位指纹。
+- `git rev-parse <commit>:reasonix.toml` 定位 Blob；内容经共享 `SECRET_PATTERNS`
+  （`app/core/secrets.py`，含 sk-/ghp_/AKIA/aws_secret/通用赋值/PEM DOTALL/Bearer）
+  识别凭据并只输出 `sha256(secret)` 前 12 位指纹。
 - `git reflog --all`、`git stash list`、`git fsck --full --no-reflogs` 排查引用与悬空对象。
 - 证据 zip（`artifacts/**/*.zip`）逐个检查 `reasonix.toml` 条目。
-- 扫描工具：`scripts/scan_incident.py`（新增，脱敏输出）。
+- 扫描工具：`scripts/scan_incident.py`（新增，脱敏输出，全部 stdout 经 `redact()`）。
 
 ## 5. 修复方式
 
@@ -50,7 +52,7 @@
 ## 6. 防复发措施（008 2.7）
 
 1. `.gitignore`：`reasonix.toml`、`.reasonix/`、`.env*`（保留 `.env.example`）默认忽略 ✓
-2. 提交前秘密扫描：`githooks/pre-commit`（仅调用受审查脚本，不执行未知项目 Hook）+ `scripts/scan_staged_secrets.py`（staged 内容逐行扫描，测试前缀 `SK-PLACEHOLDER` 豁免）✓
+2. 提交前秘密扫描：`githooks/pre-commit`（仅调用受审查脚本，不执行未知项目 Hook）+ `scripts/scan_staged_secrets.py`（staged 内容逐行 + 整段 DOTALL 扫描；豁免按**值前缀锚定**：`SK-PLACEHOLDER`/`TEST-TOKEN-` 且支持 `=`/`:`/`Bearer ` 形式；报告只输出模式 + sha256 指纹）✓
 3. 打包前秘密扫描：`scripts/make_m3c_zip.py` 导入共享 `app.core.secrets.SECRET_PATTERNS` ✓
 4. CI 秘密扫描：本仓库无 remote/CI；`.github/workflows/secret-scan.yml` 声明 CI 脚本，未来配置 CI 时启用（复用 `scan_staged_secrets.scan_text`）
 5. Git Hook 仅阻止秘密提交 ✓

@@ -28,6 +28,11 @@ def main() -> int:
         shutil.copy2(dst, backup)
         print(f"backed up existing hook: {backup}")
     shutil.copy2(src, dst)
+    # POSIX：确保 exec 位（git 忽略无执行位的 hook，静默失效）
+    try:
+        dst.chmod(dst.stat().st_mode | 0o111)
+    except OSError:
+        pass
     print(f"installed pre-commit hook: {dst}")
     return 0
 

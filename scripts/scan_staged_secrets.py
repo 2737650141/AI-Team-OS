@@ -24,10 +24,13 @@ def _is_exempt_token(matched: str) -> bool:
     """豁免仅当匹配**值**以测试前缀开头（前缀锚定，非子串搜索）。
 
     防止 `sk-<real>SK-PLACEHOLDER`（嵌入标记）绕过（sa_20260808_100103 LOW-1）。
+    Bearer 形式（Authorization: Bearer <token>）先剥离 "Bearer " 再判断。
     """
     val = re.split(r"[=:]", matched, maxsplit=1)[-1].strip("'\" \t")
+    if val.upper().startswith("BEARER "):
+        val = val[7:].strip()
     up = val.upper()
-    return up.startswith("SK-PLACEHOLDER") or up.startswith("TEST-TOKEN-")
+    return any(up.startswith(p.upper()) for p in EXEMPT_PREFIXES)
 
 
 def _fingerprint(text: str) -> str:
