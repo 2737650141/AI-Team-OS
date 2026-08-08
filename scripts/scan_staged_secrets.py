@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app.core.secrets import SECRET_PATTERNS
+from app.core.secrets import SECRET_PATTERNS, redact
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -26,14 +26,26 @@ def _is_exempt_token(matched: str) -> bool:
 
 
 def scan_text(text: str) -> list[str]:
-    """逐行扫描：命中秘密模式且匹配区域不含测试前缀豁免 → 报告（空 = 干净）。"""
+    """逐行扫描 + 整段 DOTALL 扫描（多行 PEM 私钥）。
+
+    命中秘密模式且匹配区域不含测试前缀豁免 → 报告（报告行内容经 redact 脱敏，
+    绝不回显凭据原文，SEC-01 原则）。空列表 = 干净。
+    """
     hits: list[str] = []
     for line in text.splitlines():
         for pat in SECRET_PATTERNS:
+            if pat.flags & re.DOTALL:
+                continue  # 多行模式在整段扫描处理
             m = pat.search(line)
             if m and not _is_exempt_token(m.group(0)):
-                hits.append(f"{pat.pattern[:50]} matched in: {line[:40]}...")
+                hits.append(f"{pat.pattern[:50]} in: {redact(line)[:40]}")
                 break
+    # 多行模式（PEM 私钥整块）对整段文本匹配
+    for pat in SECRET_PATTERNS:
+        if not (pat.flags & re.DOTALL):
+            continue
+        if pat.search(text) and not _is_exempt_token("BEGIN"):
+            hits.append(f"{pat.pattern[:50]} matched (multiline block)")
     return hits
 
 
