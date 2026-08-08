@@ -15,6 +15,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
@@ -138,6 +139,7 @@ def _build_context(
         initial_approvals=[a.model_dump() for a in state.approvals],
         policy=ToolPolicy(),
         evidence_writer=EvidenceWriter(data_dir / "runtime", state.task_id),
+        run_id=state.run_id,
     )
     tool_gateway.register(FixtureRepositoryLookupTool(DEFAULT_REPO_FIXTURE).spec())
     tool_gateway.register(FixtureSourceLookupTool(DEFAULT_SOURCE_FIXTURE).spec())
@@ -283,6 +285,10 @@ def run_task(
 ) -> RunReport:
     """创建并运行任务（进程 A）。vague_goal 场景在澄清 interrupt 处暂停返回。"""
     data_dir = data_dir or Path("data")
+    from app.core.events import emit as event_emit
+    from app.core.events import init as events_init
+
+    events_init(data_dir)
     task_id = uuid.uuid4().hex[:12]
     run_id = uuid.uuid4().hex[:16]
     state = TaskState(
@@ -293,6 +299,15 @@ def run_task(
         token_budget=token_budget,
         cost_budget=cost_budget,
         model_mode=model_mode,
+    )
+    event_emit(
+        task_id=task_id,
+        run_id=run_id,
+        event_type="task_created",
+        actor_type="system",
+        actor_id="runner",
+        summary=f"task created: {goal}",
+        payload_safe={"goal": goal, "model_mode": model_mode, "project_id": project_id},
     )
     ctx = _build_context(
         state,
@@ -327,6 +342,15 @@ def run_task(
             state.current_status = "paused"
             state.paused_from_status = state.paused_from_status or "created"
             state.pending_approval_id = pending_approval
+            event_emit(
+                task_id=task_id,
+                run_id=run_id,
+                event_type="task_status_changed",
+                actor_type="system",
+                actor_id="runner",
+                summary="task paused (awaiting input)",
+                payload_safe={"status": "paused", "pending_approval_id": pending_approval},
+            )
             return RunReport(
                 task_id,
                 run_id,
@@ -351,8 +375,37 @@ def run_task(
                 "budget_usage": ctx.budget.usage,
             },
         )
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="task_failed",
+            actor_type="system",
+            actor_id="runner",
+            summary=f"task failed: {exc}",
+            payload_safe={"failure_code": "budget_exceeded"},
+        )
     finally:
         conn.close()
+    if state.current_status == "completed":
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="task_completed",
+            actor_type="system",
+            actor_id="runner",
+            summary="task completed",
+            payload_safe={"status": "completed"},
+        )
+    elif state.current_status == "failed":
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="task_failed",
+            actor_type="system",
+            actor_id="runner",
+            summary="task failed",
+            payload_safe={"failure_code": state.failure_code or "unknown"},
+        )
     return RunReport(
         task_id,
         run_id,
@@ -528,6 +581,137 @@ def status_task(run_id: str, data_dir: Path | None = None) -> RunReport:
         )
     finally:
         conn.close()
+
+
+def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
+    """任务列表（UI Dashboard/Recent Tasks）：checkpoints.db 各 thread 最新状态。"""
+    data_dir = data_dir or Path("data")
+    conn = _open_conn(data_dir)
+    tasks: list[dict[str, Any]] = []
+    try:
+        # langgraph SQLite checkpointer：checkpoints 表按 (thread_id, checkpoint_id) 存
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []  # 尚无任务（表未建）
+        for (thread_id,) in rows:
+            try:
+                report = status_task(thread_id, data_dir)
+                summary: dict[str, Any] = {
+                    "task_id": report.task_id,
+                    "run_id": report.run_id or thread_id,
+                    "status": report.state.current_status,
+                    "goal": report.state.user_goal,
+                    "project_id": report.state.project_id,
+                    "model_mode": report.state.model_mode,
+                    "tokens": report.state.budget_usage.get("tokens", 0),
+                    "cost": report.state.budget_usage.get("cost", 0.0),
+                    "tool_calls": len(report.state.tool_calls),
+                    "started_at": getattr(report.state, "created_at", None),
+                    "duration_s": getattr(report.state, "duration_s", None),
+                }
+                tasks.append(summary)
+            except Exception:  # noqa: BLE001  坏 checkpoint 跳过
+                continue
+    finally:
+        conn.close()
+    tasks.sort(key=lambda t: t.get("started_at") or "", reverse=True)
+    return tasks
+
+
+def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
+    """Dashboard 聚合（010 第七部分）：健康/指标/最近任务/Agent 状态。"""
+    data_dir = data_dir or Path("data")
+    tasks = list_tasks(data_dir)
+    by_status: dict[str, int] = {}
+    for t in tasks:
+        by_status[t.get("status") or "unknown"] = by_status.get(t.get("status") or "unknown", 0) + 1
+    pending_approvals = sum(
+        len(approvals_of(t.get("run_id") or "", data_dir))
+        for t in tasks
+        if t.get("status") in ("paused", "running")
+    )
+    evidence_count = sum(len(evidence_list(t.get("run_id") or "", data_dir)) for t in tasks)
+    total_tokens = sum(int(t.get("tokens") or 0) for t in tasks)
+    total_cost = sum(float(t.get("cost") or 0.0) for t in tasks)
+    tool_calls = sum(int(t.get("tool_calls") or 0) for t in tasks)
+    from app.core.events import get_store
+
+    store = get_store()
+    event_count = store.count() if store is not None else 0
+    return {
+        "system": _system_health(data_dir),
+        "metrics": {
+            "active_tasks": by_status.get("running", 0) + by_status.get("paused", 0),
+            "completed_tasks": by_status.get("completed", 0),
+            "failed_tasks": by_status.get("failed", 0),
+            "pending_approvals": pending_approvals,
+            "evidence_count": evidence_count,
+            "tool_calls": tool_calls,
+            "tokens": total_tokens,
+            "cost": round(total_cost, 4),
+            "event_count": event_count,
+        },
+        "recent_tasks": tasks[:10],
+        "agent_team": _agent_team_status(tasks),
+    }
+
+
+def _system_health(data_dir: Path) -> dict[str, str]:
+    """系统健康（010 第七部分 System Health）。"""
+    from app.core.config import allowed_read_roots
+    from app.core.events import get_store
+
+    settings = load_settings()
+    conn = _open_conn(data_dir)
+    try:
+        conn.execute("SELECT 1").fetchone()
+        sqlite_ok = True
+    except Exception:  # noqa: BLE001
+        sqlite_ok = False
+    finally:
+        conn.close()
+    real_enabled = getattr(settings.model, "enable_real", False)
+    github_configured = bool(os.environ.get("AI_TEAM_GITHUB_TOKEN"))
+    roots = allowed_read_roots()
+    return {
+        "backend": "Online",
+        "langgraph": "Online",
+        "sqlite": "Online" if sqlite_ok else "Degraded",
+        "event_store": "Online" if (get_store() is not None) else "Degraded",
+        "model_provider": "Blocked" if not real_enabled else "Online",
+        "github": "Configured" if github_configured else "Missing",
+        "mcp": "Disabled",
+        "sandbox": "Online" if roots else "Disabled",
+        "network_isolation": "Best Effort",
+    }
+
+
+def _agent_team_status(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Agent Team 状态（010 Dashboard Agent Card）。"""
+    roles = ["supervisor", "planner", "researcher", "executor", "reviewer"]
+    team: list[dict[str, Any]] = []
+    for role in roles:
+        team.append(
+            {
+                "role": role,
+                "status": "idle",
+                "current_task": None,
+                "model": "(default)",
+                "tokens": 0,
+                "last_action": None,
+            }
+        )
+    # 从最近任务聚合（简化：状态取最新任务；token 汇总）
+    if tasks:
+        latest = tasks[0]
+        for card in team:
+            card["current_task"] = latest.get("goal")
+            if latest.get("status") in ("running", "paused"):
+                card["status"] = "thinking" if card["role"] == "planner" else "idle"
+    return team
 
 
 def trace_task(run_id: str, data_dir: Path | None = None) -> dict:

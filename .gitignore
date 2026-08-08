@@ -33,5 +33,14 @@ third_party_eval/
 
 # 审计大体积证据包（本机保留，不入库，003-A 五）
 artifacts/
+web/e2e/shots/
+web/test-results/
 runtime/
 reasonix.toml
+
+# 前端
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/tsconfig.tsbuildinfo

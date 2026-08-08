@@ -226,6 +226,21 @@ class DeterministicFakeExecutor:
                 parameter_hash=parameter_hash,
                 target_hash=ApprovalService.target_hash_of(target_hashes),
             )
+            from app.core.events import emit as event_emit
+
+            event_emit(
+                task_id=sb.task_id,
+                run_id=sb.run_id or sb.task_id,
+                event_type="approval_requested",
+                actor_type="executor",
+                actor_id=subtask.subtask_id,
+                summary=f"approval requested: {proposal.reason}",
+                payload_safe={
+                    "approval_id": request.approval_id,
+                    "files": proposal.target_files,
+                    "diff_ref": diff_artifact.artifact_id,
+                },
+            )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
         decision = interrupt(ApprovalPayload(approval_id=request.approval_id, decision="approved"))
         # 恢复值绑定解析（blocking sa_20260805_144828）：用户决定绑定的是其批准的
@@ -294,6 +309,21 @@ class DeterministicFakeExecutor:
                 ts=_now(),
                 metadata={"approval_id": request.approval_id, "status": "apply_failed"},
             )
+        from app.core.events import emit as event_emit
+
+        event_emit(
+            task_id=sb.task_id,
+            run_id=sb.run_id or sb.task_id,
+            event_type="patch_applied",
+            actor_type="executor",
+            actor_id=subtask.subtask_id,
+            summary=f"patch applied: {proposal.target_files}",
+            payload_safe={
+                "approval_id": request.approval_id,
+                "files": proposal.target_files,
+                "patch_ref": diff_artifact.artifact_id,
+            },
+        )
         patch_artifact = sb.artifacts.write(
             artifact_type="patch",
             content=proposal.unified_diff,
@@ -307,6 +337,15 @@ class DeterministicFakeExecutor:
         # 执行批准的测试（9.x 白名单；GT-W02：pytest）
         test_report = None
         if proposal.tests_to_run and sb.command_runner is not None:
+            event_emit(
+                task_id=sb.task_id,
+                run_id=sb.run_id or sb.task_id,
+                event_type="test_started",
+                actor_type="executor",
+                actor_id=subtask.subtask_id,
+                summary="running pytest",
+                payload_safe={"command": "python_pytest -q"},
+            )
             result = sb.command_runner.run(
                 "python_pytest", ["-q"], cwd_alias="worktree", timeout_seconds=120
             )
@@ -318,6 +357,18 @@ class DeterministicFakeExecutor:
                 subtask_id=subtask.subtask_id,
                 created_by="executor",
                 approval_id=request.approval_id,
+            )
+            event_emit(
+                task_id=sb.task_id,
+                run_id=sb.run_id or sb.task_id,
+                event_type="test_completed",
+                actor_type="executor",
+                actor_id=subtask.subtask_id,
+                summary=f"pytest rc={test_report.get('return_code')}",
+                payload_safe={
+                    "return_code": test_report.get("return_code"),
+                    "duration_s": test_report.get("duration_s"),
+                },
             )
         return ExecutionResult(
             subtask_id=subtask.subtask_id,

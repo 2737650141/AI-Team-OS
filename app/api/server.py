@@ -163,14 +163,36 @@ def get_task(run_id: str) -> dict[str, Any]:
         report = status_task(run_id, data_dir=_data_dir())
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    state = report.state
     return {
         "task_id": report.task_id,
         "run_id": report.run_id,
         "status": report.status,
-        "model_mode": report.state.model_mode,
-        "clarified_goal": report.state.clarified_goal,
-        "pending_clarification_id": report.state.pending_clarification_id,
-        "final_result": report.state.final_result,
+        "current_status": state.current_status,
+        "model_mode": state.model_mode,
+        "goal": state.user_goal,
+        "clarified_goal": state.clarified_goal,
+        "pending_clarification_id": state.pending_clarification_id,
+        "final_result": state.final_result,
+        "plan": state.plan,
+        "subtasks": [
+            {
+                "subtask_id": s.subtask_id,
+                "title": s.title,
+                "role": s.assigned_role,
+                "status": s.runtime_status,
+                "rework_count": s.rework_count,
+                "dependencies": list(s.dependencies),
+                "token_budget": s.token_budget,
+                "tool_call_budget": s.tool_call_budget,
+                "evidence_refs": list(s.evidence_refs or []),
+            }
+            for s in state.subtasks
+        ],
+        "token_budget": state.token_budget,
+        "cost_budget": state.cost_budget,
+        "budget_usage": state.budget_usage,
+        "rework_count": state.rework_count,
         "usage": report.usage,
         "tool_call_count": report.tool_call_count,
     }
@@ -360,3 +382,350 @@ def task_rollback(run_id: str, body: RollbackBody) -> dict[str, Any]:
     except (KeyError, RollbackError) as exc:
         status = 404 if isinstance(exc, KeyError) else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+# ============ UI-01（010 第四十一部分）：Dashboard / Tasks / Agents / Health / SSE ============
+
+
+@app.get("/dashboard")
+def dashboard() -> dict[str, Any]:
+    """Dashboard 聚合（健康/指标/最近任务/Agent 团队）。"""
+    from app.runner import dashboard_data
+
+    return dashboard_data(data_dir=_data_dir())
+
+
+@app.get("/tasks")
+def tasks_list() -> list[dict[str, Any]]:
+    """任务列表（checkpoints.db 各 thread 最新状态）。"""
+    from app.runner import list_tasks
+
+    return list_tasks(data_dir=_data_dir())
+
+
+@app.get("/agents")
+def agents() -> list[dict[str, Any]]:
+    """Agent 目录（010 第二十二部分，本阶段只读）。"""
+    from app.core.registry import default_registry
+
+    registry = default_registry()
+    out = []
+    for agent in registry.all():
+        out.append(
+            {
+                "agent_id": agent.agent_id,
+                "role": agent.role_type,
+                "display_name": agent.display_name,
+                "model": agent.model_scenario,
+                "enabled": agent.enabled,
+                "token_limit": agent.token_limit,
+                "max_tool_calls": agent.max_tool_calls,
+                "allowed_tools": sorted(agent.allowed_tools),
+            }
+        )
+    return out
+
+
+@app.get("/system/health")
+def system_health() -> dict[str, str]:
+    """系统健康（010 第七部分 System Health）。"""
+    from app.runner import _system_health
+
+    return _system_health(_data_dir())
+
+
+@app.get("/settings/status")
+def settings_status() -> dict[str, Any]:
+    """安全配置状态（010 第二十五部分；绝不显示 Secret 值）。"""
+    from app.core.config import allowed_read_roots
+
+    settings = _settings()
+    real_enabled = getattr(settings.model, "enable_real", False)
+    return {
+        "model_provider": {
+            "name": "openai_compatible",
+            "status": "Configured" if real_enabled else "Missing",
+            "base_url_configured": bool(getattr(settings.model, "base_url", None)),
+            "api_key_configured": bool(getattr(settings.model, "api_key", None)),
+        },
+        "github": {
+            "status": "Configured" if os.environ.get("AI_TEAM_GITHUB_TOKEN") else "Missing",
+            "token_configured": bool(os.environ.get("AI_TEAM_GITHUB_TOKEN")),
+        },
+        "real_model": {"status": "Enabled" if real_enabled else "Disabled"},
+        "allowed_read_roots": {"count": len(allowed_read_roots())},
+        "mcp": {"servers": 0, "status": "Disabled"},
+        "network_isolation": "Best Effort",
+        "sandbox": {"status": "Online" if allowed_read_roots() else "Disabled"},
+    }
+
+
+def _format_sse_frame(sequence: int, data: dict) -> str:
+    """SSE 帧：默认 message 事件（无 event: 行）→ 客户端 message 监听直接接收。"""
+    import json as _json
+
+    return f"id: {sequence}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@app.get("/tasks/{run_id}/events")
+def task_events(run_id: str, after: int = 0) -> Any:
+    """SSE 实时事件（010 第十四部分）：`after` 支持 replay（客户端 ?after=<seq>）。
+
+    默认 message 事件（无 event: 行）→ 客户端 message 监听直接接收；
+    keepalive 用 time.sleep 节流（sync generator 中 asyncio.sleep 无效）。
+    """
+    from fastapi.responses import StreamingResponse
+
+    from app.core.events import get_store
+
+    store = get_store()
+    if store is None:
+        from app.core.events import init as events_init
+
+        events_init(_data_dir())
+        store = get_store()
+    # 校验 run 存在
+    try:
+        status_task(run_id, data_dir=_data_dir())
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+
+    def _stream():
+        import json as _json
+        import time
+
+        last = max(after, 0)
+        idle = 0
+        while True:
+            events = store.list_events(run_id=run_id, after_sequence=last)
+            for ev in events:
+                yield _format_sse_frame(ev.sequence, ev.model_dump())
+                last = ev.sequence
+                idle = 0
+            if not events:
+                idle += 1
+                if idle >= 3:
+                    # 任务终态后补发状态事件再结束（客户端据此关闭连接停止重连）
+                    try:
+                        st = status_task(run_id, data_dir=_data_dir())
+                        if st.state.current_status in ("completed", "failed"):
+                            payload = {
+                                "event_type": "task_status_changed",
+                                "task_id": run_id,
+                                "run_id": run_id,
+                                "sequence": last + 1,  # 虚拟序列：仅用于终态通知
+                                "ts": _json.dumps({"now": True}),  # 占位，客户端只读类型/序列
+                                "summary": f"task {st.state.current_status}",
+                                "actor_type": "system",
+                                "actor_id": run_id,
+                                "status": st.state.current_status,
+                            }
+                            yield _format_sse_frame(last + 1, payload)
+                            return
+                    except KeyError:
+                        return
+                yield ": keepalive\n\n"
+            time.sleep(1.0)  # sync generator：asyncio.sleep 不会生效
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ============ Connections / Secret 管理（010 三十~三十六 / 009-A） ============
+
+
+class ConnectionBody(BaseModel):
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=2000)
+    models: dict[str, str] | None = (
+        None  # 角色 → 模型（default/supervisor/planner/researcher/executor/reviewer）
+    )
+    storage_mode: str = Field(default="session", pattern="^(session|secure)$")
+    local_provider: bool = False  # 仅 Ollama 本地 Provider 允许 localhost（010 三十六）
+
+
+_resolver = None  # 惰性初始化（依赖 data_dir）
+
+
+def _secret_resolver():
+    global _resolver
+    if _resolver is None:
+        from app.core.secret_store import default_resolver
+
+        _resolver = default_resolver(_data_dir())
+    return _resolver
+
+
+def _provider_info(provider: str) -> dict[str, Any]:
+    """Provider 状态（绝不包含 Secret 值/片段）。"""
+
+    resolver = _secret_resolver()
+    base = _BASE_URLS.get(provider, "")
+    models = _MODEL_ROLES.get(provider, {})
+    if provider == "ollama":
+        configured = True  # 本地 Provider 无需密钥
+        storage = "local_provider"
+        base = base or "http://127.0.0.1:11434"
+    else:
+        configured = resolver.resolve(provider_key(provider)) is not None
+        storage = resolver.store_mode(provider_key(provider))
+    return {
+        "provider": provider,
+        "configured": configured,
+        "base_url": base,
+        "models": models,
+        "storage": storage,
+        "health": "configured" if configured else "missing",
+        "local_provider": provider == "ollama",
+    }
+
+
+_BASE_URLS = {
+    "openai_compatible": "",
+    "github": "https://api.github.com",
+    "ollama": "http://127.0.0.1:11434",
+}
+
+_MODEL_ROLES: dict[str, dict[str, str]] = {
+    "openai_compatible": {},
+    "github": {},
+    "ollama": {},
+}
+
+
+def provider_key(provider: str) -> str:
+    if provider == "github":
+        return "github.token"
+    return f"{provider}.api_key"
+
+
+@app.get("/settings/connections")
+def connections_status() -> dict[str, Any]:
+    """Connections 状态（009-A 八；禁止返回任何 Secret）。"""
+    return {p: _provider_info(p) for p in ("openai_compatible", "github", "ollama")}
+
+
+@app.put("/settings/connections/{provider}")
+def save_connection(provider: str, body: ConnectionBody) -> dict[str, Any]:
+    """保存连接（session/secure）。请求内 API Key 生命周期结束后立即释放。"""
+
+    if provider not in ("openai_compatible", "github", "ollama"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    # Base URL 安全校验（SSRF；本地 Provider 才允许 localhost —— 010 三十六）
+    if body.base_url:
+        _validate_base_url(
+            provider, body.base_url, local_ok=body.local_provider or provider == "ollama"
+        )
+    if provider == "github":
+        if body.api_key:
+            _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
+    elif provider == "ollama":
+        # 本地 Provider：可保存 base_url 与模型；无密钥
+        _BASE_URLS["ollama"] = body.base_url or _BASE_URLS["ollama"]
+        if body.models:
+            _MODEL_ROLES["ollama"] = body.models
+    else:
+        if body.base_url:
+            _BASE_URLS["openai_compatible"] = body.base_url
+        if body.api_key:
+            _secret_resolver().set(provider_key(provider), body.api_key, body.storage_mode)
+        if body.models:
+            _MODEL_ROLES["openai_compatible"] = body.models
+    return {"provider": provider, "configured": _provider_info(provider)["configured"]}
+
+
+@app.delete("/settings/connections/{provider}/credential")
+def delete_credential(provider: str) -> dict[str, Any]:
+    """删除凭据（009-A 八）。"""
+    if provider not in ("openai_compatible", "github"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    _secret_resolver().delete(provider_key(provider))
+    return {"provider": provider, "configured": False}
+
+
+@app.post("/settings/connections/{provider}/test")
+def test_connection(provider: str) -> dict[str, Any]:
+    """连接测试（010 三十三）：安全状态映射，绝不回传 Provider 原始错误。"""
+    if provider not in ("openai_compatible", "github", "ollama"):
+        raise HTTPException(status_code=404, detail=f"unknown provider: {provider}")
+    if provider == "ollama":
+        return {"status": "healthy", "detail": "local provider (no credential)"}
+    key = _secret_resolver().resolve(provider_key(provider))
+    if not key:
+        return {"status": "authentication_failed", "detail": "no credential configured"}
+    base = _BASE_URLS.get(provider) or ""
+    try:
+        _validate_base_url(provider, base, local_ok=provider == "ollama")
+    except HTTPException as exc:
+        return {"status": "unreachable", "detail": str(exc.detail)}
+    # 轻量健康检查（用户主动触发；失败映射为安全状态）
+    try:
+        import httpx
+
+        headers = {"Authorization": f"Bearer {key}"} if provider == "openai_compatible" else {}
+        if provider == "github":
+            headers = {"Authorization": f"Bearer {key}", "X-GitHub-Api-Version": "2022-11-28"}
+        url = f"{base.rstrip('/')}/models" if provider == "openai_compatible" else base
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(url, headers=headers)
+        if resp.status_code == 200:
+            return {"status": "healthy", "detail": "connected"}
+        if resp.status_code in (401, 403):
+            return {"status": "authentication_failed", "detail": "authentication failed"}
+        if resp.status_code == 404:
+            return {"status": "model_not_found", "detail": "endpoint not found"}
+        if resp.status_code == 429:
+            return {"status": "rate_limited", "detail": "rate limited"}
+        return {"status": "unreachable", "detail": f"http {resp.status_code}"}
+    except httpx.TimeoutException:
+        return {"status": "timeout", "detail": "timeout"}
+    except Exception:  # noqa: BLE001
+        return {"status": "unreachable", "detail": "unreachable"}
+
+
+def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> None:
+    """Base URL 安全校验：仅 http/https；默认拒绝 localhost（SSRF，010 十二/三十六）。"""
+    import re as _re
+
+    from app.core.ssrf import blocked_host_reason
+
+    m = _re.fullmatch(r"(https?)://([^/:]+)(?::\d{1,5})?(?:/.*)?", base_url.strip())
+    if not m:
+        raise HTTPException(status_code=400, detail="base_url must be http(s)://host[:port]")
+    scheme, host = m.group(1), m.group(2)
+    if host in ("localhost", "127.0.0.1", "::1") and not local_ok:
+        raise HTTPException(status_code=400, detail="localhost only allowed for local providers")
+    reason = blocked_host_reason(host)
+    if reason and not (local_ok and host in ("localhost", "127.0.0.1", "::1")):
+        raise HTTPException(status_code=400, detail=f"base_url blocked: {reason}")
+    if scheme == "http" and not local_ok:
+        raise HTTPException(
+            status_code=400, detail="http base_url only allowed for local providers"
+        )
+
+
+# security_review LOW（sa_20260808_122950）：控制面无认证——拒绝非 loopback 绑定
+def _assert_loopback_bind(host: str) -> None:
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise SystemExit(
+            f"refusing to bind API to {host!r}: no-auth control plane requires "
+            "loopback (use 127.0.0.1 / localhost / ::1)"
+        )
+
+
+if __name__ == "__main__":
+    import argparse
+
+    _ap = argparse.ArgumentParser(
+        prog="ai-team-os-api", description="AI Team OS Web Control Center API"
+    )
+    _ap.add_argument("--host", default="127.0.0.1")
+    _ap.add_argument("--port", type=int, default=8000)
+    _args = _ap.parse_args()
+    _assert_loopback_bind(_args.host)
+    import uvicorn
+
+    uvicorn.run("app.api.server:app", host=_args.host, port=_args.port)
