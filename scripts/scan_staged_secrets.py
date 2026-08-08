@@ -26,9 +26,10 @@ def _is_exempt_token(matched: str) -> bool:
     防止 `sk-<real>SK-PLACEHOLDER`（嵌入标记）绕过（sa_20260808_100103 LOW-1）。
     Bearer 形式（Authorization: Bearer <token>）先剥离 "Bearer " 再判断。
     """
-    val = re.split(r"[=:]", matched, maxsplit=1)[-1].strip("'\" \t")
+    val = matched.strip("'\" \t")
     if val.upper().startswith("BEARER "):
         val = val[7:].strip()
+    val = re.split(r"[=:]", val, maxsplit=1)[-1].strip("'\" \t")
     up = val.upper()
     return any(up.startswith(p.upper()) for p in EXEMPT_PREFIXES)
 

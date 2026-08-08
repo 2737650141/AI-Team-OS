@@ -62,6 +62,20 @@ def test_gitignore_covers_secrets() -> None:
     assert ".env" in gi
 
 
+def test_env_example_placeholder_exempt() -> None:
+    """MEDIUM（sa_20260808_101606）：.env.example 占位符以 SK-PLACEHOLDER 开头，
+    提交前扫描放行（CI/打包不会因示例文件 fail）。"""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "scan_staged_secrets", ROOT / "scripts" / "scan_staged_secrets.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    text = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert mod.scan_text(text) == []
+
+
 def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     """防复发 2.7-2/2.7-6：提交前扫描——测试前缀（SK-PLACEHOLDER）放行、真实模式阻塞。"""
     import importlib.util
