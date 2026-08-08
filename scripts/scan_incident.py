@@ -21,7 +21,6 @@ from pathlib import Path
 from app.core.secrets import SECRET_PATTERNS, redact
 
 ROOT = Path(__file__).resolve().parent.parent
-SECRET_RE = None  # 不再维护私有模式：扫描用 SECRET_PATTERNS（见 credential_fingerprint 提取）
 
 
 def sh(*args: str) -> str:
@@ -45,7 +44,7 @@ def main() -> int:
 
     # 1. 含 reasonix.toml 的提交（git log --all）
     print("== git log --all -- reasonix.toml ==")
-    out = sh("log", "--all", "--format=%H %s", "--", "reasonix.toml")
+    out = redact(sh("log", "--all", "--format=%H %s", "--", "reasonix.toml"))
     print(out or "(none)")
     blob = ""
     commits = [line.split()[0] for line in out.splitlines() if line.strip()]
