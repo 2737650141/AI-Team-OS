@@ -1,0 +1,72 @@
+# 用户指南（010 五十五）
+
+> 不需要了解代码，按下面步骤即可使用 AI Team OS。
+
+## 1. 启动
+
+双击运行：
+
+```powershell
+scripts\start_ai_team_os.ps1
+```
+
+（或在项目目录打开两个终端分别运行后端与前端命令，见 WEB_CONTROL_CENTER.md）
+启动后浏览器自动打开 `http://127.0.0.1:5173`。
+
+## 2. 打开网页
+
+看到 **AI Team OS Control Center** 的深色界面（Dashboard）。
+
+## 3. 跑 Demo（无需任何 Key）
+
+1. 首页输入框输入：`sandbox_code_fix`。
+2. 展开 **Advanced**，Project 填：`sample-python`。
+3. 点 **Start Task**。
+4. 自动进入任务页：看到 Planner 拆解、Agent 活动、Evidence 出现。
+5. 稍候出现 **Approval Required**（AI 要改代码）。
+6. 点 **Reject**：文件不变；再重新运行任务后点 **Approve**。
+7. 看到 Diff、Tests、Reviewer，最后任务 Completed。
+
+## 4. 设置 API Key（真实模型）
+
+1. 左侧 **Settings** → **Connections**。
+2. OpenAI Compatible 卡片：
+   - Base URL：你的中转/官方地址（如 `https://api.openai.com/v1`）。
+   - API Key：粘贴密钥（密码框，不会显示）。
+   - Storage：选 **Save on this PC**（本机加密保存）或 **Session only**（重启失效）。
+   - 点 **Test Connection** 验证，然后 **Save securely**。
+3. GitHub 同样方式配置 Token（可选）。
+
+以后无需再编辑 `.env` 或 `reasonix.toml`。
+
+## 5. 创建真实任务
+
+1. 首页输入任务描述（如 `github_compare_team`）。
+2. Model Mode 选 **Real**（需已配置 Provider）。
+3. **Start Task** → 观看团队工作。
+
+## 6. 查看进度
+
+- 任务页顶部：状态 / 阶段时间线。
+- Plan 面板：子任务与依赖。
+- Activity：实时事件流。
+- Evidence / Diff / Tests / Reviewer：各区块。
+
+## 7. 批准 / 拒绝补丁
+
+出现 Approval 卡片时查看 Diff，然后：
+
+- **Approve**：AI 应用补丁 → 跑测试 → Reviewer。
+- **Reject**：不应用，可填原因。
+
+## 8. 查看最终结果
+
+任务 Completed 后顶部状态变绿；Reviewer 显示通过；证据与测试结果可展开查看。
+
+## 故障排查
+
+| 现象 | 处理 |
+| ---- | ---- |
+| 页面打不开 | 确认后端 8000 与前端 5173 已启动（见第 1 步） |
+| 任务报错 | 页面显示错误 ID/原因；详细日志见后端终端输出 |
+| 想换 Key | Settings → Connections → 输入新 Key → Save（旧 Key 从本机移除，但**不会**在 Provider 后台吊销） |
