@@ -38,3 +38,8 @@ Fake Model + Fixture GitHub + Sandbox 示例项目 + Fake Approval Flow。
 `web/e2e/demo.spec.ts`（Playwright）自动覆盖：
 打开 Dashboard → 创建 Demo 任务 → Planner/Evidence → Approval → Reject/Approve →
 Tests → Completed → 刷新恢复。
+
+运行 E2E 前置条件：
+1. 用 `scripts/start_ai_team_os.ps1` 启动（或手动后端时设置
+   `AI_TEAM_ALLOWED_READ_ROOTS=<仓库>/fixtures`——缺省时沙箱任务创建会失败）。
+2. `cd web && npx playwright test`。

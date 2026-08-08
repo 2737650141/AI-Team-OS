@@ -35,6 +35,7 @@ third_party_eval/
 artifacts/
 web/e2e/shots/
 web/test-results/
+web/.vite/
 runtime/
 reasonix.toml
 
