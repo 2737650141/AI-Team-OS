@@ -49,13 +49,13 @@
 5. 垃圾回收：`git gc --prune=now --aggressive`（泄漏 Blob 从对象库移除）。
 6. 验证：`git log --all -- reasonix.toml` 空、reflog 无泄漏引用、`fsck --full --no-reflogs` clean、全量测试 301 passed。
 
-> **已知残留（sa_20260808_101318 记录）**：宿主交付分支
-> `reasonix/delivery-20260805-223908-a5d48ba1ff` 历史含
-> `.reasonix/autoresearch/.../.create_token`（blob `5565ff84`，32 位 hex 凭据，
-> 指纹由宿主管理）。该文件不在本事件（reasonix.toml）范围内，且为裸 hex
+> **已知残留（sa_20260808_101318/102018 记录）**：`.create_token`（blob `f2a6b6b2`，
+> 32 位 hex 凭据 `0c2527a6...`，由提交 1580c9c 引入、f67843d 从树中移除）存在于
+> **phase-3c/sandbox-execution 与宿主 delivery 分支**的历史（宿主分支另有同内容
+> blob `5565ff84` 副本）。该文件不在本事件（reasonix.toml）范围内，且为裸 hex
 > （无 key=/token= 形式），**不在 `SECRET_PATTERNS` 覆盖内**（扫描边界：模式
 > 启发式，未覆盖的新形态不会拦截）。仓库无 remote、从未 push，本地暴露风险低；
-> 清理宿主分支历史由宿主/总管决定，不擅自重写宿主分支。
+> 清理历史由总管决定（涉及宿主分支时不得擅自重写）。
 
 ## 6. 防复发措施（008 2.7）
 
