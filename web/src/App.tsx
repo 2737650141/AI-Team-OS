@@ -22,8 +22,8 @@ const qc = new QueryClient({
 // Approvals 中心（010 十六）：指向最新任务的审批（简化导航）
 function ApprovalsRedirect() {
   const { t } = useI18n();
-  const tasks = useQuery({ queryKey: ["tasks"], queryFn: api.tasks });
-  const runId = tasks.data?.[0]?.run_id;
+  const pending = useQuery({ queryKey: ["pending-approval-run"], queryFn: api.pendingApprovalRun });
+  const runId = pending.data;
   if (runId) return <Navigate to={`/tasks/${runId}`} replace />;
   return <div className="page">{t("ap.required")}</div>;
 }

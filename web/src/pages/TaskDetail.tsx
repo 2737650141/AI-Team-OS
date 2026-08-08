@@ -1,7 +1,7 @@
 // Task Detail（010 九~二十一）：Header + Timeline + Plan + Activity + Approval/Diff/Tests/Reviewer
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import { ActivityFeed } from "../components/ActivityFeed";
@@ -32,8 +32,14 @@ export function TaskDetail() {
     queryFn: () => api.approvals(runId),
   });
   const artifacts = useQuery({
-    queryKey: ["artifacts", runId],
+    queryKey: ["artifacts", runId, refresh],
     queryFn: () => api.artifacts(runId),
+  });
+  const testArtifact = (artifacts.data ?? []).find((a) => a.artifact_type === "test_report");
+  const testReport = useQuery({
+    queryKey: ["artifact", testArtifact?.artifact_id],
+    queryFn: () => api.artifact(testArtifact!.artifact_id),
+    enabled: !!testArtifact,
   });
   const diff = useQuery({
     queryKey: ["diff", runId, refresh],
@@ -50,13 +56,23 @@ export function TaskDetail() {
   if (task.isError)
     return (
       <div className="page">
-        {t("task.taskFailed")} · {(task.error as Error).message}
+        <div className="card">
+          <p className="error">{t("task.taskFailed")} · {(task.error as Error).message}</p>
+          <Link to="/tasks">{t("task.backToTasks")}</Link>
+        </div>
       </div>
     );
 
   const taskData = task.data;
   if (!taskData) return <div className="page">{t("task.loading")}</div>;
-  const testArtifact = (artifacts.data ?? []).find((a) => a.artifact_type === "test_report");
+  const parsedTest = parseTestReport(testReport.data?.content);
+  const changedFiles = Array.from(
+    new Set(
+      (approvals.data ?? [])
+        .filter((approval) => approval.status === "approved")
+        .flatMap((approval) => approval.target_paths),
+    ),
+  );
 
   return (
     <div className="page">
@@ -119,12 +135,23 @@ export function TaskDetail() {
         <div className="card">
           <h2>{t("task.tests")}</h2>
           <p>
-            pytest · <StatusBadge status={testArtifact.artifact_type} />
+            pytest · <StatusBadge status={parsedTest?.return_code === 0 ? "passed" : "failed"} />
             <span className="muted">
               {" "}
               {t("task.artifact")} {testArtifact.artifact_id}
             </span>
           </p>
+          {parsedTest && (
+            <>
+              <p className="muted">
+                {t("task.exitCode")}: {parsedTest.return_code} · {t("task.duration")}: {parsedTest.duration_ms} ms
+              </p>
+              <details>
+                <summary>{t("task.testOutput")}</summary>
+                <pre className="json">stdout: {parsedTest.stdout || "—"}{"\n"}stderr: {parsedTest.stderr || "—"}</pre>
+              </details>
+            </>
+          )}
         </div>
       )}
 
@@ -152,7 +179,38 @@ export function TaskDetail() {
           </div>
         ))}
       </div>
+
+      {taskData.current_status === "completed" && (
+        <div className="card">
+          <h2>{t("task.finalResult")}</h2>
+          <p className="muted">
+            Token: {taskData.budget_usage.tokens ?? 0} · {t("dash.cost")}: ${Number(taskData.budget_usage.cost ?? 0).toFixed(4)}
+          </p>
+          <p>{t("task.changedFiles")}: {changedFiles.length ? changedFiles.join(", ") : "—"}</p>
+          <pre className="json">{taskData.final_result ?? "—"}</pre>
+        </div>
+      )}
     </div>
   );
+}
+
+function parseTestReport(content?: string): {
+  return_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+} | null {
+  if (!content) return null;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    return {
+      return_code: Number(parsed.return_code ?? -1),
+      stdout: String(parsed.stdout ?? ""),
+      stderr: String(parsed.stderr ?? ""),
+      duration_ms: Number(parsed.duration_ms ?? 0),
+    };
+  } catch {
+    return null;
+  }
 }
 

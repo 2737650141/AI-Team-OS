@@ -95,7 +95,12 @@ export function Dashboard() {
       <div className="card">
         <h2>{t("dash.systemHealth")}</h2>
         <div className="health-grid">
-          {data
+          {dash.isError ? (
+            <div className="error">
+              {t("dash.backendOffline")} {" "}
+              <button className="btn" onClick={() => dash.refetch()}>{t("common.retry")}</button>
+            </div>
+          ) : data
             ? Object.entries(data.system).map(([k, v]) => (
                 <div key={k} className="health-item">
                   <span>{k}</span>

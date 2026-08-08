@@ -60,6 +60,9 @@ export interface AgentInfo {
   token_limit: number;
   max_tool_calls: number;
   allowed_tools: string[];
+  status?: string;
+  current_task?: string | null;
+  last_action?: string | null;
 }
 
 export interface ToolInfo {
@@ -109,6 +112,7 @@ export interface TaskDetail {
   cost_budget: number;
   budget_usage: Record<string, number>;
   rework_count: number;
+  final_result: string | null;
 }
 
 export interface ApprovalView {
@@ -122,17 +126,33 @@ export interface ApprovalView {
   target_paths: string[];
   requested_at: string;
   expires_at: string | null;
+  decision_reason?: string | null;
 }
 
 export interface EvidenceView {
   evidence_id: string;
-  source: string;
-  source_type: string;
-  title: string;
-  retrieved_at: string;
-  reliability: string;
-  hash: string;
-  claims: string[];
+  tool?: string;
+  source_uri?: string | null;
+  summary?: string;
+  ts?: string;
+  truncated?: boolean;
+  source?: string;
+  source_type?: string;
+  title?: string;
+  retrieved_at?: string;
+  reliability?: string;
+  hash?: string;
+  claims?: string[];
+}
+
+export interface ArtifactDetail {
+  artifact: {
+    artifact_id: string;
+    artifact_type: string;
+    content_hash: string;
+    created_at: string;
+  };
+  content: string;
 }
 
 export interface ConnectionStatus {

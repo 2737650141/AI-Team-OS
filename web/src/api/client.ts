@@ -33,13 +33,28 @@ export const api = {
   },
   approvals: (runId: string) =>
     request<import("./types").ApprovalView[]>(`/tasks/${runId}/approvals`),
+  pendingApprovalRun: async () => {
+    const tasks = await request<import("./types").TaskSummary[]>("/tasks");
+    for (const task of tasks.filter((item) => item.status === "paused")) {
+      const approvals = await request<import("./types").ApprovalView[]>(
+        `/tasks/${task.run_id}/approvals`,
+      );
+      if (approvals.some((approval) => approval.status === "pending")) return task.run_id;
+    }
+    return null;
+  },
   artifacts: (runId: string) =>
     request<Array<{ artifact_id: string; artifact_type: string; subtask_id?: string }>>(
       `/tasks/${runId}/artifacts`,
     ),
+  artifact: (artifactId: string) =>
+    request<import("./types").ArtifactDetail>(`/artifacts/${artifactId}`),
   diff: (runId: string) => request<{ diff: string; files?: string[] }>(`/tasks/${runId}/diff`),
   agents: () => request<import("./types").AgentInfo[]>("/agents"),
-  tools: () => request<import("./types").ToolInfo[]>("/tools"),
+  tools: async () => {
+    const r = await request<{ tools: import("./types").ToolInfo[] }>("/tools");
+    return r.tools;
+  },
   health: () => request<import("./types").SystemHealth>("/system/health"),
   settingsStatus: () => request<Record<string, unknown>>("/settings/status"),
   connections: () => request<Record<string, import("./types").ConnectionStatus>>("/settings/connections"),
@@ -93,8 +108,14 @@ export function subscribeEvents(
     es.addEventListener("message", (msg) => {
       try {
         const ev = JSON.parse((msg as MessageEvent<string>).data) as import("./types").RuntimeEvent;
-        // 终态通知（task_status_changed，虚拟 sequence）：关闭连接停止自动重连
-        if (ev.event_type === "task_status_changed") {
+        // 只有 completed/failed 才是终态；paused 的状态事件必须继续订阅返工/审批事件。
+        const terminalStatus =
+          (ev as import("./types").RuntimeEvent & { status?: string }).status ??
+          String(ev.payload_safe?.status ?? "");
+        if (
+          ev.event_type === "task_status_changed" &&
+          (terminalStatus === "completed" || terminalStatus === "failed")
+        ) {
           es.close();
           closed = true;
           onDone?.();

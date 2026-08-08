@@ -632,11 +632,12 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
         # langgraph SQLite checkpointer：checkpoints 表按 (thread_id, checkpoint_id) 存
         try:
             rows = conn.execute(
-                "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id"
+                "SELECT thread_id, MAX(checkpoint_id) AS latest_checkpoint "
+                "FROM checkpoints GROUP BY thread_id ORDER BY latest_checkpoint DESC"
             ).fetchall()
         except sqlite3.OperationalError:
             rows = []  # 尚无任务（表未建）
-        for (thread_id,) in rows:
+        for thread_id, _latest_checkpoint in rows:
             try:
                 report = status_task(thread_id, data_dir)
                 summary: dict[str, Any] = {

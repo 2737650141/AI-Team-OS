@@ -120,6 +120,41 @@ def test_api_reject_pending(data_dir: Path, seeded) -> None:
         assert svc.get(seeded["pending_id"]).status == "rejected"  # 决策已落盘
 
 
+def test_api_reject_graph_pending_resumes_to_rework_approval(
+    data_dir: Path, monkeypatch
+) -> None:
+    """UI011-01：API 不得在 resume_task 前重复写入 rejected 决策。"""
+    fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+    monkeypatch.setenv("AI_TEAM_ALLOWED_READ_ROOTS", str(fixtures))
+    with TestClient(app) as client:
+        created = client.post(
+            "/tasks",
+            json={
+                "goal": "sandbox_code_fix",
+                "model_mode": "fake",
+                "project_alias": "sample-python",
+            },
+        )
+        assert created.status_code == 200
+        run_id = created.json()["run_id"]
+        first = client.get(f"/tasks/{run_id}/approvals").json()[0]
+
+        rejected = client.post(
+            f"/approvals/{first['approval_id']}/reject",
+            json={"reason": "UI acceptance reject"},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == "rejected"
+        assert rejected.json()["task_status"] == "paused"
+
+        approvals = client.get(f"/tasks/{run_id}/approvals").json()
+        assert approvals[0]["status"] == "rejected"
+        assert any(
+            item["status"] == "pending" and item["approval_id"] != first["approval_id"]
+            for item in approvals
+        )
+
+
 def test_api_artifacts_and_show(data_dir: Path, seeded) -> None:
     with TestClient(app) as client:
         resp = client.get(f"/tasks/{seeded['run_id']}/artifacts")

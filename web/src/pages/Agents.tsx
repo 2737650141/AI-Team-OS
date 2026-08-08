@@ -16,9 +16,11 @@ export function Agents() {
           <div key={a.agent_id} className="card agent-card">
             <div className="agent-head">
               <strong>{a.display_name}</strong>
-              <StatusBadge status={a.enabled ? "idle" : "disabled"} />
+              <StatusBadge status={a.enabled ? (a.status ?? "idle") : "disabled"} />
             </div>
             <span className="muted">model: {a.model}</span>
+            {a.current_task && <span className="muted">{t("agents.currentTask")}: {a.current_task}</span>}
+            {a.last_action && <span className="muted">{t("agents.lastAction")}: {a.last_action}</span>}
             <span className="muted">
               token limit: {a.token_limit} · tools: {a.allowed_tools.length}
             </span>

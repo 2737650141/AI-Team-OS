@@ -47,6 +47,9 @@ export function ApprovalCard({
           <code key={p}>{p}</code>
         ))}
       </div>
+      {approval.decision_reason && (
+        <p className="muted">{t("ap.decisionReason")}: {approval.decision_reason}</p>
+      )}
       {approval.status === "pending" && (
         <div className="approval-actions">
           <input

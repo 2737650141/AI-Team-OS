@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -263,6 +263,49 @@ class RollbackBody(BaseModel):
     approval_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+def _decide_pending_approval(
+    approval_id: str, decision: Literal["approved", "rejected"], reason: str | None
+) -> tuple[dict[str, Any], Any]:
+    """Decide the graph's pending approval exactly once, then resume its run."""
+    from app.core.approval import ApprovalError, ApprovalService
+    from app.core.schemas import ApprovalPayload
+
+    data_dir = _data_dir()
+    record = approval_show(approval_id, data_dir=data_dir)
+    run_id = record.get("run_id") or record["task_id"]
+    snapshot = status_task(run_id, data_dir=data_dir)
+    if snapshot.state.current_status == "paused":
+        if snapshot.state.pending_approval_id != approval_id:
+            raise HTTPException(status_code=409, detail="approval is not pending for this run")
+        try:
+            report = resume_task(
+                run_id,
+                payload=ApprovalPayload(
+                    approval_id=approval_id,
+                    decision=decision,
+                    reason=reason,
+                ),
+                data_dir=data_dir,
+            )
+        except (RuntimeError, ApprovalError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return record, report
+
+    # Supplemental approvals can outlive a completed run. Preserve the existing
+    # decision-on-record behavior, but report that the graph cannot be resumed.
+    approval = ApprovalService(
+        storage_path=data_dir / "runtime" / "workspaces" / record["task_id"] / "approvals.jsonl"
+    )
+    try:
+        approval.decide(approval_id, decision, reason)
+    except ApprovalError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=409,
+        detail=f"run {run_id} is not paused (current_status={snapshot.state.current_status!r})",
+    )
+
+
 @app.get("/tasks/{run_id}/approvals")
 def task_approvals(run_id: str) -> list[dict[str, Any]]:
     try:
@@ -282,31 +325,9 @@ def get_approval(approval_id: str) -> dict[str, Any]:
 @app.post("/approvals/{approval_id}/approve")
 def approve(approval_id: str, body: ApprovalDecisionBody | None = None) -> dict[str, Any]:
     """批准（幂等）：定位任务 → 决策落盘 → 恢复。已拒绝/过期返回 409。"""
-    from app.core.approval import ApprovalError, ApprovalService
-    from app.core.schemas import ApprovalPayload
-
-    data_dir = _data_dir()
-    record = approval_show(approval_id, data_dir=data_dir)  # 404 或返回记录
-    task_id = record["task_id"]
-    approval = ApprovalService(
-        storage_path=data_dir / "runtime" / "workspaces" / task_id / "approvals.jsonl"
+    _record, report = _decide_pending_approval(
+        approval_id, "approved", body.reason if body else None
     )
-    try:
-        approval.decide(approval_id, "approved", (body.reason if body else None))
-    except ApprovalError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # 恢复任务（run_id 从审批记录取；未记录 run_id 时用 task_id 兜底）
-    run_id = record.get("run_id") or task_id
-    try:
-        report = resume_task(
-            run_id,
-            payload=ApprovalPayload(
-                approval_id=approval_id, decision="approved", reason=(body.reason if body else None)
-            ),
-            data_dir=data_dir,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "approval_id": approval_id,
         "status": "approved",
@@ -317,30 +338,9 @@ def approve(approval_id: str, body: ApprovalDecisionBody | None = None) -> dict[
 @app.post("/approvals/{approval_id}/reject")
 def reject(approval_id: str, body: ApprovalDecisionBody | None = None) -> dict[str, Any]:
     """拒绝：不应用补丁，任务标记未实施（GT-W03）。"""
-    from app.core.approval import ApprovalError, ApprovalService
-    from app.core.schemas import ApprovalPayload
-
-    data_dir = _data_dir()
-    record = approval_show(approval_id, data_dir=data_dir)
-    task_id = record["task_id"]
-    approval = ApprovalService(
-        storage_path=data_dir / "runtime" / "workspaces" / task_id / "approvals.jsonl"
+    _record, report = _decide_pending_approval(
+        approval_id, "rejected", body.reason if body else None
     )
-    try:
-        approval.decide(approval_id, "rejected", (body.reason if body else None))
-    except ApprovalError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    run_id = record.get("run_id") or task_id
-    try:
-        report = resume_task(
-            run_id,
-            payload=ApprovalPayload(
-                approval_id=approval_id, decision="rejected", reason=(body.reason if body else None)
-            ),
-            data_dir=data_dir,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "approval_id": approval_id,
         "status": "rejected",
@@ -407,10 +407,19 @@ def tasks_list() -> list[dict[str, Any]]:
 def agents() -> list[dict[str, Any]]:
     """Agent 目录（010 第二十二部分，本阶段只读）。"""
     from app.core.registry import default_registry
+    from app.runner import list_tasks
 
     registry = default_registry()
+    waiting_task = None
+    for task in list_tasks(_data_dir()):
+        if task.get("status") != "paused":
+            continue
+        if any(a.get("status") == "pending" for a in approvals_of(task["run_id"], _data_dir())):
+            waiting_task = task
+            break
     out = []
     for agent in registry.all():
+        waiting = bool(waiting_task and agent.role_type == "executor")
         out.append(
             {
                 "agent_id": agent.agent_id,
@@ -421,6 +430,11 @@ def agents() -> list[dict[str, Any]]:
                 "token_limit": agent.token_limit,
                 "max_tool_calls": agent.max_tool_calls,
                 "allowed_tools": sorted(agent.allowed_tools),
+                "status": "waiting_approval" if waiting else "idle",
+                "current_task": (
+                    waiting_task["goal"] if waiting_task is not None and waiting else None
+                ),
+                "last_action": "approval requested" if waiting else None,
             }
         )
     return out
