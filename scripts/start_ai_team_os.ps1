@@ -71,5 +71,9 @@ Start-Process "http://127.0.0.1:5173"
 
 Write-Host "已启动。关闭本窗口不停止服务；停止方式：" -ForegroundColor Yellow
 Write-Host "  Stop-Process -Id $($Backend.Id),$($Frontend.Id)"
-Write-Host "按任意键退出脚本（服务保持运行）..."
-[void][Console]::ReadKey($true)
+if ([Console]::IsInputRedirected) {
+    Start-Sleep -Seconds 2   # 非交互/后台运行：跳过按键等待
+} else {
+    Write-Host "按任意键退出脚本（服务保持运行）..."
+    [void][Console]::ReadKey($true)
+}
