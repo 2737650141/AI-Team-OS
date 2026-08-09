@@ -7,6 +7,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
+from pydantic import BaseModel
+
 from app.core.config import AppSettings
 from app.core.output_governance import (
     OutputValidationError,
@@ -25,6 +30,8 @@ def generate_structured(
     settings: AppSettings,
     max_retries: int | None = None,
     sleep_fn=None,
+    telemetry: dict | None = None,
+    semantic_validator: Callable[[dict], Any] | None = None,
 ) -> dict:
     """生成并校验结构化输出；失败时按修复上限重试；超限抛 SCHEMA_VALIDATION_FAILED。"""
     last_error: OutputValidationError | None = None
@@ -34,9 +41,27 @@ def generate_structured(
             max_retries=max_retries if max_retries is not None else settings.model.max_retries,
             sleep_fn=sleep_fn,
         )
+        if telemetry is not None:
+            telemetry.update(
+                resp.model_dump(
+                    mode="json",
+                    exclude={"raw_text", "structured_output"},
+                )
+            )
+            telemetry["repair_attempts"] = attempt
         try:
             data = parse_json_object(resp.raw_text or "", settings.max_json_output_bytes)
-            return validate_against_schema(data, schema)
+            validated = validate_against_schema(data, schema)
+            if semantic_validator is not None:
+                try:
+                    semantic = semantic_validator(validated)
+                except Exception as exc:  # Pydantic/domain validation joins bounded repair
+                    raise OutputValidationError("semantic_validation_failed", str(exc)) from exc
+                if isinstance(semantic, BaseModel):
+                    return semantic.model_dump(mode="json")
+                if isinstance(semantic, dict):
+                    return semantic
+            return validated
         except OutputValidationError as exc:
             last_error = exc
             if attempt >= settings.max_output_repair_attempts:

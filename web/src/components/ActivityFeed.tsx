@@ -6,6 +6,7 @@ import { displayLabel } from "../i18n/labels";
 
 const IMPORTANT: Record<string, "success" | "danger" | "warning"> = {
   approval_requested: "warning",
+  approval_bypassed: "success",
   test_failed: "danger",
   task_failed: "danger",
   review_rejected: "danger",
@@ -26,6 +27,9 @@ export function ActivityFeed({ events, presenting = false }: { events: RuntimeEv
           ? "danger"
           : IMPORTANT[event.event_type];
         const subtask = String(event.payload_safe.subtask_id ?? "");
+        const modelDetail = event.event_type === "model_call_completed"
+          ? `${String(event.payload_safe.model ?? "")} · ${String(event.payload_safe.total_tokens ?? "—")} tokens · ${String(event.payload_safe.latency_ms ?? "—")}ms`
+          : event.event_type === "model_call_started" ? String(event.payload_safe.model ?? "") : "";
         return (
           <div key={event.event_id} className={`feed-item ${tone ? `feed-important ${tone}` : ""}`}>
             <span className="feed-icon">{tone === "danger" ? <XCircle size={15} /> : tone === "warning" ? <ShieldAlert size={15} /> : tone === "success" ? <CheckCircle2 size={15} /> : <CircleDot size={13} />}</span>
@@ -33,6 +37,7 @@ export function ActivityFeed({ events, presenting = false }: { events: RuntimeEv
             <span className="feed-actor">{displayLabel(event.actor_type ?? "system", lang)}</span>
             <span className="feed-type">{displayLabel(event.event_type, lang)}</span>
             {subtask && <span className="feed-context">{subtask}</span>}
+            {modelDetail && <span className="feed-context">{modelDetail}</span>}
           </div>
         );
       })}

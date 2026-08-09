@@ -17,6 +17,7 @@ from langgraph.types import Send, interrupt
 
 from app.agents.executor import DeterministicFakeExecutor, SandboxContext
 from app.agents.llm_agents import (
+    LLMExecutor,
     LLMPlanner,
     LLMResearcher,
     LLMReviewer,
@@ -118,11 +119,24 @@ def build_graph(
     settings = settings or AppSettings()
     router = router or ModelRouter(settings.routing)
     context = context or ContextBuilder(settings)
-    executor_agent = (
-        DeterministicFakeExecutor(sandbox_context) if sandbox_context is not None else None
-    )
+    executor_agent = None
+    if sandbox_context is not None:
+        executor_agent = (
+            LLMExecutor(
+                sandbox_context,
+                model_gateway,
+                router,
+                context,
+                settings,
+                tool_gateway,
+            )
+            if model_mode == "real"
+            else DeterministicFakeExecutor(sandbox_context)
+        )
     llm_planner = (
-        LLMPlanner(model_gateway, router, context, settings) if model_mode == "real" else None
+        LLMPlanner(model_gateway, router, context, settings, registry)
+        if model_mode == "real"
+        else None
     )
     llm_researcher = (
         LLMResearcher(model_gateway, router, context, settings, tool_gateway)
@@ -190,7 +204,11 @@ def build_graph(
     def plan(state: TaskState) -> dict:
         goal_text = state.clarified_goal or state.user_goal
         last_error: PlanValidationError | ProviderError | None = None
-        for _attempt in range(PLAN_RETRY_LIMIT + 1):
+        # Real structured generation already performs bounded repair with the
+        # exact schema/domain error. Re-running the original prompt would lose
+        # that feedback and consume budget without improving the plan.
+        attempts = 1 if llm_planner is not None else PLAN_RETRY_LIMIT + 1
+        for _attempt in range(attempts):
             try:
                 if llm_planner is not None:
                     plan_obj = llm_planner.make_plan(
@@ -225,7 +243,7 @@ def build_graph(
         return {
             "current_status": "failed",
             "failure_code": "planning_invalid",
-            "final_result": f"plan invalid after {PLAN_RETRY_LIMIT + 1} attempts: {last_error}",
+            "final_result": f"plan invalid after {attempts} attempts: {last_error}",
         }
 
     def route_plan(state: TaskState) -> str:
@@ -491,11 +509,21 @@ def build_graph(
                 for item in s.execution_result.unverified_items
             )
         )
+        is_real_run = state.model_mode == "real"
         report = FinalReport(
-            summary=f"任务 '{state.user_goal}' 完成：{len(state.subtasks)} 个子任务全部通过",
+            summary=(
+                f"真实模型任务 '{state.user_goal}' 完成："
+                f"{len(state.subtasks)} 个子任务全部通过，Reviewer 已验收"
+                if is_real_run
+                else f"任务 '{state.user_goal}' 完成：{len(state.subtasks)} 个子任务全部通过"
+            ),
             decision="accept",
             evidence_index=evidence_index,
-            limitations=["M2 使用 DeterministicFakeModel 与 Fixture 数据，未接入真实模型/网络"],
+            limitations=(
+                []
+                if is_real_run
+                else ["M2 使用 DeterministicFakeModel 与 Fixture 数据，未接入真实模型/网络"]
+            ),
             unverified_items=unverified,
             execution_summary={
                 "subtask_count": len(state.subtasks),
@@ -507,7 +535,9 @@ def build_graph(
         if llm_supervisor is not None:
             # 005 15.4：模型仅参与语言组织；失败回退确定性汇总
             composed = llm_supervisor.compose_summary(state)
-            if composed:
+            # REAL 验收以运行时事实为最终依据。真实模型仍参与 Supervisor 调用，
+            # 但不得用语言生成结果覆盖补丁、测试、审批与 Reviewer 的确定性状态。
+            if composed and not is_real_run:
                 report.summary = composed.get("summary", report.summary)
                 report.limitations.extend(composed.get("limitations", []) or [])
                 if composed.get("downgrade_note"):

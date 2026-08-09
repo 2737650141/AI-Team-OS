@@ -16,7 +16,7 @@ from app.core.output_governance import (
     parse_json_object,
     validate_against_schema,
 )
-from app.core.state import SubtaskState, TaskState
+from app.core.state import Evidence, SubtaskState, TaskState
 from app.gateway.audit import AuditLog
 from app.gateway.contracts import (
     ProviderError,
@@ -308,6 +308,25 @@ def test_context_truncation() -> None:
 
 
 # ---------- 20：LLM Reviewer 确定性失败不可覆盖 ----------
+def test_reviewer_context_accepts_typed_evidence() -> None:
+    state = TaskState(task_id="t", user_goal="x", token_budget=1000, cost_budget=1.0)
+    state.evidence = [
+        Evidence(id="e1", task_id="t", tool="local_read_text", summary="typed", ts="now")
+    ]
+    subtask = SubtaskState(
+        subtask_id="s1",
+        title="t",
+        objective="o",
+        assigned_role="researcher",
+        expected_output="r",
+        acceptance_criteria=["a"],
+        token_budget=100,
+        tool_call_budget=1,
+    )
+    context = ContextBuilder(_settings()).reviewer_context(state, subtask, [])
+    assert context["evidence"] == [{"id": "e1", "summary": "typed"}]
+
+
 def test_llm_reviewer_deterministic_failure_not_overridable(tmp_path: Path) -> None:
     from app.core.schemas import Claim, ExecutionResult, ReviewIssue
 

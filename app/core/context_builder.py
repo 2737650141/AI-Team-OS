@@ -19,13 +19,18 @@ class ContextBuilder:
         self,
         settings: AppSettings,
         memory_loader: Callable[[str], list[dict[str, Any]]] | None = None,
+        personalization_loader: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         self._settings = settings
         self._max_chars = 24000  # 约 6k token 的角色上下文上限
         self._memory_loader = memory_loader
+        self._personalization_loader = personalization_loader
 
     def _memories(self, role: str) -> list[dict[str, Any]]:
         return self._memory_loader(role) if self._memory_loader else []
+
+    def _personalization(self, role: str) -> dict[str, Any]:
+        return self._personalization_loader(role) if self._personalization_loader else {}
 
     # ---- 角色上下文（14.1） ----
     def supervisor_context(self, state) -> dict[str, Any]:
@@ -39,6 +44,7 @@ class ContextBuilder:
             ],
             "error_summary": state.final_result or "",
             "memory_context": self._memories("supervisor"),
+            "personalization": self._personalization("supervisor"),
         }
 
     def planner_context(self, state, agents: list[str]) -> dict[str, Any]:
@@ -47,6 +53,7 @@ class ContextBuilder:
             "constraints": {"token_budget": state.token_budget, "cost_budget": state.cost_budget},
             "agents": agents,
             "memory_context": self._memories("planner"),
+            "personalization": self._personalization("planner"),
         }
 
     def researcher_context(self, subtask, evidence: list[dict]) -> dict[str, Any]:
@@ -64,9 +71,23 @@ class ContextBuilder:
                 for e in evidence
             ],
             "memory_context": self._memories("researcher"),
+            "personalization": self._personalization("researcher"),
         }
 
     def reviewer_context(self, state, subtask, deterministic_issues: list[Any]) -> dict[str, Any]:
+        evidence = []
+        for item in state.evidence:
+            if isinstance(item, dict):
+                evidence.append(
+                    {"id": item.get("id", ""), "summary": item.get("summary", "")[:300]}
+                )
+            else:
+                evidence.append(
+                    {
+                        "id": getattr(item, "id", ""),
+                        "summary": getattr(item, "summary", "")[:300],
+                    }
+                )
         return {
             "requirement": subtask.objective,
             "acceptance": subtask.acceptance_criteria,
@@ -75,11 +96,19 @@ class ContextBuilder:
                 if subtask.execution_result
                 else {"error": "no artifact"}
             ),
-            "evidence": [
-                {"id": e["id"], "summary": e.get("summary", "")[:300]} for e in state.evidence
-            ],
+            "evidence": evidence,
             "deterministic_issues": [i.model_dump() for i in deterministic_issues],
             "memory_context": self._memories("reviewer"),
+            "personalization": self._personalization("reviewer"),
+        }
+
+    def executor_context(self, subtask, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+        return {
+            "objective": subtask.objective,
+            "acceptance_criteria": subtask.acceptance_criteria,
+            "evidence": evidence,
+            "memory_context": self._memories("executor"),
+            "personalization": self._personalization("executor"),
         }
 
     # ---- 裁剪（14.2） ----

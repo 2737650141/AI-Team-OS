@@ -28,8 +28,10 @@ class CustomProvider(BaseModel):
     storage: str = "missing"
     health: str = "not_tested"
     discovery_status: str = "not_synced"
+    invocation_status: str = "not_tested"
     last_checked_at: str | None = None
     last_model_sync_at: str | None = None
+    last_invoked_at: str | None = None
     is_default: bool = False
     local_provider: bool = False
     test_provider: bool = False
@@ -57,8 +59,10 @@ class ProviderStore:
                     discovered_models_json TEXT NOT NULL,
                     health TEXT NOT NULL,
                     discovery_status TEXT NOT NULL,
+                    invocation_status TEXT NOT NULL DEFAULT 'not_tested',
                     last_checked_at TEXT,
                     last_model_sync_at TEXT,
+                    last_invoked_at TEXT,
                     is_default INTEGER NOT NULL,
                     local_provider INTEGER NOT NULL,
                     test_provider INTEGER NOT NULL,
@@ -69,6 +73,14 @@ class ProviderStore:
                     ON custom_providers(provider_name COLLATE NOCASE);
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(custom_providers)")}
+            if "invocation_status" not in columns:
+                conn.execute(
+                    "ALTER TABLE custom_providers ADD COLUMN invocation_status "
+                    "TEXT NOT NULL DEFAULT 'not_tested'"
+                )
+            if "last_invoked_at" not in columns:
+                conn.execute("ALTER TABLE custom_providers ADD COLUMN last_invoked_at TEXT")
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -92,8 +104,13 @@ class ProviderStore:
             if provider.is_default:
                 conn.execute("UPDATE custom_providers SET is_default=0")
             conn.execute(
-                """INSERT INTO custom_providers VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO custom_providers
+                (provider_id, provider_name, base_url, models_endpoint, chat_endpoint,
+                api_mode, default_model, role_models_json, discovered_models_json,
+                health, discovery_status, invocation_status, last_checked_at,
+                last_model_sync_at, last_invoked_at, is_default, local_provider,
+                test_provider, created_at, updated_at) VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._values(provider),
             )
             conn.commit()
@@ -113,8 +130,10 @@ class ProviderStore:
             "role_models",
             "health",
             "discovery_status",
+            "invocation_status",
             "last_checked_at",
             "last_model_sync_at",
+            "last_invoked_at",
             "is_default",
             "local_provider",
             "test_provider",
@@ -131,8 +150,9 @@ class ProviderStore:
             conn.execute(
                 """UPDATE custom_providers SET provider_name=?, base_url=?, models_endpoint=?,
                 chat_endpoint=?, api_mode=?, default_model=?, role_models_json=?,
-                discovered_models_json=?, health=?, discovery_status=?, last_checked_at=?,
-                last_model_sync_at=?, is_default=?, local_provider=?, test_provider=?,
+                discovered_models_json=?, health=?, discovery_status=?, invocation_status=?,
+                last_checked_at=?, last_model_sync_at=?, last_invoked_at=?,
+                is_default=?, local_provider=?, test_provider=?,
                 updated_at=? WHERE provider_id=?""",
                 (
                     provider.provider_name,
@@ -145,8 +165,10 @@ class ProviderStore:
                     json.dumps(provider.discovered_models, ensure_ascii=False),
                     provider.health,
                     provider.discovery_status,
+                    provider.invocation_status,
                     provider.last_checked_at,
                     provider.last_model_sync_at,
+                    provider.last_invoked_at,
                     int(provider.is_default),
                     int(provider.local_provider),
                     int(provider.test_provider),
@@ -209,8 +231,10 @@ class ProviderStore:
             json.dumps(provider.discovered_models, ensure_ascii=False),
             provider.health,
             provider.discovery_status,
+            provider.invocation_status,
             provider.last_checked_at,
             provider.last_model_sync_at,
+            provider.last_invoked_at,
             int(provider.is_default),
             int(provider.local_provider),
             int(provider.test_provider),

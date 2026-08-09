@@ -170,6 +170,19 @@ def test_patch_atomic_rollback(worktree: Path, tmp_path: Path) -> None:
 
 
 # ---------- 30. 删除进入回收区 ----------
+def test_validator_rejects_out_of_bounds_single_file_hunk(worktree: Path) -> None:
+    (worktree / "main.py").write_text("a\nb\nc\n", encoding="utf-8")
+    proposal = PatchProposal(
+        task_id="t1",
+        target_files=["main.py"],
+        unified_diff=(
+            "--- a/main.py\n+++ b/main.py\n@@ -5,7 +5,7 @@\n b\n-c\n+C\n"
+        ),
+    )
+    with pytest.raises(PatchError, match="line count mismatch|beyond file end|out of range"):
+        PatchValidator(worktree).validate(proposal)
+
+
 def test_delete_moves_to_trash(worktree: Path, tmp_path: Path) -> None:
     artifacts = ArtifactWriter(tmp_path / "runtime", "t1")
     ts = SandboxToolset(worktree, "t1", artifacts, ApprovalService())

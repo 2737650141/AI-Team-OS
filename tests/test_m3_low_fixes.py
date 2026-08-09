@@ -21,7 +21,7 @@ def test_budget_property_readonly_snapshot(tmp_path: Path) -> None:
     assert isinstance(snapshot, BudgetSnapshot)
     assert snapshot.token_budget == 10000
     assert snapshot.cost_budget == 1.0
-    assert snapshot.usage == {"tokens": 0.0, "cost": 0.0}
+    assert snapshot.usage == {"tokens": 0.0, "cost": 0.0, "calls": 0.0}
     # 快照不可变：__slots__ 无 setter
     with pytest.raises(AttributeError):
         snapshot.tokens_used = 999  # type: ignore[misc]

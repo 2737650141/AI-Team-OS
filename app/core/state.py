@@ -166,7 +166,10 @@ class TaskState(BaseModel):
     # 预算：创建时由 API/用户写入，对 LLM 不可修改（002-A 第二节）
     token_budget: int = Field(gt=0)
     cost_budget: float = Field(gt=0)
-    budget_usage: dict[str, float] = Field(default_factory=lambda: {"tokens": 0.0, "cost": 0.0})
+    max_model_calls: int = Field(default=30, gt=0, le=100)
+    budget_usage: dict[str, float] = Field(
+        default_factory=lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0.0}
+    )
     subtask_budget_allocations: dict[str, int] = Field(default_factory=dict)
     checkpoint_version: str = CHECKPOINT_VERSION
     failure_code: FailureCodeStr = None
@@ -177,6 +180,7 @@ class TaskState(BaseModel):
     approvals: list[Approval] = Field(default_factory=list)
     final_result: str | None = None
     model_mode: str = "fake"  # fake | real（005 十六；真实调用必须服务端显式允许）
+    permission_mode: str = "standard"  # standard | full_access; only user/API may set it
     # ===== M2 多智能体字段（004 四） =====
     clarified_goal: str | None = None
     clarification_history: Annotated[list[ClarificationRecord], operator.add] = Field(
@@ -193,3 +197,5 @@ class TaskState(BaseModel):
     pending_approval_id: str | None = None  # 007 5.4：审批 interrupt 暂停标记
     # M4-A：Checkpoint 仅保存引用，正文每次角色使用前从 MemoryStore 重新校验。
     memory_refs: list[dict[str, Any]] = Field(default_factory=list)
+    # M4-B：派生配置快照用于透明追踪；不包含安全权限或新的事实来源。
+    personalization_applied: list[dict[str, Any]] = Field(default_factory=list)

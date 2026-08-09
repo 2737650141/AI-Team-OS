@@ -19,7 +19,7 @@ export function Agents() {
               <strong>{displayLabel(a.role, lang)}</strong>
               <StatusBadge status={a.enabled ? (a.status ?? "idle") : "disabled"} />
             </div>
-            <span className="muted">{t("agents.model")}: {a.model}</span>
+            <span className="muted"><span className={`mode-badge ${a.model_mode === "real" ? "real" : "demo"}`}>{a.model_mode === "real" ? "REAL" : "DEMO"}</span> {a.provider} · {t("agents.model")}: {a.model}</span>
             <div className="agent-presence-grid">
               <Presence label={t("agents.currentAction")} value={displayLabel(a.current_action ?? a.status, lang)} />
               <Presence label={t("agents.currentSubtask")} value={a.current_subtask ?? "—"} />

@@ -25,6 +25,38 @@ def test_dangerous_tool_blocked_handler_never_runs(tmp_path: Path) -> None:
     assert gateway.approvals[0]["status"] == "pending"
 
 
+def test_full_access_bypasses_only_approval_gate(tmp_path: Path) -> None:
+    from app.tools.spec import RiskLevel, ToolSpec
+
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    gateway = ToolGateway(audit=audit, task_id="t1", approval_bypass=True)
+    executed: list[str] = []
+
+    def handler(path: str, content: str) -> dict:
+        executed.append(f"{path}:{content}")
+        return {"ok": True}
+
+    gateway.register(
+        ToolSpec(
+            name="full_access_write",
+            description="write fixture",
+            input_schema={"path": "str", "content": "str"},
+            risk_level=RiskLevel.DANGEROUS,
+            read_only=False,
+            requires_approval=True,
+            handler=handler,
+        )
+    )
+
+    result = gateway.invoke("full_access_write", {"path": "/tmp/x", "content": "ok"})
+
+    assert result.ok is True
+    assert executed == ["/tmp/x:ok"]
+    assert gateway.approvals == []
+    audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert "tool_approval_bypassed" in audit_text
+
+
 def test_safe_readonly_lookup_allowed(tool_gateway: ToolGateway) -> None:
     """GT-01 离线 + GT-03：safe + read_only 自动放行，产出证据。"""
     result = tool_gateway.invoke("fixture_repo_lookup", {"repo_name": "langgraph"})
@@ -52,6 +84,41 @@ def test_idempotency_skips_duplicate(tool_gateway: ToolGateway) -> None:
     assert second.evidence_id == first.evidence_id  # Evidence 复用
     # 两次调用均有记录（原始 ok + 缓存命中 cached_success_result），审计轨迹完整
     assert len(tool_gateway.evidence) == 1
+
+
+def test_read_only_replays_when_restart_cache_is_unavailable(tmp_path: Path) -> None:
+    from app.tools.spec import RiskLevel, ToolSpec
+
+    calls: list[str] = []
+
+    def handler(value: str) -> dict:
+        calls.append(value)
+        return {"value": value}
+
+    spec = ToolSpec(
+        name="safe_read",
+        description="safe read",
+        input_schema={"value": "str"},
+        risk_level=RiskLevel.SAFE,
+        read_only=True,
+        handler=handler,
+    )
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    first_gateway = ToolGateway(audit=audit, task_id="t1")
+    first_gateway.register(spec)
+    assert first_gateway.invoke("safe_read", {"value": "x"}).ok is True
+
+    resumed_gateway = ToolGateway(
+        audit=audit,
+        task_id="t1",
+        initial_keys=first_gateway.seen_keys,
+    )
+    resumed_gateway.register(spec)
+    replayed = resumed_gateway.invoke("safe_read", {"value": "x"})
+
+    assert replayed.ok is True
+    assert replayed.status == "ok"
+    assert calls == ["x", "x"]
 
 
 def test_requires_approval_tool_blocked_even_if_safe(tmp_path: Path) -> None:

@@ -89,6 +89,10 @@ input:focus { outline: 1px solid var(--accent); }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .seg button { background: var(--bg2); border: 0; color: var(--muted); padding: 6px 12px; cursor: pointer; }
 .seg button.on { background: var(--accent); color: #fff; }
+.permission-mode-field { margin-top: 8px; }
+.permission-seg { align-self: flex-start; }
+.permission-seg button.on.danger { background: #b45309; color: #fff; }
+.permission-warning { margin: 2px 0 0; color: var(--yellow); font-size: 12px; line-height: 1.5; }
 
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .table th, .table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
@@ -376,6 +380,19 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .switch-row, .check-row { display: flex; gap: 8px; align-items: center; }
 .switch-row input, .check-row input { width: auto; }
 .task-memory-list { display: grid; gap: 7px; }
+.personalization-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+.personalization-card { display: grid; gap: 10px; }
+.personalization-card.disabled { opacity: .7; }
+.personalization-value { font-size: 1.15rem; font-weight: 700; color: var(--text); }
+.personalization-scope, .personalization-security { display: flex; gap: 18px; align-items: end; }
+.personalization-scope .field { flex: 1; }
+.real-identity { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.mode-badge { padding: 4px 9px; border-radius: 999px; font-weight: 800; font-size: .72rem; letter-spacing: .08em; }
+.mode-badge.real { color: #8ff0bd; background: rgba(29, 185, 105, .18); border: 1px solid rgba(83, 230, 151, .4); }
+.mode-badge.demo { color: var(--muted); background: var(--bg2); border: 1px solid var(--border); }
+.personalization-applied-list { display: grid; gap: 8px; }
+.personalization-applied-list article { display: grid; grid-template-columns: 180px 1fr; gap: 5px 12px; padding: 10px; border-radius: 8px; background: var(--bg2); }
+.personalization-applied-list small { grid-column: 2; color: var(--muted); }
 .task-memory-list article { padding: 10px 11px; background: rgba(11, 15, 23, .55); border-radius: 8px; border-left: 2px solid var(--accent); }
 .task-memory-list article > div { display: flex; align-items: center; gap: 7px; }
 .task-memory-list p { margin: 6px 0; }

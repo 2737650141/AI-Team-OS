@@ -241,6 +241,10 @@ class MemoryService:
                 include_global=project_id is not None,
                 limit=max(budget.max_memories * 6, 50),
             )
+        # The Memory Center may list every project when no filter is supplied,
+        # but an unscoped task must never inherit project-specific memory.
+        if project_id is None:
+            candidates = [memory for memory in candidates if memory.project_id is None]
         candidates = [m for m in candidates if m.memory_type in allowed_types]
         candidates.sort(key=lambda m: self._score(m, project_id), reverse=True)
         selected: list[MemoryRecord] = []

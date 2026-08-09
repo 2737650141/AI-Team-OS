@@ -22,6 +22,7 @@ from app.gateway.contracts import ProviderError
 from app.memory.models import MemorySettings, MemoryType, PrivacyLevel
 from app.memory.service import MemoryService
 from app.runner import (
+    _model_cost_available,
     approval_show,
     approvals_of,
     artifact_show,
@@ -62,6 +63,8 @@ class TaskCreate(BaseModel):
     token_budget: int = Field(default=10000, gt=0, le=1_000_000)
     cost_budget: float = Field(default=1.0, gt=0, le=100.0)
     model_mode: str = Field(default="fake", pattern="^(fake|real)$")
+    permission_mode: str = Field(default="standard", pattern="^(standard|full_access)$")
+    max_calls: int = Field(default=30, gt=0, le=100)
     model_overrides: dict[str, str] = Field(default_factory=dict)
     # 006 十五：工具画像 / 项目别名 / 允许域名（客户端不能传绝对路径或动态 MCP）
     tool_profile: str = Field(default="readonly", pattern="^[a-z_]+$")
@@ -91,8 +94,34 @@ class MemoryEditConfirmBody(BaseModel):
     value: str = Field(min_length=1, max_length=4000)
 
 
+class PersonalizationControlBody(BaseModel):
+    field: str = Field(min_length=1, max_length=100)
+    value: str | None = Field(default=None, max_length=500)
+    enabled: bool = True
+    project_id: str | None = Field(default=None, max_length=200)
+    task_type: str = Field(default="", max_length=100)
+
+
+class PersonalizationSignalBody(BaseModel):
+    signal_type: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=500)
+    task_id: str = Field(min_length=1, max_length=200)
+    project_id: str | None = Field(default=None, max_length=200)
+
+
+class PersonalizationDecisionBody(BaseModel):
+    decision: Literal["yes", "no", "project", "suppress"]
+    project_id: str | None = Field(default=None, max_length=200)
+
+
 def _memory() -> MemoryService:
     return MemoryService.from_data_dir(_data_dir())
+
+
+def _adaptive():
+    from app.personalization.service import AdaptiveService
+
+    return AdaptiveService.from_data_dir(_data_dir())
 
 
 def _memory_event(event_type: str, memory_id: str, run_id: str | None = None) -> None:
@@ -268,6 +297,113 @@ def task_memory(run_id: str) -> dict[str, Any]:
     return {"run_id": run_id, "usage": _memory().store.usage_for_run(run_id)}
 
 
+@app.get("/personalization")
+def personalization_profile(
+    project_id: str | None = None,
+    task_type: str = "general",
+    goal: str = "",
+) -> dict[str, Any]:
+    service = _adaptive()
+    profile = service.derive(goal=goal, project_id=project_id, task_type=task_type)
+    proposals = [
+        item
+        for item in service.memory.store.list_proposals(status="proposed", project_id=project_id)
+        if "interaction_preference" in item.tags
+    ]
+    return {
+        "profile": profile.model_dump(mode="json"),
+        "proposals": [item.model_dump(mode="json") for item in proposals],
+    }
+
+
+@app.put("/personalization/control")
+def personalization_control(body: PersonalizationControlBody) -> dict[str, Any]:
+    from app.personalization.service import DEFAULTS
+
+    if body.field not in DEFAULTS:
+        raise HTTPException(status_code=400, detail="unsupported personalization field")
+    service = _adaptive()
+    service.store.set_control(
+        field=body.field,
+        value=body.value,
+        enabled=body.enabled,
+        project_id=body.project_id,
+        task_type=body.task_type,
+    )
+    return service.derive(
+        project_id=body.project_id, task_type=body.task_type or "general"
+    ).model_dump(mode="json")
+
+
+@app.delete("/personalization/reset")
+def reset_personalization(
+    project_id: str | None = None,
+    field: str | None = None,
+) -> dict[str, Any]:
+    removed = _adaptive().store.reset("local-user", project_id=project_id, field=field)
+    return {"reset": removed, "project_id": project_id, "field": field}
+
+
+@app.post("/personalization/signals")
+def personalization_signal(body: PersonalizationSignalBody) -> dict[str, Any]:
+    try:
+        proposal = _adaptive().observe(
+            signal_type=body.signal_type,
+            value=body.value,
+            task_id=body.task_id,
+            project_id=body.project_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "proposal": proposal.model_dump(mode="json") if proposal is not None else None
+    }
+
+
+@app.post("/personalization/proposals/{proposal_id}/decision")
+def personalization_decision(
+    proposal_id: str, body: PersonalizationDecisionBody
+) -> dict[str, Any]:
+    service = _adaptive()
+    proposal = service.memory.store.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="personalization proposal not found")
+    if body.decision == "yes":
+        return service.memory.confirm(proposal_id).model_dump(mode="json")
+    if body.decision == "project":
+        if not body.project_id:
+            raise HTTPException(status_code=400, detail="project decision requires project_id")
+        service.memory.store.reject_proposal(proposal_id)
+        replacement, decision = service.memory.propose(
+            memory_type="procedural_preference",
+            subject=proposal.subject,
+            predicate=proposal.predicate,
+            value=proposal.proposed_value,
+            reason=proposal.reason,
+            source_type="user_confirmation",
+            source_ref=proposal.proposal_id,
+            project_id=body.project_id,
+            confidence=proposal.confidence,
+            privacy_level="personal",
+            tags=["interaction_preference"],
+            trusted_user_source=True,
+        )
+        if replacement is None:
+            raise HTTPException(status_code=409, detail=decision.reason)
+        return service.memory.confirm(replacement.proposal_id).model_dump(mode="json")
+    service.memory.store.reject_proposal(proposal_id)
+    service.store.reject_proposal(
+        proposal.subject,
+        proposal.project_id,
+        forever=body.decision == "suppress",
+    )
+    return {
+        "proposal_id": proposal_id,
+        "status": "rejected",
+        "suppressed": body.decision == "suppress",
+    }
+
+
 @app.get("/providers")
 def providers() -> dict[str, Any]:
     s = _settings()
@@ -337,6 +473,8 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
             model_mode=body.model_mode,
             model_overrides=overrides or None,
             settings=_settings(),
+            max_model_calls=body.max_calls,
+            permission_mode=body.permission_mode,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=exc.safe_message) from exc
@@ -347,11 +485,35 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
         "task_id": report.task_id,
         "run_id": report.run_id,
         "status": report.status,
+        "permission_mode": report.state.permission_mode,
         "final_result": report.state.final_result,
         "usage": report.usage,
         "call_count": report.call_count,
         "tool_call_count": report.tool_call_count,
         "memory_context_count": len(report.state.memory_refs),
+        "personalization_applied_count": len(report.state.personalization_applied),
+    }
+
+
+def _task_model_identity(state) -> dict[str, Any]:
+    if state.model_mode != "real":
+        return {
+            "badge": "DEMO",
+            "provider": "Fake Model",
+            "default_model": "deterministic-fake",
+            "role_models": {
+                role: "deterministic-fake"
+                for role in ("supervisor", "planner", "researcher", "executor", "reviewer")
+            },
+        }
+    provider = _provider_store().default()
+    if provider is None:
+        return {"badge": "REAL", "provider": "Unconfigured", "default_model": "", "role_models": {}}
+    return {
+        "badge": "REAL",
+        "provider": provider.provider_name,
+        "default_model": provider.default_model,
+        "role_models": provider.role_models,
     }
 
 
@@ -369,6 +531,7 @@ def get_task(run_id: str) -> dict[str, Any]:
         "current_status": state.current_status,
         "failure_code": state.failure_code,
         "model_mode": state.model_mode,
+        "permission_mode": state.permission_mode,
         "goal": state.user_goal,
         "clarified_goal": state.clarified_goal,
         "pending_clarification_id": state.pending_clarification_id,
@@ -390,11 +553,18 @@ def get_task(run_id: str) -> dict[str, Any]:
         ],
         "token_budget": state.token_budget,
         "cost_budget": state.cost_budget,
+        "max_model_calls": state.max_model_calls,
         "budget_usage": state.budget_usage,
+        "cost_available": _model_cost_available(
+            _data_dir(), state.model_mode, state.task_id, report.run_id or state.task_id
+        ),
         "rework_count": state.rework_count,
         "usage": report.usage,
         "tool_call_count": report.tool_call_count,
         "memory_context_count": len(state.memory_refs),
+        "personalization_applied_count": len(state.personalization_applied),
+        "personalization_applied": state.personalization_applied,
+        "model_identity": _task_model_identity(state),
     }
 
 
@@ -475,8 +645,6 @@ def _decide_pending_approval(
     run_id = record.get("run_id") or record["task_id"]
     snapshot = status_task(run_id, data_dir=data_dir)
     if snapshot.state.current_status == "paused":
-        if snapshot.state.pending_approval_id != approval_id:
-            raise HTTPException(status_code=409, detail="approval is not pending for this run")
         try:
             report = resume_task(
                 run_id,
@@ -635,6 +803,9 @@ def agents() -> list[dict[str, Any]]:
             None,
         )
     out = []
+    active_identity = None
+    if active_task is not None:
+        active_identity = _task_model_identity(report.state)
     for agent in registry.all():
         waiting = bool(waiting_task and agent.role_type == "executor")
         assigned = bool(active_subtask and active_subtask.assigned_role == agent.role_type)
@@ -644,7 +815,14 @@ def agents() -> list[dict[str, Any]]:
                 "agent_id": agent.agent_id,
                 "role": agent.role_type,
                 "display_name": agent.display_name,
-                "model": agent.model_scenario,
+                "model": (
+                    active_identity.get("role_models", {}).get(agent.role_type)
+                    or active_identity.get("default_model")
+                    if active_identity
+                    else agent.model_scenario
+                ),
+                "provider": active_identity.get("provider") if active_identity else "Fake Model",
+                "model_mode": report.state.model_mode if active_task is not None else "fake",
                 "enabled": agent.enabled,
                 "token_limit": agent.token_limit,
                 "max_tool_calls": agent.max_tool_calls,
@@ -743,7 +921,7 @@ def task_events(run_id: str, after: int = 0) -> Any:
         store = get_store()
     # 校验 run 存在
     try:
-        status_task(run_id, data_dir=_data_dir())
+        task_report = status_task(run_id, data_dir=_data_dir())
     except KeyError:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
@@ -755,6 +933,13 @@ def task_events(run_id: str, after: int = 0) -> Any:
         idle = 0
         while True:
             events = store.list_events(run_id=run_id, after_sequence=last)
+            # Older role calls that omitted request.run_id were safely stored
+            # under task_id. Merge them for complete per-role UI telemetry.
+            if task_report.task_id != run_id:
+                events.extend(
+                    store.list_events(run_id=task_report.task_id, after_sequence=last)
+                )
+                events.sort(key=lambda event: event.sequence)
             for ev in events:
                 yield _format_sse_frame(ev.sequence, ev.model_dump())
                 last = ev.sequence
@@ -820,6 +1005,10 @@ class CustomProviderBody(BaseModel):
 class CustomCredentialBody(BaseModel):
     api_key: str = Field(min_length=1, max_length=2000)
     storage_mode: str = Field(default="session", pattern="^(session|secure)$")
+
+
+class CustomModelTestBody(BaseModel):
+    model: str | None = Field(default=None, max_length=200)
 
 
 _resolver = None  # 惰性初始化（依赖 data_dir）
@@ -997,9 +1186,12 @@ def delete_custom_credential(provider_id: str) -> dict[str, Any]:
 
 
 def _discover_custom_models(provider_id: str) -> dict[str, Any]:
+    import time
+
     from app.core.provider_store import models_url, normalize_models
     from app.memory.models import utc_now
 
+    started = time.perf_counter()
     store = _provider_store()
     provider = store.get(provider_id)
     if provider is None:
@@ -1021,6 +1213,8 @@ def _discover_custom_models(provider_id: str) -> dict[str, Any]:
             "models": [dict(item, display_name=item["id"]) for item in models],
             "count": len(models),
             "last_model_sync_at": provider.last_model_sync_at,
+            "http_status": 200,
+            "latency_ms": max(1, round((time.perf_counter() - started) * 1000)),
         }
     key = _secret_resolver().resolve(store.secret_key(provider_id))
     if not key:
@@ -1046,6 +1240,8 @@ def _discover_custom_models(provider_id: str) -> dict[str, Any]:
                     "models": [],
                     "count": 0,
                     "manual_allowed": True,
+                    "http_status": 404,
+                    "latency_ms": max(1, round((time.perf_counter() - started) * 1000)),
                 }
             if response.status_code in {401, 403}:
                 raise HTTPException(status_code=401, detail="authentication failed")
@@ -1082,6 +1278,8 @@ def _discover_custom_models(provider_id: str) -> dict[str, Any]:
                 "models": [],
                 "count": 0,
                 "manual_allowed": True,
+                "http_status": 200,
+                "latency_ms": max(1, round((time.perf_counter() - started) * 1000)),
             }
         models = normalize_models(payload)
     except httpx.TimeoutException as exc:
@@ -1097,6 +1295,8 @@ def _discover_custom_models(provider_id: str) -> dict[str, Any]:
         "models": [dict(item, display_name=item["id"]) for item in models],
         "count": len(models),
         "last_model_sync_at": provider.last_model_sync_at,
+        "http_status": 200,
+        "latency_ms": max(1, round((time.perf_counter() - started) * 1000)),
     }
 
 
@@ -1139,6 +1339,121 @@ def test_custom_provider(provider_id: str) -> dict[str, Any]:
         status = "authentication_failed" if exc.status_code == 401 else "unreachable"
     provider = store.update(provider_id, health=status, last_checked_at=utc_now())
     return {"provider_id": provider_id, "status": provider.health}
+
+
+@app.post("/settings/connections/providers/{provider_id}/test-model")
+def test_custom_model(provider_id: str, body: CustomModelTestBody | None = None) -> dict[str, Any]:
+    """One bounded real inference. Credential, headers and raw output never leave this endpoint."""
+    import uuid
+
+    from app.core.budget import BudgetController
+    from app.core.events import init as events_init
+    from app.gateway.audit import AuditLog
+    from app.gateway.contracts import ModelRequest, ProviderError, ProviderErrorCode
+    from app.gateway.model_gateway import ModelGateway
+    from app.gateway.openai_compatible import OpenAICompatibleProvider
+    from app.gateway.structured_gen import generate_structured
+    from app.memory.models import utc_now
+
+    store = _provider_store()
+    provider = store.get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    if provider.test_provider:
+        raise HTTPException(status_code=409, detail="real model test refuses isolated provider")
+    key = _secret_resolver().resolve(store.secret_key(provider_id))
+    if not key:
+        raise HTTPException(status_code=409, detail="credential is not configured")
+    model = (body.model if body else None) or provider.default_model
+    if not model:
+        raise HTTPException(status_code=409, detail="select a model before testing invocation")
+    runtime_provider = OpenAICompatibleProvider(
+        base_url=provider.base_url,
+        api_key=key,
+        default_model=model,
+        enable_real=True,
+        timeout_seconds=30,
+        temperature=0,
+        max_output_tokens=64,
+        allow_local=provider.local_provider,
+        chat_endpoint=provider.chat_endpoint,
+        provider_name=provider.provider_name,
+    )
+    events_init(_data_dir())
+    gateway = ModelGateway(
+        provider=runtime_provider,
+        budget=BudgetController(512, 0.05, max_calls=3),
+        audit=AuditLog(_data_dir() / "audit.jsonl"),
+        task_id="real01-model-test",
+    )
+    request = ModelRequest(
+        request_id=uuid.uuid4().hex[:16],
+        task_id="real01-model-test",
+        run_id="real01-model-test",
+        agent_id="acceptance",
+        role_type="supervisor",
+        model=model,
+        messages=[
+            {"role": "system", "content": "Return only valid JSON with no markdown."},
+            {
+                "role": "user",
+                "content": 'Return exactly this JSON object: {"status":"ok","number":7}',
+            },
+        ],
+        response_schema={"status": {"type": "str"}, "number": {"type": "int"}},
+        max_output_tokens=64,
+        timeout_seconds=30,
+        metadata={"acceptance": "REAL-01-A"},
+    )
+    telemetry: dict[str, Any] = {}
+    try:
+        data = generate_structured(
+            gateway,
+            request,
+            request.response_schema or {},
+            _settings(),
+            max_retries=0,
+            telemetry=telemetry,
+        )
+        if data != {"status": "ok", "number": 7}:
+            raise ProviderError(
+                ProviderErrorCode.SCHEMA_VALIDATION_FAILED,
+                "minimal model response failed semantic validation",
+                provider=provider.provider_name,
+                model=model,
+            )
+    except ProviderError as exc:
+        failure = {
+            ProviderErrorCode.AUTHENTICATION_ERROR: "AUTHENTICATION_FAILED",
+            ProviderErrorCode.MODEL_NOT_FOUND: "MODEL_NOT_FOUND",
+            ProviderErrorCode.RATE_LIMITED: "RATE_LIMITED",
+            ProviderErrorCode.TIMEOUT: "PROVIDER_TIMEOUT",
+            ProviderErrorCode.PROVIDER_INTERNAL_ERROR: "PROVIDER_SERVER_ERROR",
+            ProviderErrorCode.SCHEMA_VALIDATION_FAILED: "SCHEMA_INVALID",
+            ProviderErrorCode.BUDGET_INSUFFICIENT: "BUDGET_EXCEEDED",
+        }.get(exc.code, "RUNTIME_FAILED")
+        store.update(
+            provider_id,
+            invocation_status=failure.lower(),
+            last_invoked_at=utc_now(),
+        )
+        raise HTTPException(status_code=502, detail=failure) from exc
+    store.update(provider_id, invocation_status="success", last_invoked_at=utc_now())
+    return {
+        "status": "success",
+        "real_call": True,
+        "provider": provider.provider_name,
+        "endpoint": provider.base_url,
+        "model": telemetry.get("model", model),
+        "input_tokens": telemetry.get("input_tokens"),
+        "output_tokens": telemetry.get("output_tokens"),
+        "cached_tokens": telemetry.get("cached_tokens"),
+        "total_tokens": telemetry.get("total_tokens"),
+        "usage_available": telemetry.get("usage_available", False),
+        "latency_ms": telemetry.get("latency_ms"),
+        "estimated_cost": telemetry.get("estimated_cost"),
+        "repair_attempts": telemetry.get("repair_attempts", 0),
+    }
 
 
 @app.put("/settings/connections/{provider}")

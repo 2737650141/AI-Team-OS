@@ -75,7 +75,13 @@ describe("Dashboard", () => {
       screen.getByPlaceholderText("你想让 AI 团队做什么？"),
       "hello world",
     );
+    await userEvent.click(screen.getByText("高级"));
+    await userEvent.click(screen.getByRole("button", { name: "最高权限（免审批）" }));
     await userEvent.click(screen.getByRole("button", { name: "开始任务" }));
-    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({ goal: "hello world", model_mode: "fake" })));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      goal: "hello world",
+      model_mode: "fake",
+      permission_mode: "full_access",
+    })));
   });
 });

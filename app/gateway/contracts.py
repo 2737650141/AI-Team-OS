@@ -38,6 +38,8 @@ class ModelResponse(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    cached_tokens: int | None = None
+    usage_available: bool = True
     estimated_cost: float | None = None
     latency_ms: int = 0
     finish_reason: str | None = None

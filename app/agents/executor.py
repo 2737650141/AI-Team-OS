@@ -50,6 +50,7 @@ class SandboxContext:
     tool_gateway: ToolGateway | None = None
     task_id: str = ""
     run_id: str | None = None  # 真实 run_id（审批记录绑定，API/CLI 恢复定位）
+    permission_mode: str = "standard"
 
 
 class ExecutorError(Exception):
@@ -186,7 +187,11 @@ class DeterministicFakeExecutor:
             task_id=sb.task_id,
             subtask_id=subtask.subtask_id,
             created_by="executor",
-            metadata={"patch_id": proposal.patch_id, "expected_effect": proposal.expected_effect},
+            metadata={
+                "patch_id": proposal.patch_id,
+                "expected_effect": proposal.expected_effect,
+                "proposal": proposal.model_dump(mode="json"),
+            },
             dedupe_content=True,
         )
         # 目标哈希（审批绑定，5.3）
@@ -197,7 +202,7 @@ class DeterministicFakeExecutor:
                 target_hashes[rel] = sha256_text(
                     target.read_text(encoding="utf-8", errors="replace")
                 )
-        parameter_hash = ApprovalService.parameter_hash_of(
+        candidate_parameter_hash = ApprovalService.parameter_hash_of(
             {"patch_json": proposal.model_dump_json()}
         )
         # 重放语义（5.4）：LangGraph 恢复时重放本节点——复用该子任务最新**可决策**审批
@@ -206,11 +211,19 @@ class DeterministicFakeExecutor:
         existing = [
             r
             for r in sb.approval.all(sb.task_id)
-            if r.subtask_id == subtask.subtask_id and r.status in ("pending", "approved")
+            if r.subtask_id == subtask.subtask_id
+            and r.status in ("pending", "approved")
+            and r.diff_ref == diff_artifact.artifact_id
+            and r.target_paths == proposal.target_files
         ]
         if existing:
             request = existing[-1]
+            # The immutable approved diff artifact and target list are exact
+            # matches. Reuse the parameter hash bound to that approval even if
+            # a replayed model changes non-executable proposal prose.
+            parameter_hash = request.parameter_hash
         else:
+            parameter_hash = candidate_parameter_hash
             request = sb.approval.create(
                 task_id=sb.task_id,
                 run_id=sb.run_id or sb.task_id,
@@ -218,7 +231,11 @@ class DeterministicFakeExecutor:
                 action_type="apply_patch",
                 tool_name="sandbox_apply_patch",
                 risk_level="sensitive",
-                approval_level="explicit",
+                approval_level=(
+                    "automatic_full_access"
+                    if sb.permission_mode == "full_access"
+                    else "explicit"
+                ),
                 summary=proposal.reason,
                 target_paths=proposal.target_files,
                 diff_ref=diff_artifact.artifact_id,
@@ -231,18 +248,41 @@ class DeterministicFakeExecutor:
             event_emit(
                 task_id=sb.task_id,
                 run_id=sb.run_id or sb.task_id,
-                event_type="approval_requested",
+                event_type=(
+                    "approval_bypassed"
+                    if sb.permission_mode == "full_access"
+                    else "approval_requested"
+                ),
                 actor_type="executor",
                 actor_id=subtask.subtask_id,
-                summary=f"approval requested: {proposal.reason}",
+                summary=(
+                    f"full-access mode applied without manual approval: {proposal.reason}"
+                    if sb.permission_mode == "full_access"
+                    else f"approval requested: {proposal.reason}"
+                ),
                 payload_safe={
                     "approval_id": request.approval_id,
                     "files": proposal.target_files,
                     "diff_ref": diff_artifact.artifact_id,
+                    "permission_mode": sb.permission_mode,
                 },
             )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
-        decision = interrupt(ApprovalPayload(approval_id=request.approval_id, decision="approved"))
+        if sb.permission_mode == "full_access":
+            sb.approval.decide(
+                request.approval_id,
+                "approved",
+                reason="user selected full-access mode; manual approval bypassed",
+            )
+            decision = ApprovalPayload(
+                approval_id=request.approval_id,
+                decision="approved",
+                reason="full_access",
+            )
+        else:
+            decision = interrupt(
+                ApprovalPayload(approval_id=request.approval_id, decision="approved")
+            )
         # 恢复值绑定解析（blocking sa_20260805_144828）：用户决定绑定的是其批准的
         # approval_id（拒绝重放时用户决定绑定旧 rejected 请求，而本节点新建了请求）。
         # 按 payload.approval_id 解析真实请求；新建但未决策的请求取消（不污染审批列表）。

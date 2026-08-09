@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -56,7 +57,9 @@ class OpenAICompatibleProvider:
         transport: httpx.BaseTransport | None = None,
         allow_local: bool = False,
         chat_endpoint: str = "/chat/completions",
+        provider_name: str = "openai_compatible",
     ) -> None:
+        self.provider_name = provider_name
         self._base_url = base_url.rstrip("/")
         self._chat_endpoint = "/" + chat_endpoint.strip().lstrip("/")
         self._api_key = api_key  # 私有字段：不进入状态/日志/消息
@@ -66,6 +69,7 @@ class OpenAICompatibleProvider:
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
         self._allow_local = allow_local
+        self.call_count = 0
         # 显式超时 + 连接复用 + 不自动重定向（重定向后手动校验，7.2/7.3）
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout_seconds, connect=timeout_seconds),
@@ -77,6 +81,8 @@ class OpenAICompatibleProvider:
     # ---- 契约（005 6） ----
     def generate(self, request: ModelRequest) -> ModelResponse:
         self._assert_ready(request.model)
+        self.call_count += 1
+        started = time.perf_counter()
         url = self._chat_url()
         self._assert_url_allowed(url)
         body = {
@@ -87,6 +93,16 @@ class OpenAICompatibleProvider:
             else self._temperature,
             "max_tokens": request.max_output_tokens or self._max_output_tokens,
         }
+        if request.response_schema is not None:
+            # OpenAI-compatible JSON mode. DeepSeek documents that this flag,
+            # together with an explicit JSON instruction, prevents free-form
+            # output from reaching the deterministic parser.
+            body["response_format"] = {"type": "json_object"}
+        if (urlparse(self._base_url).hostname or "").lower().endswith("deepseek.com"):
+            # DeepSeek V4 defaults to thinking mode. For bounded schema calls,
+            # disable hidden reasoning so max_tokens remains available for the
+            # actual JSON payload instead of ending with empty content.
+            body["thinking"] = {"type": "disabled"}
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -108,7 +124,6 @@ class OpenAICompatibleProvider:
                             model=request.model,
                         )
                     chunks.append(chunk)
-                resp.read()
                 status_code = resp.status_code
                 resp_headers = resp.headers
         except httpx.TimeoutException as exc:
@@ -200,7 +215,9 @@ class OpenAICompatibleProvider:
         resp = httpx.Response(
             status_code, headers=resp_headers, content=content, request=resp.request
         )
-        return self._parse_success(request, resp)
+        parsed = self._parse_success(request, resp)
+        parsed.latency_ms = max(1, round((time.perf_counter() - started) * 1000))
+        return parsed
 
     def estimate_usage(self, request: ModelRequest) -> UsageEstimate:
         """调用前估算（10.1）：输入按 messages 字符粗估；输出按 max_output_tokens 预留。"""
@@ -333,11 +350,19 @@ class OpenAICompatibleProvider:
                 input_tokens = int(usage.get("prompt_tokens", 0))
                 output_tokens = int(usage.get("completion_tokens", 0))
                 total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens))
+                cached_tokens = usage.get("prompt_cache_hit_tokens")
+                if cached_tokens is None:
+                    details = usage.get("prompt_tokens_details") or {}
+                    cached_tokens = details.get("cached_tokens")
+                cached_tokens = int(cached_tokens) if cached_tokens is not None else None
+                usage_available = True
             else:
                 # usage 缺失：按估算记账（10.2），防止预算绕过；不伪造价格
                 input_tokens = max(1, sum(len(m.get("content", "")) for m in request.messages) // 4)
                 output_tokens = request.max_output_tokens or 0
                 total_tokens = input_tokens + output_tokens
+                cached_tokens = None
+                usage_available = False
         except (KeyError, TypeError, ValueError) as exc:
             raise ProviderError(
                 ProviderErrorCode.MALFORMED_RESPONSE,
@@ -348,11 +373,13 @@ class OpenAICompatibleProvider:
         return ModelResponse(
             request_id=request.request_id,
             provider=self.provider_name,
-            model=request.model,
+            model=str(data.get("model") or request.model),
             raw_text=raw_text,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
+            usage_available=usage_available,
             estimated_cost=None,  # 价格由价格表计算（10.3）
             latency_ms=0,
             finish_reason=finish_reason,

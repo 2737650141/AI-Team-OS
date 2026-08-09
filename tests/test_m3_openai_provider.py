@@ -62,6 +62,49 @@ def test_http_200_ok() -> None:
     assert resp.output_tokens == 8
     assert resp.total_tokens == 20
     assert resp.provider == "openai_compatible"
+    assert resp.model == "m1"
+    assert resp.usage_available is True
+
+
+def test_structured_request_enables_json_mode() -> None:
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(200, json=_ok_body())
+
+    request = _request()
+    request.response_schema = {"summary": {"type": "str"}}
+    _provider(handler).generate(request)
+    assert captured["response_format"] == {"type": "json_object"}
+    assert "thinking" not in captured
+
+
+def test_deepseek_structured_request_disables_default_thinking() -> None:
+    captured: dict = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(200, json=_ok_body())
+
+    provider = _provider(handler)
+    provider._base_url = "https://api.deepseek.com"  # noqa: SLF001
+    provider._assert_url_allowed = lambda _url: None  # type: ignore[method-assign]  # noqa: SLF001
+    request = _request()
+    request.response_schema = {"summary": {"type": "str"}}
+    provider.generate(request)
+    assert captured["thinking"] == {"type": "disabled"}
+
+
+def test_real_stream_is_consumed_once_and_records_latency() -> None:
+    class OneShotStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield json.dumps(_ok_body("provider-returned-model")).encode()
+
+    provider = _provider(lambda req: httpx.Response(200, stream=OneShotStream()))
+    resp = provider.generate(_request("requested-model"))
+    assert resp.model == "provider-returned-model"
+    assert resp.latency_ms >= 1
 
 
 def test_http_401_authentication() -> None:
@@ -130,6 +173,7 @@ def test_usage_missing_tolerated() -> None:
     assert resp.input_tokens >= 1  # 估算记账（messages 字符 /4）
     assert resp.output_tokens == 100  # 按 max_output_tokens 估算
     assert resp.estimated_cost is None  # 价格未知不伪造
+    assert resp.usage_available is False
 
 
 def test_response_body_too_large() -> None:

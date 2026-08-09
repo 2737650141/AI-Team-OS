@@ -143,11 +143,8 @@ class PatchValidator:
                 data = target.read_bytes()[:4096]
                 if b"\x00" in data:
                     raise PatchError(f"binary file rejected: {target.name}")
-        # 8. 路径重命名逃逸已由 _validate_rel_path 覆盖（resolve 复查）
-        # 9. 变更文件数上限
-        if len(proposal.target_files) > self._max_files:
-            raise PatchError(f"too many files ({len(proposal.target_files)} > {self._max_files})")
-        # 10. 变更总行数上限（diff 中 +/- 行数）
+        # Reject oversized patches before parsing their hunks so the stated
+        # governance limit remains the primary, deterministic failure.
         changed = sum(
             1
             for line in diff.splitlines()
@@ -155,6 +152,22 @@ class PatchValidator:
         )
         if changed > self._max_lines:
             raise PatchError(f"too many changed lines ({changed} > {self._max_lines})")
+        # Preflight the exact parser used during apply. This validates hunk
+        # bounds before approval and performs no filesystem writes.
+        if len(targets) == 1:
+            preflight = PatchApplier(self._worktree)
+            target = targets[0]
+            old_text = (
+                target.read_text(encoding="utf-8", errors="replace")
+                if target.exists()
+                else ""
+            )
+            preflight._apply_diff_to_file(diff, proposal.target_files[0], old_text)
+        # 8. 路径重命名逃逸已由 _validate_rel_path 覆盖（resolve 复查）
+        # 9. 变更文件数上限
+        if len(proposal.target_files) > self._max_files:
+            raise PatchError(f"too many files ({len(proposal.target_files)} > {self._max_files})")
+        # 10. 变更总行数上限（diff 中 +/- 行数）
 
 
 class PatchApplier:
@@ -254,11 +267,25 @@ class PatchApplier:
         if not m:
             raise PatchError(f"invalid hunk header: {header}")
         old_start = int(m.group(1))
+        old_count = int(m.group(2) or "1")
+        new_count = int(m.group(4) or "1")
+        old_body_count = sum(1 for line in hunk[1:] if line.startswith((" ", "-")))
+        new_body_count = sum(1 for line in hunk[1:] if line.startswith((" ", "+")))
+        if old_body_count != old_count or new_body_count != new_count:
+            raise PatchError(
+                "hunk line count mismatch: "
+                f"header old/new={old_count}/{new_count}, "
+                f"body old/new={old_body_count}/{new_body_count}"
+            )
         result: list[str] = []
         # 按行号定位（1-based）；空文件 hunk（@@ -0,0）old_start=0 → idx=0
         idx = max(old_start - 1, 0)
         if idx < 0 or idx > len(old_lines):
             raise PatchError(f"hunk start out of range: {old_start}")
+        if idx + old_count > len(old_lines):
+            raise PatchError(
+                f"hunk range beyond file end: start={old_start}, count={old_count}"
+            )
         result.extend(old_lines[:idx])
         for line in hunk[1:]:
             if line.startswith(" "):

@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 
 from app.core.budget import BudgetController, BudgetExceeded, BudgetSnapshot
 from app.core.config import lookup_price
@@ -76,15 +76,17 @@ class ModelGateway:
 
     def __init__(
         self,
-        provider: LLMProvider,
+        provider: object,
         budget: BudgetController,
         audit: AuditLog,
         task_id: str,
+        run_id: str | None = None,
     ) -> None:
-        self._provider = provider
+        self._provider: Any = provider
         self._budget = budget
         self._audit = audit
         self._task_id = task_id
+        self._run_id = run_id
 
     @property
     def budget(self) -> BudgetSnapshot:
@@ -94,6 +96,8 @@ class ModelGateway:
             cost_used=self._budget.usage["cost"],
             token_budget=float(self._budget.token_budget),
             cost_budget=float(self._budget.cost_budget),
+            calls_used=int(self._budget.usage.get("calls", 0)),
+            max_calls=getattr(self._budget, "_max_calls", 30),
         )
 
     def chat(
@@ -166,6 +170,22 @@ class ModelGateway:
                 model=request.model,
             )
         attempt = 0
+        from app.core.events import emit as event_emit
+
+        event_emit(
+            task_id=self._task_id,
+            run_id=request.run_id or self._run_id,
+            event_type="model_call_started",
+            actor_type=request.role_type,
+            actor_id=request.agent_id,
+            summary=f"Calling {request.model}",
+            payload_safe={
+                "provider": provider_name,
+                "model": request.model,
+                "role": request.role_type,
+                "real_call": provider_name not in {"fake", "legacy", "fake_model"},
+            },
+        )
         while True:
             try:
                 resp = self._call_provider(request, attempt)
@@ -179,6 +199,20 @@ class ModelGateway:
                         code=exc.code.value,
                         attempt=attempt,
                         model=request.model,
+                    )
+                    event_emit(
+                        task_id=self._task_id,
+                        run_id=request.run_id or self._run_id,
+                        event_type="agent_failed",
+                        actor_type=request.role_type,
+                        actor_id=request.agent_id,
+                        summary="model call failed",
+                        payload_safe={
+                            "provider": provider_name,
+                            "model": request.model,
+                            "failure_class": _acceptance_failure(exc.code),
+                            "attempt": attempt,
+                        },
                     )
                     raise
                 attempt += 1
@@ -213,9 +247,39 @@ class ModelGateway:
             input_tokens=resp.input_tokens,
             output_tokens=resp.output_tokens,
             estimated_cost=resp.estimated_cost,
+            calculated_cost=cost,
+            cost_available=cost is not None,
+            total_tokens=resp.total_tokens,
+            cached_tokens=resp.cached_tokens,
+            usage_available=resp.usage_available,
             prompt_hash=prompt_hash,
             retry_count=resp.retry_count,
             latency_ms=resp.latency_ms,
+        )
+        event_emit(
+            task_id=self._task_id,
+            run_id=request.run_id or self._run_id,
+            event_type="model_call_completed",
+            actor_type=request.role_type,
+            actor_id=request.agent_id,
+            summary=f"Model completed: {resp.model}",
+            payload_safe={
+                "provider": resp.provider,
+                "model": resp.model,
+                "role": request.role_type,
+                "input_tokens": resp.input_tokens,
+                "output_tokens": resp.output_tokens,
+                "cached_tokens": resp.cached_tokens,
+                "total_tokens": resp.total_tokens,
+                "latency_ms": resp.latency_ms,
+                "finish_reason": resp.finish_reason,
+                "estimated_cost": resp.estimated_cost,
+                "calculated_cost": cost,
+                "cost_available": cost is not None,
+                "usage_available": resp.usage_available,
+                "repair_attempts": resp.retry_count,
+                "real_call": resp.provider not in {"fake", "legacy", "fake_model"},
+            },
         )
         return resp
 
@@ -250,3 +314,15 @@ class ModelGateway:
             ) from exc
         resp.retry_count = attempt
         return resp
+
+
+def _acceptance_failure(code: ProviderErrorCode) -> str:
+    return {
+        ProviderErrorCode.AUTHENTICATION_ERROR: "AUTHENTICATION_FAILED",
+        ProviderErrorCode.MODEL_NOT_FOUND: "MODEL_NOT_FOUND",
+        ProviderErrorCode.RATE_LIMITED: "RATE_LIMITED",
+        ProviderErrorCode.TIMEOUT: "PROVIDER_TIMEOUT",
+        ProviderErrorCode.PROVIDER_INTERNAL_ERROR: "PROVIDER_SERVER_ERROR",
+        ProviderErrorCode.SCHEMA_VALIDATION_FAILED: "SCHEMA_INVALID",
+        ProviderErrorCode.BUDGET_INSUFFICIENT: "BUDGET_EXCEEDED",
+    }.get(code, "RUNTIME_FAILED")

@@ -20,6 +20,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
+function queryString(values: Record<string, string | undefined>) {
+  const params = new URLSearchParams();
+  Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export const api = {
   dashboard: () => request<import("./types").DashboardData>("/dashboard"),
   tasks: () => request<import("./types").TaskSummary[]>("/tasks"),
@@ -126,13 +133,25 @@ export const api = {
     request<{ configured: boolean }>(`/settings/connections/providers/${providerId}/credential`, { method: "DELETE" }),
   testCustomProvider: (providerId: string) =>
     request<{ status: string }>(`/settings/connections/providers/${providerId}/test`, { method: "POST" }),
+  testCustomModel: (providerId: string, model?: string) =>
+    request<{ status: string; real_call: boolean; provider: string; model: string; input_tokens: number; output_tokens: number; cached_tokens: number | null; total_tokens: number; usage_available: boolean; latency_ms: number; estimated_cost: number | null; repair_attempts: number }>(`/settings/connections/providers/${providerId}/test-model`, { method: "POST", body: JSON.stringify({ model: model || null }) }),
   discoverCustomModels: (providerId: string, refresh = false) =>
     request<{ status: string; models: Array<{ id: string }>; count: number }>(`/settings/connections/providers/${providerId}/${refresh ? "refresh-models" : "discover-models"}`, { method: "POST" }),
+  personalization: (projectId?: string, taskType = "general", goal = "") =>
+    request<{ profile: import("./types").PersonalizationProfile; proposals: import("./types").MemoryProposal[] }>(`/personalization${queryString({ project_id: projectId, task_type: taskType, goal })}`),
+  savePersonalizationControl: (body: Record<string, unknown>) =>
+    request<import("./types").PersonalizationProfile>("/personalization/control", { method: "PUT", body: JSON.stringify(body) }),
+  resetPersonalization: (projectId?: string, field?: string) =>
+    request<{ reset: number }>(`/personalization/reset${queryString({ project_id: projectId, field })}`, { method: "DELETE" }),
+  decidePersonalization: (proposalId: string, decision: string, projectId?: string) =>
+    request<Record<string, unknown>>(`/personalization/proposals/${proposalId}/decision`, { method: "POST", body: JSON.stringify({ decision, project_id: projectId ?? null }) }),
   createTask: (body: {
     goal: string;
     model_mode: string;
+    permission_mode?: "standard" | "full_access";
     token_budget?: number;
     cost_budget?: number;
+    max_calls?: number;
     project_id?: string;
     project_alias?: string | null;
   }) => request<{ run_id: string; task_id: string; status: string }>("/tasks", {

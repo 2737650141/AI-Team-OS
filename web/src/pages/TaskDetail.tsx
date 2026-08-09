@@ -58,22 +58,27 @@ export function TaskDetail() {
   return (
     <div className="page task-detail-page">
       <div className="card task-hero">
-        <div className="task-header"><div><span className="eyebrow">{t("task.task")}</span><h1>{displayLabel(taskData.goal, lang)}</h1></div><StatusBadge status={taskData.current_status} /></div>
+        <div className="task-header"><div><span className="eyebrow">{t("task.task")}</span><h1>{displayLabel(taskData.goal, lang)}</h1></div><div className="real-identity"><span className={`mode-badge ${taskData.model_identity?.badge === "REAL" ? "real" : "demo"}`}>{taskData.model_identity?.badge ?? (taskData.model_mode === "real" ? "REAL" : "DEMO")}</span><strong>{taskData.model_identity?.provider}</strong><span>{taskData.model_identity?.default_model}</span><StatusBadge status={taskData.current_status} /></div></div>
         <div className="task-meta muted">
-          {t("task.runId")}: {taskData.run_id} · {t("task.mode")}: {taskData.model_mode === "fake" ? "Demo" : t("dash.real")} · {t("task.budget")}: {taskData.token_budget} Token / ${taskData.cost_budget}
+          {t("task.runId")}: {taskData.run_id} · {t("task.mode")}: {taskData.model_mode === "fake" ? "Demo" : t("dash.real")} · {lang === "zh" ? "权限" : "Permissions"}: {taskData.permission_mode === "full_access" ? (lang === "zh" ? "最高权限（免审批）" : "Full access") : (lang === "zh" ? "标准权限" : "Standard")} · {t("task.budget")}: {taskData.token_budget} Token / ${taskData.cost_budget}
           {connected && <span className="live">● {t("task.live")}</span>}
         </div>
       </div>
 
       <section className="card supervisor-presence">
         <div className="presence-head"><div><span className="eyebrow">{t("task.supervisor")}</span><h2>{t("task.supervisorPresence")}</h2></div><StatusBadge status={supervisorStatus} /></div>
-        <p className="presence-summary">{supervisorMessage(taskData.current_status, lastEvent, lang)}</p>
+        <p className="presence-summary">{supervisorMessage(taskData.current_status, lastEvent, lang, taskData.personalization_applied)}</p>
         <div className="presence-grid">
           <Presence label={t("task.currentAction")} value={lastEvent ? displayLabel(lastEvent.event_type, lang) : t("task.preparing")} />
           <Presence label={t("task.currentSubtask")} value={currentSubtask?.title ?? "—"} />
           <Presence label={t("task.activeAgent")} value={displayLabel(lastEvent?.actor_type ?? currentSubtask?.role ?? "supervisor", lang)} />
           <Presence label={t("task.latestCompleted")} value={latestCompleted ? displayLabel(latestCompleted.event_type, lang) : "—"} />
         </div>
+      </section>
+
+      <section className="card task-personalization">
+        <div className="section-heading"><div><span className="eyebrow">Adaptive Profile</span><h2>{lang === "zh" ? "本次任务采用的个性化" : "Personalization applied"}</h2></div><span className="connection-pill neutral">{taskData.personalization_applied_count ?? 0}</span></div>
+        {(taskData.personalization_applied ?? []).length === 0 ? <p className="muted">{lang === "zh" ? "本次任务使用默认工作方式。" : "This task uses the default working style."}</p> : <div className="personalization-applied-list">{taskData.personalization_applied!.map((item) => <article key={item.field}><strong>{item.field}</strong><span>{item.value}</span><small>{item.reason} · {item.scope} · {Math.round(item.confidence * 100)}%</small></article>)}</div>}
       </section>
 
       <section className="card task-memory-context">
@@ -115,7 +120,7 @@ export function TaskDetail() {
           </div>
           <div className="completion-metrics">
             <span>Token <strong>{taskData.budget_usage.tokens ?? 0}</strong></span>
-            <span>{t("dash.cost")} <strong>${Number(taskData.budget_usage.cost ?? 0).toFixed(4)}</strong></span>
+            <span>{t("dash.cost")} <strong>{taskData.cost_available === false ? (lang === "zh" ? "不可用" : "Unavailable") : `$${Number(taskData.budget_usage.cost ?? 0).toFixed(4)}`}</strong></span>
             <span>{t("task.duration")} <strong>{duration}</strong></span>
           </div>
         </section>
@@ -147,7 +152,13 @@ function usePresentedEvents(events: RuntimeEvent[], paced: boolean, runId: strin
 function Presence({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 function Summary({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
 
-function supervisorMessage(status: string, event: RuntimeEvent | undefined, lang: "zh" | "en") {
+function supervisorMessage(status: string, event: RuntimeEvent | undefined, lang: "zh" | "en", personalization: import("../api/types").PersonalizationItem[] = []) {
+  const active = personalization.filter((item) => item.source !== "default");
+  if (active.length) {
+    const planning = active.find((item) => item.field === "planning_style")?.value;
+    if (lang === "zh") return `我已加载这个项目之前确认的 ${active.length} 项工作偏好。${planning === "planning_first" ? "你通常希望先看方案；本次会先规划，暂不写入。" : "当前任务指令仍然优先。"}`;
+    return `I loaded ${active.length} confirmed working preferences for this project. ${planning === "planning_first" ? "You usually prefer a plan first, so execution remains paused until planning is clear." : "The current task still takes priority."}`;
+  }
   if (status === "completed") return lang === "zh" ? "主管已确认执行、测试与审查结果，任务可以交付。" : "The supervisor confirmed execution, tests, and review; the task is ready.";
   if (status === "paused") return lang === "zh" ? "主管已暂停执行，正在等待你的审批决定。" : "The supervisor paused execution and is waiting for your approval.";
   if (status === "failed") return lang === "zh" ? "主管已停止流程并保留失败上下文供检查。" : "The supervisor stopped the workflow and preserved the failure context.";

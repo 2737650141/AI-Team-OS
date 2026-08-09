@@ -82,9 +82,15 @@ def _bugfix_proposal(worktree: Path) -> PatchProposal:
     main = worktree / "src" / "main.py"
     old = main.read_text(encoding="utf-8")
     new = old.replace("return False", "return True", 1)
-    diff_lines = ["--- a/src/main.py\n", "+++ b/src/main.py\n", "@@ -1,4 +1,4 @@\n"]
-    diff_lines += ["-" + line for line in old.splitlines(keepends=True)]
-    diff_lines += ["+" + line for line in new.splitlines(keepends=True)]
+    old_lines = old.splitlines(keepends=True)
+    new_lines = new.splitlines(keepends=True)
+    diff_lines = [
+        "--- a/src/main.py\n",
+        "+++ b/src/main.py\n",
+        f"@@ -1,{len(old_lines)} +1,{len(new_lines)} @@\n",
+    ]
+    diff_lines += ["-" + line for line in old_lines]
+    diff_lines += ["+" + line for line in new_lines]
     return PatchProposal(
         task_id="t1",
         subtask_id="s2",

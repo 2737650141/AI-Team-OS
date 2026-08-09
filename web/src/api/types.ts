@@ -8,6 +8,7 @@ export interface TaskSummary {
   model_mode: string;
   tokens: number;
   cost: number;
+  cost_available?: boolean;
   tool_calls: number;
   started_at: string | null;
   duration_s: number | null;
@@ -49,6 +50,8 @@ export interface AgentCard {
   model: string;
   tokens: number;
   last_action: string | null;
+  provider?: string;
+  model_mode?: string;
 }
 
 export interface AgentInfo {
@@ -66,6 +69,8 @@ export interface AgentInfo {
   current_action?: string | null;
   current_subtask?: string | null;
   latest_completed?: string | null;
+  provider?: string;
+  model_mode?: string;
 }
 
 export interface ToolInfo {
@@ -108,15 +113,26 @@ export interface TaskDetail {
   current_status: string;
   failure_code: string | null;
   model_mode: string;
+  permission_mode?: "standard" | "full_access";
   goal: string;
   plan: { goal?: string; subtasks?: SubtaskView[] } | null;
   subtasks: SubtaskView[];
   token_budget: number;
   cost_budget: number;
+  max_model_calls?: number;
   budget_usage: Record<string, number>;
+  cost_available?: boolean;
   rework_count: number;
   final_result: string | null;
   memory_context_count?: number;
+  personalization_applied_count?: number;
+  personalization_applied?: PersonalizationItem[];
+  model_identity?: {
+    badge: "REAL" | "DEMO";
+    provider: string;
+    default_model: string;
+    role_models: Record<string, string>;
+  };
 }
 
 export interface MemoryRecord {
@@ -186,11 +202,34 @@ export interface CustomProvider {
   storage: string;
   health: string;
   model_discovery_status: string;
+  invocation_status: string;
   model_count: number;
   last_model_sync_at: string | null;
+  last_invoked_at: string | null;
   is_default: boolean;
   local_provider: boolean;
   test_provider: boolean;
+}
+
+export interface PersonalizationItem {
+  field: string;
+  value: string;
+  confidence: number;
+  scope: string;
+  reason: string;
+  source: string;
+  source_refs: string[];
+  enabled: boolean;
+  current_task_override: boolean;
+}
+
+export interface PersonalizationProfile {
+  user_id: string;
+  project_id: string | null;
+  task_type: string;
+  items: PersonalizationItem[];
+  security_invariants: Record<string, boolean>;
+  generated_at: string;
 }
 
 export interface ApprovalView {

@@ -23,10 +23,16 @@ class BudgetSnapshot:
     cost_used: float
     token_budget: float
     cost_budget: float
+    calls_used: int = 0
+    max_calls: int = 30
 
     @property
     def usage(self) -> dict[str, float]:
-        return {"tokens": float(self.tokens_used), "cost": float(self.cost_used)}
+        return {
+            "tokens": float(self.tokens_used),
+            "cost": float(self.cost_used),
+            "calls": float(self.calls_used),
+        }
 
 
 class BudgetController:
@@ -44,12 +50,15 @@ class BudgetController:
         token_budget: int,
         cost_budget: float,
         initial_usage: dict[str, float] | None = None,
+        max_calls: int = 30,
     ) -> None:
         self._token_budget = token_budget
         self._cost_budget = cost_budget
         usage = initial_usage or {}
         self._used_tokens = int(usage.get("tokens", 0.0))
         self._used_cost = float(usage.get("cost", 0.0))
+        self._used_calls = int(usage.get("calls", 0.0))
+        self._max_calls = max_calls
 
     @property
     def token_budget(self) -> int:
@@ -61,7 +70,11 @@ class BudgetController:
 
     @property
     def usage(self) -> dict[str, float]:
-        return {"tokens": float(self._used_tokens), "cost": round(self._used_cost, 6)}
+        return {
+            "tokens": float(self._used_tokens),
+            "cost": round(self._used_cost, 6),
+            "calls": float(self._used_calls),
+        }
 
     def allocate_subtasks(self, allocations: dict[str, int]) -> None:
         """Planner 预算分配：总和不得超过任务总预算（冻结规则 3）。"""
@@ -77,6 +90,8 @@ class BudgetController:
     ) -> bool:
         """调用前预算预留：预算不足时不再发起调用（GT-09）。"""
         return (
+            self._used_calls < self._max_calls
+            and
             self._used_tokens + estimated_input_tokens + estimated_output_tokens
             <= self._token_budget
             and self._used_cost + estimated_cost <= self._cost_budget
@@ -101,3 +116,4 @@ class BudgetController:
             raise BudgetExceeded("usage", used, limit)
         self._used_tokens += add_tokens
         self._used_cost += cost
+        self._used_calls += 1

@@ -70,6 +70,7 @@ class ToolGateway:
         evidence_writer: EvidenceWriter | None = None,
         approval_service: ApprovalService | None = None,
         run_id: str | None = None,
+        approval_bypass: bool = False,
     ) -> None:
         self._audit = audit
         self._task_id = task_id
@@ -86,6 +87,7 @@ class ToolGateway:
         self._quota = ToolQuota(self.policy)
         self.evidence_writer = evidence_writer
         self._approval_service = approval_service
+        self._approval_bypass = approval_bypass
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
 
@@ -273,11 +275,20 @@ class ToolGateway:
                     original_ts=hit.get("ts"),
                     content_hash=hit.get("hash"),
                 )
+            if not tool.read_only:
+                self._audit.entry(
+                    "tool_skipped_duplicate", task_id=self._task_id, tool=tool_name, key=key
+                )
+                return ToolResult(
+                    ok=False, error="duplicate call skipped (no cached result)", status="skipped"
+                )
+            # A process restart may retain the idempotency key while an older
+            # checkpoint lacks enough result data to rebuild the cache. It is
+            # safe to execute a validated read-only tool again; write tools
+            # remain strictly non-replayed above.
+            self._seen_keys.discard(key)
             self._audit.entry(
-                "tool_skipped_duplicate", task_id=self._task_id, tool=tool_name, key=key
-            )
-            return ToolResult(
-                ok=False, error="duplicate call skipped (no cached result)", status="skipped"
+                "tool_read_replayed", task_id=self._task_id, tool=tool_name, key=key
             )
 
         record = _new_record(
@@ -288,7 +299,15 @@ class ToolGateway:
         # handler 永不执行；M3-C 审批流：ctx.approval_id + 已批准才放行（007 5.4）
         approved_pass = False
         if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval or not tool.read_only:
-            if ctx and ctx.approval_id and self._approval_service is not None:
+            if self._approval_bypass:
+                approved_pass = True
+                self._audit.entry(
+                    "tool_approval_bypassed",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    permission_mode="full_access",
+                )
+            elif ctx and ctx.approval_id and self._approval_service is not None:
                 request = self._approval_service.get(ctx.approval_id)
                 if request is not None:
                     try:

@@ -36,6 +36,7 @@ _EVENT_TYPES = {
     "tool_blocked",
     "evidence_created",
     "approval_requested",
+    "approval_bypassed",
     "approval_approved",
     "approval_rejected",
     "patch_created",

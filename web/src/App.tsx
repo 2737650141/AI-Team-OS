@@ -9,6 +9,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Evidence } from "./pages/Evidence";
 import { Logs } from "./pages/Logs";
 import { Memory } from "./pages/Memory";
+import { Personalization } from "./pages/Personalization";
 import { Setup } from "./pages/Setup";
 import { Settings } from "./pages/Settings";
 import { TaskDetail } from "./pages/TaskDetail";
@@ -44,6 +45,7 @@ export function App() {
               <Route path="/tools" element={<Tools />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/memory" element={<Memory />} />
+              <Route path="/personalization" element={<Personalization />} />
               <Route path="/settings" element={<Settings />} />
             </Route>
             <Route path="/setup" element={<Setup />} />

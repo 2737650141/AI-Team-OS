@@ -30,6 +30,7 @@ from app.core.resume import ResumePayload
 from app.core.schemas import ApprovalPayload, ClarificationPayload
 from app.core.state import TaskState
 from app.gateway.audit import AuditLog
+from app.gateway.contracts import ProviderError
 from app.gateway.fake_provider import FakeModelProvider
 from app.gateway.model_gateway import DeterministicFakeModel, ModelGateway
 from app.gateway.openai_compatible import OpenAICompatibleProvider
@@ -165,6 +166,7 @@ def build_provider(settings: AppSettings, data_dir: Path | None = None):
             max_output_tokens=settings.model.max_output_tokens,
             allow_local=custom.local_provider,
             chat_endpoint=custom.chat_endpoint,
+            provider_name=custom.provider_name,
         )
     if settings.model.provider == "openai_compatible":
         base_url, api_key, default_model = _web_configured_credentials(settings, data_dir)
@@ -216,10 +218,20 @@ def _build_context(
             provider=settings.model.provider,
             model=settings.model.default_model or "",
         )
+    if model_mode == "real" and _custom is not None and _custom.test_provider:
+        from app.gateway.contracts import ProviderError, ProviderErrorCode
+
+        raise ProviderError(
+            ProviderErrorCode.CONFIG_ERROR,
+            "real mode refuses isolated test providers; select a real provider",
+            provider=_custom.provider_name,
+            model=_custom.default_model,
+        )
     budget = BudgetController(
         state.token_budget,
         state.cost_budget,
         initial_usage=state.budget_usage,
+        max_calls=state.max_model_calls,
     )
     audit = AuditLog(data_dir / "audit.jsonl")
     if model_mode == "real":
@@ -227,7 +239,11 @@ def _build_context(
     else:
         provider = DeterministicFakeModel(responses=model_responses)
     model_gateway = ModelGateway(
-        provider=provider, budget=budget, audit=audit, task_id=state.task_id
+        provider=provider,
+        budget=budget,
+        audit=audit,
+        task_id=state.task_id,
+        run_id=state.run_id,
     )
     tool_gateway = ToolGateway(
         audit=audit,
@@ -239,6 +255,7 @@ def _build_context(
         policy=ToolPolicy(),
         evidence_writer=EvidenceWriter(data_dir / "runtime", state.task_id),
         run_id=state.run_id,
+        approval_bypass=state.permission_mode == "full_access",
     )
     tool_gateway.register(FixtureRepositoryLookupTool(DEFAULT_REPO_FIXTURE).spec())
     tool_gateway.register(FixtureSourceLookupTool(DEFAULT_SOURCE_FIXTURE).spec())
@@ -284,14 +301,34 @@ def _build_context(
         settings, audit=audit, task_id=state.task_id, overrides=model_override_roles or None
     )
     from app.memory.service import MemoryService
+    from app.personalization.models import AdaptiveProfile, ProfileItem
+    from app.personalization.service import AdaptiveService
 
     memory_service = MemoryService.from_data_dir(data_dir)
+    adaptive_service = AdaptiveService.from_data_dir(data_dir)
+    adaptive_profile = AdaptiveProfile(
+        user_id="local-user",
+        project_id=state.project_id,
+        task_type="code" if state.user_goal.startswith("sandbox_") else "general",
+        items=[ProfileItem.model_validate(item) for item in state.personalization_applied],
+        security_invariants={
+            "approval_required": state.permission_mode != "full_access",
+            "tool_permissions_immutable": True,
+            "budget_immutable": True,
+            "workspace_boundary_immutable": True,
+            "ssrf_policy_immutable": True,
+        },
+        generated_at="checkpoint",
+    )
     context = ContextBuilder(
         settings,
         memory_loader=lambda role: memory_service.resolve_refs_for_role(
             state.memory_refs,
             run_id=state.run_id or state.task_id,
             role=role,
+        ),
+        personalization_loader=lambda role: adaptive_service.context_for_role(
+            adaptive_profile, role
         ),
     )
     # 007 四-十三：沙箱执行上下文（sandbox_* 目标任务；工作区从磁盘加载或新建）
@@ -358,6 +395,7 @@ def _build_sandbox_context(
         tool_gateway=tool_gateway,
         task_id=state.task_id,
         run_id=run_id,
+        permission_mode=state.permission_mode,
     )
     # 沙箱写工具注册（roles=executor + requires_approval；网关放行需 ctx.approval_id）
     toolset = SandboxToolset(worktree, state.task_id, artifacts, approval)
@@ -391,8 +429,12 @@ def run_task(
     model_mode: str = "fake",
     model_overrides: dict[str, str] | None = None,
     settings: AppSettings | None = None,
+    max_model_calls: int = 30,
+    permission_mode: str = "standard",
 ) -> RunReport:
     """创建并运行任务（进程 A）。vague_goal 场景在澄清 interrupt 处暂停返回。"""
+    if permission_mode not in {"standard", "full_access"}:
+        raise ValueError("permission_mode must be 'standard' or 'full_access'")
     data_dir = data_dir or Path("data")
     from app.core.events import emit as event_emit
     from app.core.events import init as events_init
@@ -407,12 +449,40 @@ def run_task(
         user_goal=goal,
         token_budget=token_budget,
         cost_budget=cost_budget,
+        max_model_calls=max_model_calls,
         model_mode=model_mode,
+        permission_mode=permission_mode,
     )
     from app.memory.service import MemoryService
 
     memory_service = MemoryService.from_data_dir(data_dir)
     state.memory_refs = memory_service.refs_for_task(goal, project_id)
+    from app.personalization.service import AdaptiveService
+
+    task_type = "code" if goal.startswith("sandbox_") or re.search(
+        r"\b(code|python|test|bug|patch)\b|代码|测试|修复", goal, re.I
+    ) else "general"
+    adaptive_profile = AdaptiveService.from_data_dir(data_dir).derive(
+        goal=goal,
+        project_id=project_id,
+        task_type=task_type,
+        record_task=True,
+    )
+    state.personalization_applied = [
+        item.model_dump(mode="json") for item in adaptive_profile.items if item.enabled
+    ]
+    if permission_mode == "full_access":
+        for item in state.personalization_applied:
+            if item.get("field") == "approval_preference":
+                item.update(
+                    {
+                        "value": "full_access",
+                        "confidence": 1.0,
+                        "reason": "explicit permission selected for this task",
+                        "source": "current_task",
+                        "current_task_override": True,
+                    }
+                )
     event_emit(
         task_id=task_id,
         run_id=run_id,
@@ -420,7 +490,12 @@ def run_task(
         actor_type="system",
         actor_id="runner",
         summary=f"task created: {goal}",
-        payload_safe={"goal": goal, "model_mode": model_mode, "project_id": project_id},
+        payload_safe={
+            "goal": goal,
+            "model_mode": model_mode,
+            "project_id": project_id,
+            "permission_mode": permission_mode,
+        },
     )
     for role in ("supervisor", "planner"):
         used_memories = memory_service.resolve_refs_for_role(
@@ -473,6 +548,7 @@ def run_task(
         compiled = _compile(ctx, state, conn)
         result = compiled.invoke(state.model_dump(), config={"configurable": {"thread_id": run_id}})
         state = TaskState.model_validate(result)
+        state.budget_usage = dict(ctx.budget.usage)
         if "__interrupt__" in result:
             # 澄清/审批 interrupt：写回 paused（跨进程 status 可读），等待恢复
             interrupt_value = result["__interrupt__"][0].value if result["__interrupt__"] else None
@@ -487,6 +563,7 @@ def run_task(
                     "current_status": "paused",
                     "paused_from_status": state.current_status,
                     "pending_approval_id": pending_approval,
+                    "budget_usage": ctx.budget.usage,
                 },
             )
             state.current_status = "paused"
@@ -511,6 +588,10 @@ def run_task(
                 "paused",
             )
         # 图已设置最终状态（completed / failed），runner 不覆盖
+        compiled.update_state(
+            {"configurable": {"thread_id": run_id}},
+            {"budget_usage": ctx.budget.usage},
+        )
     except BudgetExceeded as exc:
         # 失败状态写回 checkpoint（与暂停路径的 update_state 一致），跨进程 status 可读
         state.current_status = "failed"
@@ -533,6 +614,31 @@ def run_task(
             actor_id="runner",
             summary=f"task failed: {exc}",
             payload_safe={"failure_code": "budget_exceeded"},
+        )
+    except ProviderError as exc:
+        # Persist bounded model/schema failures as terminal checkpoints. A
+        # request that has already ended must never look stuck in planning.
+        state.current_status = "failed"
+        state.failure_code = exc.code.value
+        state.final_result = exc.safe_message
+        state.budget_usage = dict(ctx.budget.usage)
+        compiled.update_state(
+            {"configurable": {"thread_id": run_id}},
+            {
+                "current_status": "failed",
+                "failure_code": exc.code.value,
+                "final_result": exc.safe_message,
+                "budget_usage": ctx.budget.usage,
+            },
+        )
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="task_failed",
+            actor_type="system",
+            actor_id="runner",
+            summary="task failed after bounded model processing",
+            payload_safe={"failure_code": exc.code.value},
         )
     finally:
         conn.close()
@@ -618,16 +724,32 @@ def resume_task(
                 raise RuntimeError(
                     "run is awaiting approval; provide ApprovalPayload (approve/reject)"
                 )
-            if payload.approval_id != state.pending_approval_id:
-                raise RuntimeError(
-                    f"approval_id mismatch: {payload.approval_id} != {state.pending_approval_id}"
-                )
             # 先落审批决策（持久化），恢复后 Executor 再验证并执行/终止
             from app.core.approval import ApprovalService
 
             approval = ApprovalService(
                 storage_path=data_dir / "runtime" / "workspaces" / state.task_id / "approvals.jsonl"
             )
+            if payload.approval_id != state.pending_approval_id:
+                chosen = approval.get(payload.approval_id)
+                superseded = approval.get(state.pending_approval_id)
+                same_operation = (
+                    chosen is not None
+                    and superseded is not None
+                    and chosen.task_id == state.task_id
+                    and chosen.subtask_id == superseded.subtask_id
+                    and chosen.status == "approved"
+                    and payload.decision == "approved"
+                )
+                if not same_operation:
+                    raise RuntimeError(
+                        f"approval_id mismatch: {payload.approval_id} != "
+                        f"{state.pending_approval_id}"
+                    )
+                approval.cancel(
+                    state.pending_approval_id,
+                    reason="superseded by an earlier approved immutable diff",
+                )
             approval.decide(payload.approval_id, payload.decision, payload.reason)
         elif isinstance(payload, ApprovalPayload):
             raise RuntimeError("run is not awaiting approval")
@@ -667,6 +789,29 @@ def resume_task(
                 len(ctx.tool_gateway.tool_calls),
                 "failed",
             )
+        except ProviderError as exc:
+            compiled.update_state(
+                {"configurable": {"thread_id": run_id}},
+                {
+                    "current_status": "failed",
+                    "failure_code": exc.code.value,
+                    "final_result": exc.safe_message,
+                    "budget_usage": ctx.budget.usage,
+                },
+            )
+            state.current_status = "failed"
+            state.failure_code = exc.code.value
+            state.final_result = exc.safe_message
+            state.budget_usage = dict(ctx.budget.usage)
+            return RunReport(
+                state.task_id,
+                run_id,
+                state,
+                ctx.budget.usage,
+                getattr(ctx.provider, "call_count", 0),
+                len(ctx.tool_gateway.tool_calls),
+                "failed",
+            )
         if "__interrupt__" in result:
             # 恢复后再次暂停（重派产生的审批 interrupt 等）：写回 paused + 新 pending，
             # 与 run_task 对称（blocking sa_20260805_144828 图级流程）
@@ -682,6 +827,7 @@ def resume_task(
                     "current_status": "paused",
                     "paused_from_status": state.current_status,
                     "pending_approval_id": pending_approval,
+                    "budget_usage": ctx.budget.usage,
                 },
             )
             state.current_status = "paused"
@@ -696,6 +842,11 @@ def resume_task(
                 "paused",
             )
         state = TaskState.model_validate(result)
+        state.budget_usage = dict(ctx.budget.usage)
+        compiled.update_state(
+            {"configurable": {"thread_id": run_id}},
+            {"budget_usage": ctx.budget.usage},
+        )
         # 图已设置最终状态（completed / failed），runner 不覆盖
         return RunReport(
             state.task_id,
@@ -757,8 +908,15 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
                     "goal": report.state.user_goal,
                     "project_id": report.state.project_id,
                     "model_mode": report.state.model_mode,
+                    "permission_mode": report.state.permission_mode,
                     "tokens": report.state.budget_usage.get("tokens", 0),
                     "cost": report.state.budget_usage.get("cost", 0.0),
+                    "cost_available": _model_cost_available(
+                        data_dir,
+                        report.state.model_mode,
+                        report.state.task_id,
+                        report.run_id or thread_id,
+                    ),
                     "tool_calls": len(report.state.tool_calls),
                     "started_at": getattr(report.state, "created_at", None),
                     "duration_s": getattr(report.state, "duration_s", None),
@@ -770,6 +928,35 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
         conn.close()
     tasks.sort(key=lambda t: t.get("started_at") or "", reverse=True)
     return tasks
+
+
+def _model_cost_available(
+    data_dir: Path, model_mode: str, task_id: str, run_id: str
+) -> bool:
+    """Whether every real model call has an attributable monetary cost."""
+    if model_mode != "real":
+        return True
+    from app.core.events import EventStore
+
+    db_path = data_dir / "runtime" / "events.sqlite"
+    if not db_path.exists():
+        return False
+    store = EventStore(db_path)
+    events = store.list_events(run_id=run_id, limit=10_000)
+    if task_id != run_id:
+        events.extend(store.list_events(run_id=task_id, limit=10_000))
+    calls = [event for event in events if event.event_type == "model_call_completed"]
+    if not calls:
+        return False
+    return all(
+        bool(
+            event.payload_safe.get(
+                "cost_available",
+                event.payload_safe.get("estimated_cost") is not None,
+            )
+        )
+        for event in calls
+    )
 
 
 def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
@@ -808,7 +995,7 @@ def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
             "event_count": event_count,
         },
         "recent_tasks": tasks[:10],
-        "agent_team": _agent_team_status(tasks),
+        "agent_team": _agent_team_status(tasks, data_dir),
     }
 
 
@@ -816,6 +1003,7 @@ def _system_health(data_dir: Path) -> dict[str, str]:
     """系统健康（010 第七部分 System Health）。"""
     from app.core.config import allowed_read_roots
     from app.core.events import get_store
+    from app.core.events import init as events_init
 
     settings = load_settings()
     conn = _open_conn(data_dir)
@@ -826,7 +1014,13 @@ def _system_health(data_dir: Path) -> dict[str, str]:
         sqlite_ok = False
     finally:
         conn.close()
-    real_enabled = getattr(settings.model, "enable_real", False)
+    custom_provider, custom_key = _default_custom_provider(data_dir)
+    real_enabled = bool(
+        getattr(settings.model, "enable_real", False)
+        or (custom_provider is not None and custom_key)
+    )
+    if get_store() is None:
+        events_init(data_dir)
     github_configured = bool(os.environ.get("AI_TEAM_GITHUB_TOKEN"))
     roots = allowed_read_roots()
     return {
@@ -842,26 +1036,63 @@ def _system_health(data_dir: Path) -> dict[str, str]:
     }
 
 
-def _agent_team_status(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _agent_team_status(tasks: list[dict[str, Any]], data_dir: Path) -> list[dict[str, Any]]:
     """Agent Team 状态（010 Dashboard Agent Card）。"""
     roles = ["supervisor", "planner", "researcher", "executor", "reviewer"]
+    # Agent cards describe the latest task that actually produced model
+    # telemetry. A zero-token smoke/demo task must not hide the most recent
+    # real role usage immediately after an acceptance run.
+    latest = next((task for task in tasks if float(task.get("tokens") or 0) > 0), None)
+    if latest is None and tasks:
+        latest = tasks[0]
+    role_tokens = {role: 0 for role in roles}
+    role_models = {role: "(default)" for role in roles}
+    role_actions: dict[str, str | None] = {role: None for role in roles}
+    if latest is not None:
+        if latest.get("model_mode") == "real":
+            provider, _key = _default_custom_provider(data_dir)
+            if provider is not None:
+                role_models = {
+                    role: provider.role_models.get(role) or provider.default_model or "(default)"
+                    for role in roles
+                }
+        else:
+            role_models = {role: "deterministic-fake" for role in roles}
+        from app.core.events import get_store
+
+        store = get_store()
+        if store is not None:
+            run_id = str(latest.get("run_id") or "")
+            task_id = str(latest.get("task_id") or "")
+            events = store.list_events(run_id=run_id, limit=5000)
+            if task_id and task_id != run_id:
+                events.extend(store.list_events(run_id=task_id, limit=5000))
+            events.sort(key=lambda event: event.sequence)
+            for event in events:
+                role = event.actor_id if event.actor_id in roles else event.actor_type
+                if role not in roles:
+                    continue
+                role_actions[role] = event.summary or event.event_type
+                if event.event_type == "model_call_completed":
+                    role_tokens[role] += int(event.payload_safe.get("total_tokens") or 0)
+                    model = str(event.payload_safe.get("model") or "")
+                    if model:
+                        role_models[role] = model
     team: list[dict[str, Any]] = []
     for role in roles:
         team.append(
             {
                 "role": role,
                 "status": "idle",
-                "current_task": None,
-                "model": "(default)",
-                "tokens": 0,
-                "last_action": None,
+                "current_task": latest.get("goal") if latest else None,
+                "model": role_models[role],
+                "tokens": role_tokens[role],
+                "last_action": role_actions[role],
             }
         )
     # 从最近任务聚合（简化：状态取最新任务；token 汇总）
-    if tasks:
-        latest = tasks[0]
+    if latest is not None:
         for card in team:
-            card["current_task"] = latest.get("goal")
             if latest.get("status") in ("running", "paused"):
                 card["status"] = "thinking" if card["role"] == "planner" else "idle"
     return team
@@ -883,6 +1114,7 @@ def trace_task(run_id: str, data_dir: Path | None = None) -> dict:
             "current_status": state.current_status,
             "failure_code": state.failure_code,
             "model_mode": state.model_mode,
+            "permission_mode": state.permission_mode,
             "clarified_goal": state.clarified_goal,
             "clarification_history": [c.model_dump() for c in state.clarification_history],
             "plan": state.plan,

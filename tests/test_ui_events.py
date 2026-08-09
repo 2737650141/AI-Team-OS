@@ -82,6 +82,54 @@ def test_run_task_emits_lifecycle_events(tmp_path: Path, monkeypatch) -> None:
     assert "review_passed" in types
 
 
+def test_full_access_mode_runs_without_manual_approval(tmp_path: Path, monkeypatch) -> None:
+    """Explicit full-access mode applies a validated sandbox patch without pausing."""
+    from app.core.approval import ApprovalService
+    from app.core.events import get_store
+    from app.runner import run_task
+
+    fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("AI_TEAM_ALLOWED_READ_ROOTS", str(fixtures))
+
+    report = run_task(
+        "sandbox_code_fix",
+        token_budget=20_000,
+        cost_budget=1.0,
+        data_dir=data_dir,
+        model_overrides={"project_alias": "sample-python"},
+        permission_mode="full_access",
+    )
+
+    assert report.state.current_status == "completed"
+    assert report.state.permission_mode == "full_access"
+    assert report.state.pending_approval_id is None
+    approval_preference = next(
+        item
+        for item in report.state.personalization_applied
+        if item["field"] == "approval_preference"
+    )
+    assert approval_preference["value"] == "full_access"
+    assert approval_preference["current_task_override"] is True
+    task_dir = data_dir / "runtime" / "workspaces" / report.task_id
+    approvals = ApprovalService(storage_path=task_dir / "approvals.jsonl").all(report.task_id)
+    assert approvals
+    assert all(item.status == "approved" for item in approvals)
+    assert approvals[0].approval_level == "automatic_full_access"
+    assert "return True" in (task_dir / "worktree" / "src" / "main.py").read_text(
+        encoding="utf-8"
+    )
+    assert "return False" in (fixtures / "sample-python" / "src" / "main.py").read_text(
+        encoding="utf-8"
+    )
+
+    store = get_store()
+    assert store is not None
+    event_types = [event.event_type for event in store.list_events(run_id=report.run_id)]
+    assert "approval_bypassed" in event_types
+    assert "approval_requested" not in event_types
+
+
 def test_dashboard_endpoint(tmp_path: Path, monkeypatch) -> None:
     """GET /dashboard 聚合（指标/健康/最近任务）。"""
     monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
@@ -119,6 +167,27 @@ def test_events_endpoint_404(tmp_path: Path, monkeypatch) -> None:
     with TestClient(app) as client:
         resp = client.get("/tasks/nonexistent/events")
         assert resp.status_code == 404
+
+
+def test_real_cost_is_unavailable_when_provider_has_no_price(tmp_path: Path) -> None:
+    from app.runner import _model_cost_available
+
+    data_dir = tmp_path / "data"
+    (data_dir / "runtime").mkdir(parents=True)
+    store = EventStore(data_dir / "runtime" / "events.sqlite")
+    store.emit(
+        task_id="task-cost",
+        run_id="run-cost",
+        event_type="model_call_completed",
+        actor_type="planner",
+        actor_id="planner",
+        payload_safe={
+            "total_tokens": 57,
+            "estimated_cost": None,
+            "cost_available": False,
+        },
+    )
+    assert _model_cost_available(data_dir, "real", "task-cost", "run-cost") is False
 
 
 @pytest.fixture(autouse=True)

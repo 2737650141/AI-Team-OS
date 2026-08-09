@@ -362,7 +362,7 @@ def build_local_tools(policy: LocalPathPolicy, pdf_reader: Any | None = None) ->
             risk_level=RiskLevel.SAFE,
             read_only=True,
             handler=handler,
-            roles=("researcher",),
+            roles=("researcher", "executor", "reviewer"),
             path_validator=policy.validate,  # 网关层提前拒绝（8.2）
         )
         for name, desc, schema, handler in specs

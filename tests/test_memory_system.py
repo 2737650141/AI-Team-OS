@@ -150,6 +150,7 @@ def test_gt_m05_project_and_user_isolation(tmp_path: Path) -> None:
     _active(service, memory_id="mem-u2", value="user two", project_id="A", user_id="u2")
     a = service.retrieve(query="project", project_id="A", user_id="u1")
     assert {item.memory_id for item in a} == {"mem-a"}
+    assert service.retrieve(query="project", project_id=None, user_id="u1") == []
 
 
 def test_gt_m06_ttl_expires_and_disappears_from_context(tmp_path: Path) -> None:

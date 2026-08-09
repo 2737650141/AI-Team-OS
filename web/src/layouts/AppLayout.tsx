@@ -9,6 +9,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Wrench,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
@@ -26,6 +27,7 @@ export function AppLayout() {
     { to: "/evidence", label: t("nav.evidence"), icon: FileText },
     { to: "/tools", label: t("nav.tools"), icon: Wrench },
     { to: "/memory", label: t("nav.memory"), icon: FolderKanban },
+    { to: "/personalization", label: lang === "zh" ? "个性化" : "Personalization", icon: SlidersHorizontal },
     { to: "/logs", label: t("nav.logs"), icon: ScrollText },
     { to: "/settings", label: t("nav.settings"), icon: Settings },
   ];

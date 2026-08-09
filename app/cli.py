@@ -75,6 +75,12 @@ def main(argv: list[str] | None = None) -> None:
         default="fake",
         help="模型模式（默认 fake，避免意外费用）",
     )
+    run.add_argument(
+        "--permission-mode",
+        choices=["standard", "full_access"],
+        default="standard",
+        help="任务权限：standard 需要人工审批；full_access 通过安全校验后直接执行",
+    )
     run.add_argument("--dry-run", action="store_true", help="只显示预计模型调用与预算，不真正调用")
     run.add_argument("--model-override", action="append", default=[], metavar="ROLE=MODEL")
     run.add_argument(
@@ -344,6 +350,7 @@ def main(argv: list[str] | None = None) -> None:
                     args.project_id,
                     data_dir=data_dir,
                     model_mode=args.model_mode,
+                    permission_mode=args.permission_mode,
                     model_overrides=overrides or None,
                     settings=settings,
                 )

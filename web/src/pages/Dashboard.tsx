@@ -16,9 +16,13 @@ export function Dashboard() {
   const dash = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 3000 });
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState("fake");
+  const [permissionMode, setPermissionMode] = useState<"standard" | "full_access">("standard");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [project, setProject] = useState("");
   const [memoryProject, setMemoryProject] = useState("default");
+  const [tokenBudget, setTokenBudget] = useState(50000);
+  const [costBudget, setCostBudget] = useState(1);
+  const [maxCalls, setMaxCalls] = useState(30);
   const activeSummary = dash.data?.recent_tasks.find((task) => ["running", "paused"].includes(task.status));
   const activeDetail = useQuery({
     queryKey: ["dashboard-active-task", activeSummary?.run_id],
@@ -28,7 +32,7 @@ export function Dashboard() {
   });
 
   const create = useMutation({
-    mutationFn: (body: { goal: string; model_mode: string; project_alias?: string; project_id?: string }) =>
+    mutationFn: (body: { goal: string; model_mode: string; permission_mode: "standard" | "full_access"; project_alias?: string; project_id?: string; token_budget: number; cost_budget: number; max_calls: number }) =>
       api.createTask(body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -72,7 +76,7 @@ export function Dashboard() {
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && goal.trim()) {
-              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default" });
+              create.mutate({ goal, model_mode: mode, permission_mode: permissionMode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls });
             }
           }}
         />
@@ -89,7 +93,7 @@ export function Dashboard() {
             className="btn btn-primary"
             disabled={!goal.trim() || create.isPending}
             onClick={() =>
-              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default" })
+              create.mutate({ goal, model_mode: mode, permission_mode: permissionMode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls })
             }
           >
             {t("dash.startTask")}
@@ -104,8 +108,12 @@ export function Dashboard() {
               create.mutate({
                 goal: "sandbox_code_fix",
                 model_mode: "fake",
+                permission_mode: permissionMode,
                 project_alias: project || "sample-python",
                 project_id: memoryProject || "default",
+                token_budget: tokenBudget,
+                cost_budget: costBudget,
+                max_calls: maxCalls,
               })
             }
           >
@@ -123,6 +131,36 @@ export function Dashboard() {
             {lang === "zh" ? "记忆项目" : "Memory project"}
             <input value={memoryProject} onChange={(e) => setMemoryProject(e.target.value)} placeholder="default" />
           </label>
+          <label className="field">
+            {lang === "zh" ? "Token 预算" : "Token budget"}
+            <input type="number" min={1000} max={1000000} value={tokenBudget} onChange={(e) => setTokenBudget(Number(e.target.value))} />
+          </label>
+          <label className="field">
+            {lang === "zh" ? "费用预算 (USD)" : "Cost budget (USD)"}
+            <input type="number" min={0.01} max={100} step={0.01} value={costBudget} onChange={(e) => setCostBudget(Number(e.target.value))} />
+          </label>
+          <label className="field">
+            {lang === "zh" ? "最大模型调用次数" : "Maximum model calls"}
+            <input type="number" min={1} max={100} value={maxCalls} onChange={(e) => setMaxCalls(Number(e.target.value))} />
+          </label>
+          <div className="field permission-mode-field">
+            <span>{lang === "zh" ? "任务权限" : "Task permissions"}</span>
+            <div className="seg permission-seg">
+              <button type="button" className={permissionMode === "standard" ? "on" : ""} onClick={() => setPermissionMode("standard")}>
+                {lang === "zh" ? "标准权限" : "Standard"}
+              </button>
+              <button type="button" className={permissionMode === "full_access" ? "on danger" : ""} onClick={() => setPermissionMode("full_access")}>
+                {lang === "zh" ? "最高权限（免审批）" : "Full access (no approvals)"}
+              </button>
+            </div>
+            {permissionMode === "full_access" && (
+              <p className="permission-warning">
+                {lang === "zh"
+                  ? "代码修改和写入操作将在安全校验通过后直接执行；仅对本次新任务生效。"
+                  : "Code changes and writes execute immediately after safety validation; this applies only to the new task."}
+              </p>
+            )}
+          </div>
         </details>
         {create.isError && <p className="error">{(create.error as Error).message}</p>}
       </div>
@@ -186,7 +224,7 @@ export function Dashboard() {
                 </td>
                 <td>{tr.model_mode === "fake" ? t("dash.demo") : t("dash.real")}</td>
                 <td>{tr.tokens}</td>
-                <td>${tr.cost.toFixed(4)}</td>
+                <td>{tr.cost_available === false ? (lang === "zh" ? "不可用" : "Unavailable") : `$${tr.cost.toFixed(4)}`}</td>
               </tr>
             ))}
             {(data?.recent_tasks ?? []).length === 0 && (

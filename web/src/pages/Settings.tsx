@@ -181,21 +181,23 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
   const [msg, setMsg] = useState("");
   const [search, setSearch] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [credentialStorage, setCredentialStorage] = useState("secure");
   const [defaultModel, setDefaultModel] = useState(provider.default_model);
   const [roles, setRoles] = useState(provider.role_models);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const action = useMutation({
-    mutationFn: async (kind: "test" | "discover" | "refresh" | "delete" | "credential" | "remove" | "save") => {
+    mutationFn: async (kind: "test" | "model" | "discover" | "refresh" | "delete" | "credential" | "remove" | "save") => {
       if (kind === "test") return api.testCustomProvider(provider.provider_id);
+      if (kind === "model") return api.testCustomModel(provider.provider_id, defaultModel);
       if (kind === "discover" || kind === "refresh") return api.discoverCustomModels(provider.provider_id, kind === "refresh");
       if (kind === "delete") return api.deleteCustomProvider(provider.provider_id);
-      if (kind === "credential") return api.saveCustomCredential(provider.provider_id, apiKey, "session");
+      if (kind === "credential") return api.saveCustomCredential(provider.provider_id, apiKey, credentialStorage);
       if (kind === "remove") return api.deleteCustomCredential(provider.provider_id);
       return api.updateCustomProvider(provider.provider_id, {
         provider_name: provider.provider_name, base_url: provider.base_url, models_endpoint: provider.models_endpoint, chat_endpoint: provider.chat_endpoint, api_mode: "openai_compatible", default_model: defaultModel, role_models: roles, is_default: provider.is_default, local_provider: provider.local_provider, test_provider: provider.test_provider,
       });
     },
-    onSuccess: (result, kind) => { setApiKey(""); setMsg(kind === "discover" || kind === "refresh" ? `${(result as { count?: number }).count ?? 0} ${zh ? "个模型" : "models"}` : (zh ? "操作成功" : "Done")); onChanged(); },
+    onSuccess: (result, kind) => { setApiKey(""); setMsg(kind === "discover" || kind === "refresh" ? `${(result as { count?: number }).count ?? 0} ${zh ? "个模型" : "models"}` : kind === "model" ? `${zh ? "真实推理通过" : "Real inference passed"} · ${(result as { total_tokens?: number }).total_tokens ?? "—"} tokens · ${(result as { latency_ms?: number }).latency_ms ?? "—"}ms` : (zh ? "操作成功" : "Done")); onChanged(); },
     onError: (error) => setMsg(error instanceof Error ? error.message : String(error)),
   });
   const modelIds = provider.discovered_models.map((item) => item.id).filter((id) => id.toLowerCase().includes(search.toLowerCase()));
@@ -212,10 +214,13 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
         <span className={`connection-pill ${provider.configured ? "good" : "neutral"}`}>
           {provider.configured ? (zh ? "已配置" : "Configured") : (zh ? "未配置" : "Not configured")}
         </span>
+        <span className={`connection-pill ${provider.model_discovery_status === "success" ? "good" : "neutral"}`}>{zh ? "模型发现" : "Discovery"}: {provider.model_discovery_status}</span>
+        <span className={`connection-pill ${provider.invocation_status === "success" ? "good" : "neutral"}`}>{zh ? "模型推理" : "Invocation"}: {provider.invocation_status}</span>
       </div>
       <div className="provider-actions">
         <button className="btn" disabled={action.isPending || !provider.configured} onClick={() => action.mutate("test")}>{zh ? "测试连接" : "Test connection"}</button>
         <button className="btn" disabled={action.isPending || !provider.configured} onClick={() => action.mutate(provider.model_count ? "refresh" : "discover")}>{provider.model_count ? (zh ? "刷新模型" : "Refresh models") : (zh ? "发现模型" : "Discover models")}</button>
+        <button className="btn btn-primary" disabled={action.isPending || !provider.configured || !defaultModel || provider.test_provider} onClick={() => action.mutate("model")}>{zh ? "测试模型" : "Test Model"}</button>
         <button className="btn" onClick={() => setOpen((value) => !value)}>{open ? (zh ? "收起" : "Close") : (zh ? "管理" : "Manage")}</button>
       </div>
       {open && (
@@ -224,8 +229,9 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
             {provider.configured ? (zh ? "替换凭据" : "Replace credential") : "API Key"}
             <input type="password" value={apiKey} autoComplete="off" onChange={(event) => setApiKey(event.target.value)} />
           </label>
+          <label className="field">{zh ? "凭据存储" : "Credential storage"}<select value={credentialStorage} onChange={(event) => setCredentialStorage(event.target.value)}><option value="secure">{zh ? "安全保存到此电脑" : "Save securely on this PC"}</option><option value="session">{zh ? "仅本次会话" : "Session only"}</option></select></label>
           <div className="provider-actions">
-            <button className="btn" disabled={!apiKey || action.isPending} onClick={() => action.mutate("credential")}>{zh ? "保存凭据" : "Save credential"}</button>
+            <button className="btn" disabled={!apiKey || action.isPending} onClick={() => action.mutate("credential")}>{credentialStorage === "secure" ? (zh ? "安全保存" : "Save securely") : (zh ? "保存凭据" : "Save credential")}</button>
             {provider.configured && <button className="btn btn-danger" onClick={() => action.mutate("remove")}>{zh ? "移除凭据" : "Remove credential"}</button>}
           </div>
           <label className="field">{zh ? "搜索模型" : "Search models"}<input value={search} onChange={(event) => setSearch(event.target.value)} /></label>
