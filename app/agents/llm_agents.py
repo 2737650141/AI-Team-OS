@@ -119,6 +119,10 @@ class LLMPlanner:
                 '"token_budget": int, "tool_call_budget": int}]}'
             ),
         )
+        if ctx["memory_context"]:
+            user += "\nGoverned memory context (current instruction wins):\n" + json.dumps(
+                ctx["memory_context"], ensure_ascii=False
+            )
         request = _new_request(
             task_id=state.task_id,
             run_id=state.run_id,
@@ -236,6 +240,10 @@ class LLMResearcher:
                 '"unverified_items": [str], "confidence": float}'
             ),
         )
+        if ctx_view["memory_context"]:
+            user += "\nGoverned project context:\n" + json.dumps(
+                ctx_view["memory_context"], ensure_ascii=False
+            )
         request = _new_request(
             task_id=subtask.subtask_id,
             run_id=None,
@@ -352,6 +360,10 @@ class LLMReviewer:
             artifact=ctx["artifact"],
             evidence=UNTRUSTED_MARKER + "\n" + str(ctx["evidence"]),
         )
+        if ctx["memory_context"]:
+            user += "\nGoverned acceptance context:\n" + json.dumps(
+                ctx["memory_context"], ensure_ascii=False
+            )
         request = _new_request(
             task_id=state.task_id,
             run_id=state.run_id,

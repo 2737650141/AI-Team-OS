@@ -191,3 +191,5 @@ class TaskState(BaseModel):
     current_subtask_id: str | None = None
     pending_clarification_id: str | None = None
     pending_approval_id: str | None = None  # 007 5.4：审批 interrupt 暂停标记
+    # M4-A：Checkpoint 仅保存引用，正文每次角色使用前从 MemoryStore 重新校验。
+    memory_refs: list[dict[str, Any]] = Field(default_factory=list)

@@ -90,9 +90,9 @@ def _web_configured_credentials(
     if base_url and api_key:
         return base_url, api_key, default_model
     try:
-        from app.core.secret_store import default_resolver
+        from app.core.secret_store import process_resolver
 
-        resolver = default_resolver(data_dir)
+        resolver = process_resolver(data_dir)
         store_base = resolver.resolve("openai_compatible.base_url") or ""
         store_key = resolver.resolve("openai_compatible.api_key") or ""
         store_model = resolver.resolve("openai_compatible.default_model") or ""
@@ -105,12 +105,67 @@ def _web_configured_credentials(
     )
 
 
+def _default_custom_provider(data_dir: Path | None):
+    if data_dir is None:
+        data_dir = Path("data")
+    from app.core.provider_store import ProviderStore
+    from app.core.secret_store import process_resolver
+
+    store = ProviderStore(data_dir / "runtime" / "providers.sqlite")
+    provider = store.default()
+    if provider is None:
+        return None, ""
+    return provider, process_resolver(data_dir).resolve(
+        store.secret_key(provider.provider_id)
+    ) or ""
+
+
+def _settings_with_custom_routes(settings: AppSettings, data_dir: Path) -> AppSettings:
+    provider, key = _default_custom_provider(data_dir)
+    if provider is None or not key:
+        return settings
+    roles = dict(settings.routing.role_defaults)
+    for role in roles:
+        roles[role] = provider.role_models.get(role) or provider.default_model or roles[role]
+    discovered = [str(item.get("id", "")) for item in provider.discovered_models]
+    allowed = list(
+        dict.fromkeys(
+            [
+                *settings.routing.allowed_models,
+                *discovered,
+                provider.default_model,
+                *provider.role_models.values(),
+            ]
+        )
+    )
+    allowed = [model for model in allowed if model]
+    routing = settings.routing.model_copy(
+        update={"role_defaults": roles, "allowed_models": allowed}
+    )
+    return settings.model_copy(update={"routing": routing})
+
+
 def build_provider(settings: AppSettings, data_dir: Path | None = None):
     """按配置构造 Provider（005 7.4：real 模式必须显式开启）。
 
     base_url/api_key/default_model 支持 SecretStore 回退（网页 Connections 保存后
     对真实任务生效；env/config 优先）。
     """
+    custom, custom_key = _default_custom_provider(data_dir)
+    if custom is not None and custom_key:
+        if custom.test_provider:
+            return FakeModelProvider()
+        return OpenAICompatibleProvider(
+            base_url=custom.base_url,
+            api_key=custom_key,
+            default_model=custom.default_model,
+            enable_real=True,
+            timeout_seconds=settings.model.timeout_seconds,
+            temperature=settings.model.temperature,
+            max_output_tokens=settings.model.max_output_tokens,
+            allow_local=custom.local_provider,
+            chat_endpoint=custom.chat_endpoint,
+        )
     if settings.model.provider == "openai_compatible":
         base_url, api_key, default_model = _web_configured_credentials(settings, data_dir)
         return OpenAICompatibleProvider(
@@ -141,10 +196,14 @@ def _build_context(
 ) -> RunContext:
     """按 checkpoint 状态重建运行时上下文（预算/工具网关带历史，保证不清零、不重放）。"""
     settings = settings or load_settings()
+    settings = _settings_with_custom_routes(settings, data_dir)
     # 005 7.4：real 模式必须显式开启——env 开关 AI_TEAM_MODEL_ENABLE_REAL=true，
     # 或网页 Connections 已保存 openai_compatible 凭据（用户显式配置，010-B 交付）
-    real_effective = settings.model.enable_real or bool(
-        _web_configured_credentials(settings, data_dir)[1]
+    _custom, custom_key = _default_custom_provider(data_dir)
+    real_effective = (
+        settings.model.enable_real
+        or bool(_web_configured_credentials(settings, data_dir)[1])
+        or bool(custom_key)
     )
     if model_mode == "real" and not real_effective:
         # 005 7.4 / 006 3.2：真实调用必须显式开启，未启用时明确拒绝（不静默进入图内失败）
@@ -224,7 +283,17 @@ def _build_context(
     router = build_router(
         settings, audit=audit, task_id=state.task_id, overrides=model_override_roles or None
     )
-    context = ContextBuilder(settings)
+    from app.memory.service import MemoryService
+
+    memory_service = MemoryService.from_data_dir(data_dir)
+    context = ContextBuilder(
+        settings,
+        memory_loader=lambda role: memory_service.resolve_refs_for_role(
+            state.memory_refs,
+            run_id=state.run_id or state.task_id,
+            role=role,
+        ),
+    )
     # 007 四-十三：沙箱执行上下文（sandbox_* 目标任务；工作区从磁盘加载或新建）
     sandbox = _build_sandbox_context(
         state, data_dir, tool_gateway, model_overrides, settings, audit, run_id
@@ -340,6 +409,10 @@ def run_task(
         cost_budget=cost_budget,
         model_mode=model_mode,
     )
+    from app.memory.service import MemoryService
+
+    memory_service = MemoryService.from_data_dir(data_dir)
+    state.memory_refs = memory_service.refs_for_task(goal, project_id)
     event_emit(
         task_id=task_id,
         run_id=run_id,
@@ -349,6 +422,43 @@ def run_task(
         summary=f"task created: {goal}",
         payload_safe={"goal": goal, "model_mode": model_mode, "project_id": project_id},
     )
+    for role in ("supervisor", "planner"):
+        used_memories = memory_service.resolve_refs_for_role(
+            state.memory_refs,
+            run_id=run_id,
+            role=role,
+        )
+        for memory in used_memories:
+            event_emit(
+                task_id=task_id,
+                run_id=run_id,
+                event_type="memory_used",
+                actor_type="agent",
+                actor_id=role,
+                summary="governed memory selected",
+                payload_safe={
+                    "memory_id": memory["memory_id"],
+                    "version": memory["version"],
+                    "role": role,
+                    "reason_selected": memory["reason_selected"],
+                    "scope": memory["scope"],
+                },
+            )
+    proposals = memory_service.detect_explicit_proposals(
+        goal,
+        run_id=run_id,
+        project_id=project_id,
+    )
+    for proposal in proposals:
+        event_emit(
+            task_id=task_id,
+            run_id=run_id,
+            event_type="memory_proposed",
+            actor_type="system",
+            actor_id="memory_governance",
+            summary="memory proposal created",
+            payload_safe={"proposal_id": proposal.proposal_id, "memory_type": proposal.memory_type},
+        )
     ctx = _build_context(
         state,
         data_dir,
@@ -675,8 +785,7 @@ def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
         if t.get("status") in ("paused", "running")
     )
     evidence_count = sum(
-        int(evidence_list(t.get("run_id") or "", data_dir).get("evidence_count", 0))
-        for t in tasks
+        int(evidence_list(t.get("run_id") or "", data_dir).get("evidence_count", 0)) for t in tasks
     )
     total_tokens = sum(int(t.get("tokens") or 0) for t in tasks)
     total_cost = sum(float(t.get("cost") or 0.0) for t in tasks)

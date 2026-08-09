@@ -159,6 +159,37 @@ def main(argv: list[str] | None = None) -> None:
     evidence_show_parser.add_argument("evidence_id", help="evidence_id")
     evidence_show_parser.add_argument("--data-dir", default=None)
 
+    # 013 M4-A：高级记忆管理；普通用户优先使用 Memory Center。
+    memories_parser = sub.add_parser("memories", help="列出受治理的记忆")
+    memories_parser.add_argument("--project-id", default=None)
+    memory_show_parser = sub.add_parser("memory-show", help="查看单条记忆")
+    memory_show_parser.add_argument("memory_id")
+    memory_search_parser = sub.add_parser("memory-search", help="全文检索记忆")
+    memory_search_parser.add_argument("query")
+    memory_search_parser.add_argument("--project-id", default=None)
+    sub.add_parser("memory-proposals", help="列出待确认记忆建议")
+    memory_confirm_parser = sub.add_parser("memory-confirm", help="确认记忆建议")
+    memory_confirm_parser.add_argument("proposal_id")
+    memory_reject_parser = sub.add_parser("memory-reject", help="拒绝记忆建议")
+    memory_reject_parser.add_argument("proposal_id")
+    memory_edit_parser = sub.add_parser("memory-edit", help="编辑并确认记忆建议")
+    memory_edit_parser.add_argument("proposal_id")
+    memory_edit_parser.add_argument("value")
+    memory_forget_parser = sub.add_parser("memory-forget", help="真正遗忘一条记忆")
+    memory_forget_parser.add_argument("memory_id")
+    sub.add_parser("memory-export", help="导出非 Secret、未遗忘的记忆")
+    sub.add_parser("memory-health", help="检查记忆库完整性")
+    for p in (
+        memories_parser,
+        memory_show_parser,
+        memory_search_parser,
+        memory_confirm_parser,
+        memory_reject_parser,
+        memory_edit_parser,
+        memory_forget_parser,
+    ):
+        p.add_argument("--data-dir", default=None)
+
     args = parser.parse_args(argv)
     data_dir = Path(args.data_dir) if getattr(args, "data_dir", None) else None
     settings = load_settings()
@@ -244,6 +275,46 @@ def main(argv: list[str] | None = None) -> None:
                 evidence_show(args.evidence_id, data_dir=data_dir), ensure_ascii=False, indent=2
             )
         )
+    elif args.command.startswith("memory") or args.command == "memories":
+        from app.memory.service import MemoryService
+
+        memory = MemoryService.from_data_dir(data_dir or Path("data"))
+        memory_payload: object
+        if args.command == "memories":
+            memory_payload = [
+                item.model_dump(mode="json")
+                for item in memory.store.list(
+                    project_id=args.project_id,
+                    include_global=args.project_id is not None,
+                )
+            ]
+        elif args.command == "memory-show":
+            record = memory.store.get(args.memory_id)
+            if record is None:
+                parser.error(f"memory not found: {args.memory_id}")
+            memory_payload = record.model_dump(mode="json")
+        elif args.command == "memory-search":
+            memory_payload = [
+                item.model_dump(mode="json")
+                for item in memory.store.search(args.query, project_id=args.project_id)
+            ]
+        elif args.command == "memory-proposals":
+            memory_payload = [
+                item.model_dump(mode="json") for item in memory.store.list_proposals()
+            ]
+        elif args.command == "memory-confirm":
+            memory_payload = memory.confirm(args.proposal_id).model_dump(mode="json")
+        elif args.command == "memory-reject":
+            memory_payload = memory.store.reject_proposal(args.proposal_id).model_dump(mode="json")
+        elif args.command == "memory-edit":
+            memory_payload = memory.confirm(args.proposal_id, args.value).model_dump(mode="json")
+        elif args.command == "memory-forget":
+            memory_payload = memory.store.forget(args.memory_id).model_dump(mode="json")
+        elif args.command == "memory-export":
+            memory_payload = memory.store.export()
+        else:
+            memory_payload = memory.store.health().model_dump(mode="json")
+        print(json.dumps(memory_payload, ensure_ascii=False, indent=2))
     elif args.command == "run":
         if args.budget_tokens <= 0 or args.budget_cost <= 0:
             parser.error("--budget-tokens 与 --budget-cost 必须为正数")

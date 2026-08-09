@@ -116,6 +116,81 @@ export interface TaskDetail {
   budget_usage: Record<string, number>;
   rework_count: number;
   final_result: string | null;
+  memory_context_count?: number;
+}
+
+export interface MemoryRecord {
+  memory_id: string;
+  project_id: string | null;
+  memory_type: string;
+  subject: string;
+  predicate: string;
+  value: string;
+  confidence: number;
+  status: string;
+  privacy_level: string;
+  source_type: string;
+  source_ref: string;
+  updated_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  version: number;
+  tags: string[];
+}
+
+export interface MemoryProposal {
+  proposal_id: string;
+  project_id: string | null;
+  memory_type: string;
+  subject: string;
+  predicate: string;
+  proposed_value: string;
+  reason: string;
+  source_type: string;
+  confidence: number;
+  privacy_level: string;
+  created_at: string;
+  status: string;
+}
+
+export interface MemoryUsage {
+  memory_id: string;
+  memory_version: number;
+  role: string;
+  reason_selected: string;
+  scope: string;
+  token_count: number;
+  subject: string;
+  predicate: string;
+  value: string;
+  source_type: string;
+}
+
+export interface MemorySettings {
+  enabled: boolean;
+  automatic_low_risk: boolean;
+  preference_detection: boolean;
+  retention: string;
+}
+
+export interface CustomProvider {
+  provider_id: string;
+  provider_name: string;
+  base_url: string;
+  models_endpoint: string;
+  chat_endpoint: string;
+  default_model: string;
+  role_models: Record<string, string>;
+  discovered_models: Array<{ id: string; owned_by?: string; created?: number }>;
+  configured: boolean;
+  storage: string;
+  health: string;
+  model_discovery_status: string;
+  model_count: number;
+  last_model_sync_at: string | null;
+  is_default: boolean;
+  local_provider: boolean;
+  test_provider: boolean;
 }
 
 export interface ApprovalView {

@@ -18,6 +18,7 @@ export function Dashboard() {
   const [mode, setMode] = useState("fake");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [project, setProject] = useState("");
+  const [memoryProject, setMemoryProject] = useState("default");
   const activeSummary = dash.data?.recent_tasks.find((task) => ["running", "paused"].includes(task.status));
   const activeDetail = useQuery({
     queryKey: ["dashboard-active-task", activeSummary?.run_id],
@@ -27,7 +28,7 @@ export function Dashboard() {
   });
 
   const create = useMutation({
-    mutationFn: (body: { goal: string; model_mode: string; project_alias?: string }) =>
+    mutationFn: (body: { goal: string; model_mode: string; project_alias?: string; project_id?: string }) =>
       api.createTask(body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -71,7 +72,7 @@ export function Dashboard() {
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && goal.trim()) {
-              create.mutate({ goal, model_mode: mode, project_alias: project || undefined });
+              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default" });
             }
           }}
         />
@@ -88,7 +89,7 @@ export function Dashboard() {
             className="btn btn-primary"
             disabled={!goal.trim() || create.isPending}
             onClick={() =>
-              create.mutate({ goal, model_mode: mode, project_alias: project || undefined })
+              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default" })
             }
           >
             {t("dash.startTask")}
@@ -104,6 +105,7 @@ export function Dashboard() {
                 goal: "sandbox_code_fix",
                 model_mode: "fake",
                 project_alias: project || "sample-python",
+                project_id: memoryProject || "default",
               })
             }
           >
@@ -116,6 +118,10 @@ export function Dashboard() {
           <label className="field">
             {t("dash.project")}
             <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="sample-python" />
+          </label>
+          <label className="field">
+            {lang === "zh" ? "记忆项目" : "Memory project"}
+            <input value={memoryProject} onChange={(e) => setMemoryProject(e.target.value)} placeholder="default" />
           </label>
         </details>
         {create.isError && <p className="error">{(create.error as Error).message}</p>}

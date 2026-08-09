@@ -19,6 +19,8 @@ from app.core.config import AppSettings, load_settings
 from app.core.resume import ResumePayload
 from app.core.schemas import ClarificationPayload
 from app.gateway.contracts import ProviderError
+from app.memory.models import MemorySettings, MemoryType, PrivacyLevel
+from app.memory.service import MemoryService
 from app.runner import (
     approval_show,
     approvals_of,
@@ -69,6 +71,201 @@ class TaskCreate(BaseModel):
 
 class TaskResume(BaseModel):
     clarification: str | None = None
+
+
+class MemoryProposalBody(BaseModel):
+    memory_type: MemoryType = Field(
+        pattern="^(working|episodic|semantic_user|project|procedural_preference)$"
+    )
+    subject: str = Field(min_length=1, max_length=200)
+    predicate: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=4000)
+    reason: str = Field(min_length=1, max_length=1000)
+    project_id: str | None = Field(default=None, max_length=200)
+    privacy_level: PrivacyLevel = Field(
+        default="personal", pattern="^(public|personal|sensitive|secret)$"
+    )
+
+
+class MemoryEditConfirmBody(BaseModel):
+    value: str = Field(min_length=1, max_length=4000)
+
+
+def _memory() -> MemoryService:
+    return MemoryService.from_data_dir(_data_dir())
+
+
+def _memory_event(event_type: str, memory_id: str, run_id: str | None = None) -> None:
+    from app.core.events import emit as event_emit
+    from app.core.events import init as events_init
+
+    events_init(_data_dir())
+    event_emit(
+        task_id=run_id or "memory-control",
+        run_id=run_id or "memory-control",
+        event_type=event_type,
+        actor_type="user",
+        actor_id="memory_center",
+        summary=event_type.replace("_", " "),
+        payload_safe={"memory_id": memory_id},
+    )
+
+
+@app.get("/memory")
+def memories(
+    project_id: str | None = None,
+    status: str | None = None,
+    memory_type: str | None = None,
+    source_type: str | None = None,
+) -> dict[str, Any]:
+    service = _memory()
+    records = service.store.list(
+        project_id=project_id,
+        status=status,
+        memory_type=memory_type,
+        source_type=source_type,
+        include_global=project_id is not None,
+    )
+    health = service.store.health()
+    return {
+        "memories": [record.model_dump(mode="json") for record in records],
+        "metrics": health.model_dump(mode="json"),
+    }
+
+
+@app.get("/memory/search")
+def memory_search(
+    q: str = "",
+    project_id: str | None = None,
+    status: str | None = None,
+    memory_type: str | None = None,
+    source_type: str | None = None,
+) -> dict[str, Any]:
+    records = _memory().store.search(
+        q,
+        project_id=project_id,
+        status=status,
+        memory_type=memory_type,
+        source_type=source_type,
+    )
+    return {"memories": [record.model_dump(mode="json") for record in records]}
+
+
+@app.get("/memory/proposals")
+def memory_proposals(project_id: str | None = None) -> dict[str, Any]:
+    proposals = _memory().store.list_proposals(project_id=project_id)
+    return {"proposals": [item.model_dump(mode="json") for item in proposals]}
+
+
+@app.post("/memory/proposals")
+def create_memory_proposal(body: MemoryProposalBody) -> dict[str, Any]:
+    proposal, decision = _memory().propose(
+        memory_type=body.memory_type,
+        subject=body.subject,
+        predicate=body.predicate,
+        value=body.value,
+        reason=body.reason,
+        source_type="explicit_user_statement",
+        source_ref="memory-center",
+        project_id=body.project_id,
+        privacy_level=body.privacy_level,
+        trusted_user_source=True,
+    )
+    if proposal is None:
+        raise HTTPException(status_code=400, detail=decision.reason)
+    _memory_event("memory_proposed", proposal.proposal_id)
+    return proposal.model_dump(mode="json")
+
+
+@app.post("/memory/proposals/{proposal_id}/confirm")
+def confirm_memory_proposal(proposal_id: str) -> dict[str, Any]:
+    try:
+        record = _memory().confirm(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="memory proposal not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _memory_event("memory_confirmed", record.memory_id, record.source_ref)
+    return record.model_dump(mode="json")
+
+
+@app.post("/memory/proposals/{proposal_id}/reject")
+def reject_memory_proposal(proposal_id: str) -> dict[str, Any]:
+    try:
+        proposal = _memory().store.reject_proposal(proposal_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="memory proposal not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _memory_event("memory_rejected", proposal.proposal_id, proposal.source_ref)
+    return proposal.model_dump(mode="json")
+
+
+@app.post("/memory/proposals/{proposal_id}/edit-confirm")
+def edit_confirm_memory_proposal(proposal_id: str, body: MemoryEditConfirmBody) -> dict[str, Any]:
+    try:
+        record = _memory().confirm(proposal_id, body.value)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="memory proposal not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _memory_event("memory_confirmed", record.memory_id, record.source_ref)
+    return record.model_dump(mode="json")
+
+
+@app.get("/settings/memory")
+@app.get("/memory/settings")
+def memory_settings() -> dict[str, Any]:
+    return _memory().store.get_settings().model_dump(mode="json")
+
+
+@app.put("/settings/memory")
+@app.put("/memory/settings")
+def save_memory_settings(body: MemorySettings) -> dict[str, Any]:
+    return _memory().store.set_settings(body).model_dump(mode="json")
+
+
+@app.post("/memory/export")
+def export_memory() -> dict[str, Any]:
+    return _memory().store.export()
+
+
+@app.delete("/memory")
+def forget_all_memory() -> dict[str, Any]:
+    service = _memory()
+    count = 0
+    for record in service.store.list(limit=10_000):
+        if record.status not in {"forgotten", "expired"}:
+            service.store.forget(record.memory_id)
+            count += 1
+    return {"forgotten": count}
+
+
+@app.get("/memory/{memory_id}")
+def memory_detail(memory_id: str) -> dict[str, Any]:
+    record = _memory().store.get(memory_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return record.model_dump(mode="json")
+
+
+@app.delete("/memory/{memory_id}")
+def forget_memory(memory_id: str) -> dict[str, Any]:
+    try:
+        record = _memory().store.forget(memory_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="memory not found") from exc
+    _memory_event("memory_forgotten", record.memory_id, record.source_ref)
+    return record.model_dump(mode="json")
+
+
+@app.get("/tasks/{run_id}/memory")
+def task_memory(run_id: str) -> dict[str, Any]:
+    try:
+        status_task(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"run_id": run_id, "usage": _memory().store.usage_for_run(run_id)}
 
 
 @app.get("/providers")
@@ -154,6 +351,7 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
         "usage": report.usage,
         "call_count": report.call_count,
         "tool_call_count": report.tool_call_count,
+        "memory_context_count": len(report.state.memory_refs),
     }
 
 
@@ -196,6 +394,7 @@ def get_task(run_id: str) -> dict[str, Any]:
         "rework_count": state.rework_count,
         "usage": report.usage,
         "tool_call_count": report.tool_call_count,
+        "memory_context_count": len(state.memory_refs),
     }
 
 
@@ -428,11 +627,7 @@ def agents() -> list[dict[str, Any]]:
     if active_task is not None:
         report = status_task(active_task["run_id"], data_dir=_data_dir())
         active_subtask = next(
-            (
-                s
-                for s in reversed(report.state.subtasks)
-                if s.runtime_status != "passed"
-            ),
+            (s for s in reversed(report.state.subtasks) if s.runtime_status != "passed"),
             None,
         )
         latest_completed = next(
@@ -473,9 +668,7 @@ def agents() -> list[dict[str, Any]]:
                     )
                 ),
                 "current_subtask": (
-                    active_subtask.title
-                    if (assigned or supervising) and active_subtask
-                    else None
+                    active_subtask.title if (assigned or supervising) and active_subtask else None
                 ),
                 "latest_completed": (
                     latest_completed.title if latest_completed is not None else None
@@ -611,6 +804,24 @@ class ConnectionBody(BaseModel):
     local_provider: bool = False  # 仅 Ollama 本地 Provider 允许 localhost（010 三十六）
 
 
+class CustomProviderBody(BaseModel):
+    provider_name: str = Field(min_length=1, max_length=100)
+    base_url: str = Field(min_length=1, max_length=500)
+    models_endpoint: str = Field(default="/models", min_length=1, max_length=200)
+    chat_endpoint: str = Field(default="/chat/completions", min_length=1, max_length=200)
+    api_mode: str = Field(default="openai_compatible", pattern="^openai_compatible$")
+    default_model: str = Field(default="", max_length=200)
+    role_models: dict[str, str] = Field(default_factory=dict)
+    is_default: bool = False
+    local_provider: bool = False
+    test_provider: bool = False
+
+
+class CustomCredentialBody(BaseModel):
+    api_key: str = Field(min_length=1, max_length=2000)
+    storage_mode: str = Field(default="session", pattern="^(session|secure)$")
+
+
 _resolver = None  # 惰性初始化（依赖 data_dir）
 _CONNECTION_PROVIDERS = (
     "openai_compatible",
@@ -622,12 +833,29 @@ _CONNECTION_PROVIDERS = (
 _CONNECTION_HEALTH: dict[str, str] = {}
 
 
+def _provider_store():
+    from app.core.provider_store import ProviderStore
+
+    return ProviderStore(_data_dir() / "runtime" / "providers.sqlite")
+
+
+def _custom_provider_info(provider) -> dict[str, Any]:
+    store = _provider_store()
+    secret_key = store.secret_key(provider.provider_id)
+    payload = provider.model_dump(mode="json", exclude={"configured", "storage"})
+    payload["configured"] = _secret_resolver().resolve(secret_key) is not None
+    payload["storage"] = _secret_resolver().store_mode(secret_key)
+    payload["model_discovery_status"] = payload.pop("discovery_status")
+    payload["model_count"] = len(provider.discovered_models)
+    return payload
+
+
 def _secret_resolver():
     global _resolver
     if _resolver is None:
-        from app.core.secret_store import default_resolver
+        from app.core.secret_store import process_resolver
 
-        _resolver = default_resolver(_data_dir())
+        _resolver = process_resolver(_data_dir())
     return _resolver
 
 
@@ -650,9 +878,7 @@ def _provider_info(provider: str) -> dict[str, Any]:
         "base_url": base,
         "models": models,
         "storage": storage,
-        "health": _CONNECTION_HEALTH.get(
-            provider, "configured" if configured else "missing"
-        ),
+        "health": _CONNECTION_HEALTH.get(provider, "configured" if configured else "missing"),
         "local_provider": provider == "ollama",
         "test_provider": provider in ("test_provider", "github_test"),
     }
@@ -687,6 +913,232 @@ def provider_key(provider: str) -> str:
 def connections_status() -> dict[str, Any]:
     """Connections 状态（009-A 八；禁止返回任何 Secret）。"""
     return {p: _provider_info(p) for p in _CONNECTION_PROVIDERS}
+
+
+@app.get("/settings/connections/providers")
+def custom_providers() -> dict[str, Any]:
+    return {"providers": [_custom_provider_info(item) for item in _provider_store().list()]}
+
+
+@app.post("/settings/connections/providers")
+def create_custom_provider(body: CustomProviderBody) -> dict[str, Any]:
+    if body.test_provider:
+        if body.base_url != "https://third-party-test.invalid/v1":
+            raise HTTPException(status_code=400, detail="invalid isolated test provider URL")
+    else:
+        _validate_base_url("custom", body.base_url, local_ok=body.local_provider)
+    try:
+        provider = _provider_store().create(**body.model_dump())
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            raise HTTPException(status_code=409, detail="provider name already exists") from exc
+        raise
+    return _custom_provider_info(provider)
+
+
+@app.get("/settings/connections/providers/{provider_id}")
+def custom_provider(provider_id: str) -> dict[str, Any]:
+    provider = _provider_store().get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    return _custom_provider_info(provider)
+
+
+@app.put("/settings/connections/providers/{provider_id}")
+def update_custom_provider(provider_id: str, body: CustomProviderBody) -> dict[str, Any]:
+    if body.test_provider:
+        if body.base_url != "https://third-party-test.invalid/v1":
+            raise HTTPException(status_code=400, detail="invalid isolated test provider URL")
+    else:
+        _validate_base_url("custom", body.base_url, local_ok=body.local_provider)
+    try:
+        provider = _provider_store().update(provider_id, **body.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="custom provider not found") from exc
+    except Exception as exc:
+        if "UNIQUE constraint" in str(exc):
+            raise HTTPException(status_code=409, detail="provider name already exists") from exc
+        raise
+    return _custom_provider_info(provider)
+
+
+@app.delete("/settings/connections/providers/{provider_id}")
+def delete_custom_provider(provider_id: str) -> dict[str, Any]:
+    store = _provider_store()
+    try:
+        store.delete(provider_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="custom provider not found") from exc
+    _secret_resolver().delete(store.secret_key(provider_id))
+    return {"provider_id": provider_id, "deleted": True}
+
+
+@app.put("/settings/connections/providers/{provider_id}/credential")
+def save_custom_credential(provider_id: str, body: CustomCredentialBody) -> dict[str, Any]:
+    store = _provider_store()
+    if store.get(provider_id) is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    try:
+        storage = _secret_resolver().set(
+            store.secret_key(provider_id), body.api_key, body.storage_mode
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"provider_id": provider_id, "configured": True, "storage": storage}
+
+
+@app.delete("/settings/connections/providers/{provider_id}/credential")
+def delete_custom_credential(provider_id: str) -> dict[str, Any]:
+    store = _provider_store()
+    if store.get(provider_id) is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    _secret_resolver().delete(store.secret_key(provider_id))
+    return {"provider_id": provider_id, "configured": False, "storage": "missing"}
+
+
+def _discover_custom_models(provider_id: str) -> dict[str, Any]:
+    from app.core.provider_store import models_url, normalize_models
+    from app.memory.models import utc_now
+
+    store = _provider_store()
+    provider = store.get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    if provider.test_provider:
+        models = normalize_models(
+            {
+                "data": [
+                    {"id": "m4-test-small", "owned_by": "isolated-test"},
+                    {"id": "m4-test-pro", "owned_by": "isolated-test"},
+                    {"id": "m4-test-reasoning", "owned_by": "isolated-test"},
+                ]
+            }
+        )
+        provider = store.update_discovery(provider_id, models, "success")
+        return {
+            "provider_id": provider_id,
+            "status": "success",
+            "models": [dict(item, display_name=item["id"]) for item in models],
+            "count": len(models),
+            "last_model_sync_at": provider.last_model_sync_at,
+        }
+    key = _secret_resolver().resolve(store.secret_key(provider_id))
+    if not key:
+        raise HTTPException(status_code=409, detail="credential is not configured")
+    url = models_url(provider.base_url, provider.models_endpoint)
+    _validate_base_url("custom", url, local_ok=provider.local_provider)
+    try:
+        import httpx
+
+        with (
+            httpx.Client(timeout=8.0) as client,
+            client.stream("GET", url, headers={"Authorization": f"Bearer {key}"}) as response,
+        ):
+            if response.status_code == 404:
+                store.update(
+                    provider_id,
+                    discovery_status="unsupported",
+                    last_model_sync_at=utc_now(),
+                )
+                return {
+                    "provider_id": provider_id,
+                    "status": "unsupported",
+                    "models": [],
+                    "count": 0,
+                    "manual_allowed": True,
+                }
+            if response.status_code in {401, 403}:
+                raise HTTPException(status_code=401, detail="authentication failed")
+            if response.status_code == 429:
+                raise HTTPException(status_code=429, detail="rate limited")
+            if response.status_code != 200:
+                raise HTTPException(status_code=502, detail="model discovery unavailable")
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in response.iter_bytes():
+                total += len(chunk)
+                if total > 1024 * 1024:
+                    raise HTTPException(status_code=502, detail="model list response too large")
+                chunks.append(chunk)
+            try:
+                import json
+
+                payload = json.loads(b"".join(chunks))
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=502, detail="invalid model list response") from exc
+        supported_shape = isinstance(payload, list) or (
+            isinstance(payload, dict)
+            and isinstance(payload.get("data", payload.get("models")), list)
+        )
+        if not supported_shape:
+            store.update(
+                provider_id,
+                discovery_status="unsupported_response",
+                last_model_sync_at=utc_now(),
+            )
+            return {
+                "provider_id": provider_id,
+                "status": "unsupported_response",
+                "models": [],
+                "count": 0,
+                "manual_allowed": True,
+            }
+        models = normalize_models(payload)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="model discovery timeout") from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="model discovery unreachable") from exc
+    provider = store.update_discovery(provider_id, models, "success")
+    return {
+        "provider_id": provider_id,
+        "status": "success",
+        "models": [dict(item, display_name=item["id"]) for item in models],
+        "count": len(models),
+        "last_model_sync_at": provider.last_model_sync_at,
+    }
+
+
+@app.post("/settings/connections/providers/{provider_id}/discover-models")
+def discover_custom_models(provider_id: str) -> dict[str, Any]:
+    return _discover_custom_models(provider_id)
+
+
+@app.post("/settings/connections/providers/{provider_id}/refresh-models")
+def refresh_custom_models(provider_id: str) -> dict[str, Any]:
+    return _discover_custom_models(provider_id)
+
+
+@app.post("/settings/connections/providers/{provider_id}/test")
+def test_custom_provider(provider_id: str) -> dict[str, Any]:
+    from app.core.provider_store import models_url
+    from app.memory.models import utc_now
+
+    store = _provider_store()
+    provider = store.get(provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="custom provider not found")
+    if not _secret_resolver().resolve(store.secret_key(provider_id)):
+        provider = store.update(
+            provider_id, health="authentication_failed", last_checked_at=utc_now()
+        )
+        return {"provider_id": provider_id, "status": provider.health}
+    if provider.test_provider:
+        provider = store.update(provider_id, health="healthy", last_checked_at=utc_now())
+        return {"provider_id": provider_id, "status": provider.health}
+    _validate_base_url(
+        "custom",
+        models_url(provider.base_url, provider.models_endpoint),
+        local_ok=provider.local_provider,
+    )
+    try:
+        result = _discover_custom_models(provider_id)
+        status = "healthy" if result["status"] in {"success", "unsupported"} else "unreachable"
+    except HTTPException as exc:
+        status = "authentication_failed" if exc.status_code == 401 else "unreachable"
+    provider = store.update(provider_id, health=status, last_checked_at=utc_now())
+    return {"provider_id": provider_id, "status": provider.health}
 
 
 @app.put("/settings/connections/{provider}")
@@ -850,9 +1302,10 @@ def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> 
     reason = blocked_host_reason(host)
     if reason and not (local_ok and host in ("localhost", "127.0.0.1", "::1")):
         raise HTTPException(status_code=400, detail=f"base_url blocked: {reason}")
-    if scheme == "http" and not local_ok:
+    loopback = host in ("localhost", "127.0.0.1", "::1")
+    if scheme == "http" and not (local_ok and loopback):
         raise HTTPException(
-            status_code=400, detail="http base_url only allowed for local providers"
+            status_code=400, detail="http base_url only allowed for loopback local providers"
         )
 
 

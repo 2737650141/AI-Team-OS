@@ -8,15 +8,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from app.core.config import AppSettings
 
 
 class ContextBuilder:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        memory_loader: Callable[[str], list[dict[str, Any]]] | None = None,
+    ) -> None:
         self._settings = settings
         self._max_chars = 24000  # 约 6k token 的角色上下文上限
+        self._memory_loader = memory_loader
+
+    def _memories(self, role: str) -> list[dict[str, Any]]:
+        return self._memory_loader(role) if self._memory_loader else []
 
     # ---- 角色上下文（14.1） ----
     def supervisor_context(self, state) -> dict[str, Any]:
@@ -29,6 +38,7 @@ class ContextBuilder:
                 for s in state.subtasks
             ],
             "error_summary": state.final_result or "",
+            "memory_context": self._memories("supervisor"),
         }
 
     def planner_context(self, state, agents: list[str]) -> dict[str, Any]:
@@ -36,6 +46,7 @@ class ContextBuilder:
             "goal": state.clarified_goal or state.user_goal,
             "constraints": {"token_budget": state.token_budget, "cost_budget": state.cost_budget},
             "agents": agents,
+            "memory_context": self._memories("planner"),
         }
 
     def researcher_context(self, subtask, evidence: list[dict]) -> dict[str, Any]:
@@ -52,6 +63,7 @@ class ContextBuilder:
                 {"id": e["id"], "tool": e["tool"], "summary": e.get("summary", "")[:300]}
                 for e in evidence
             ],
+            "memory_context": self._memories("researcher"),
         }
 
     def reviewer_context(self, state, subtask, deterministic_issues: list[Any]) -> dict[str, Any]:
@@ -67,6 +79,7 @@ class ContextBuilder:
                 {"id": e["id"], "summary": e.get("summary", "")[:300]} for e in state.evidence
             ],
             "deterministic_issues": [i.model_dump() for i in deterministic_issues],
+            "memory_context": self._memories("reviewer"),
         }
 
     # ---- 裁剪（14.2） ----

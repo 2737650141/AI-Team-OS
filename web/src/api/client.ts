@@ -77,11 +77,63 @@ export const api = {
     }),
   discoverModels: (provider: string) =>
     request<import("./types").ModelDiscovery>(`/settings/connections/${provider}/models`),
+  memories: (params = "") =>
+    request<{ memories: import("./types").MemoryRecord[]; metrics: Record<string, number | string | boolean> }>(`/memory${params}`),
+  memorySearch: (query: string) =>
+    request<{ memories: import("./types").MemoryRecord[] }>(`/memory/search?q=${encodeURIComponent(query)}`),
+  memoryProposals: () =>
+    request<{ proposals: import("./types").MemoryProposal[] }>("/memory/proposals"),
+  confirmMemory: (proposalId: string) =>
+    request<import("./types").MemoryRecord>(`/memory/proposals/${proposalId}/confirm`, { method: "POST" }),
+  rejectMemory: (proposalId: string) =>
+    request<import("./types").MemoryProposal>(`/memory/proposals/${proposalId}/reject`, { method: "POST" }),
+  editConfirmMemory: (proposalId: string, value: string) =>
+    request<import("./types").MemoryRecord>(`/memory/proposals/${proposalId}/edit-confirm`, {
+      method: "POST",
+      body: JSON.stringify({ value }),
+    }),
+  forgetMemory: (memoryId: string) =>
+    request<import("./types").MemoryRecord>(`/memory/${memoryId}`, { method: "DELETE" }),
+  exportMemory: () => request<Record<string, unknown>>("/memory/export", { method: "POST" }),
+  memorySettings: () => request<import("./types").MemorySettings>("/settings/memory"),
+  saveMemorySettings: (body: import("./types").MemorySettings) =>
+    request<import("./types").MemorySettings>("/settings/memory", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  taskMemory: (runId: string) =>
+    request<{ run_id: string; usage: import("./types").MemoryUsage[] }>(`/tasks/${runId}/memory`),
+  customProviders: () =>
+    request<{ providers: import("./types").CustomProvider[] }>("/settings/connections/providers"),
+  createCustomProvider: (body: Record<string, unknown>) =>
+    request<import("./types").CustomProvider>("/settings/connections/providers", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateCustomProvider: (providerId: string, body: Record<string, unknown>) =>
+    request<import("./types").CustomProvider>(`/settings/connections/providers/${providerId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteCustomProvider: (providerId: string) =>
+    request<{ deleted: boolean }>(`/settings/connections/providers/${providerId}`, { method: "DELETE" }),
+  saveCustomCredential: (providerId: string, apiKey: string, storageMode: string) =>
+    request<{ configured: boolean }>(`/settings/connections/providers/${providerId}/credential`, {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey, storage_mode: storageMode }),
+    }),
+  deleteCustomCredential: (providerId: string) =>
+    request<{ configured: boolean }>(`/settings/connections/providers/${providerId}/credential`, { method: "DELETE" }),
+  testCustomProvider: (providerId: string) =>
+    request<{ status: string }>(`/settings/connections/providers/${providerId}/test`, { method: "POST" }),
+  discoverCustomModels: (providerId: string, refresh = false) =>
+    request<{ status: string; models: Array<{ id: string }>; count: number }>(`/settings/connections/providers/${providerId}/${refresh ? "refresh-models" : "discover-models"}`, { method: "POST" }),
   createTask: (body: {
     goal: string;
     model_mode: string;
     token_budget?: number;
     cost_budget?: number;
+    project_id?: string;
     project_alias?: string | null;
   }) => request<{ run_id: string; task_id: string; status: string }>("/tasks", {
     method: "POST",

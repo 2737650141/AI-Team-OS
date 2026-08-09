@@ -55,8 +55,10 @@ class OpenAICompatibleProvider:
         max_output_tokens: int = 4096,
         transport: httpx.BaseTransport | None = None,
         allow_local: bool = False,
+        chat_endpoint: str = "/chat/completions",
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._chat_endpoint = "/" + chat_endpoint.strip().lstrip("/")
         self._api_key = api_key  # 私有字段：不进入状态/日志/消息
         self._default_model = default_model
         self._enable_real = enable_real
@@ -75,7 +77,7 @@ class OpenAICompatibleProvider:
     # ---- 契约（005 6） ----
     def generate(self, request: ModelRequest) -> ModelResponse:
         self._assert_ready(request.model)
-        url = f"{self._base_url}/chat/completions"
+        url = self._chat_url()
         self._assert_url_allowed(url)
         body = {
             "model": request.model,
@@ -236,7 +238,7 @@ class OpenAICompatibleProvider:
                 checked_at=_now(),
             )
         try:
-            self._assert_url_allowed(f"{self._base_url}/chat/completions")
+            self._assert_url_allowed(self._chat_url())
         except ProviderError as exc:
             return ProviderHealth(
                 status="misconfigured",
@@ -254,6 +256,11 @@ class OpenAICompatibleProvider:
         )
 
     # ---- 内部 ----
+    def _chat_url(self) -> str:
+        from app.core.provider_store import models_url
+
+        return models_url(self._base_url, self._chat_endpoint)
+
     def _assert_ready(self, model: str) -> None:
         if not self._enable_real:
             raise ProviderError(
@@ -292,7 +299,12 @@ class OpenAICompatibleProvider:
                 )
         if parsed.hostname:
             reason = _blocked_host_reason(parsed.hostname)
-            if reason and not self._allow_local:
+            local_loopback = self._allow_local and parsed.hostname.lower() in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }
+            if reason and not local_loopback:
                 raise ProviderError(
                     ProviderErrorCode.CONFIG_ERROR,
                     f"base url rejected: {reason}",

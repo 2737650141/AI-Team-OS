@@ -46,6 +46,13 @@ _EVENT_TYPES = {
     "review_passed",
     "review_rejected",
     "rework_started",
+    "memory_proposed",
+    "memory_confirmed",
+    "memory_rejected",
+    "memory_used",
+    "memory_superseded",
+    "memory_forgotten",
+    "memory_expired",
 }
 
 

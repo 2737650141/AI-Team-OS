@@ -36,6 +36,7 @@ export function TaskDetail() {
     enabled: !!testArtifact,
   });
   const diff = useQuery({ queryKey: ["diff", runId, refresh], queryFn: () => api.diff(runId) });
+  const memory = useQuery({ queryKey: ["task-memory", runId], queryFn: () => api.taskMemory(runId) });
 
   if (task.isLoading) return <div className="page">{t("task.loading")}</div>;
   if (task.isError) return <div className="page"><div className="card"><p className="error">{t("task.taskFailed")} · {(task.error as Error).message}</p><Link to="/tasks">{t("task.backToTasks")}</Link></div></div>;
@@ -73,6 +74,11 @@ export function TaskDetail() {
           <Presence label={t("task.activeAgent")} value={displayLabel(lastEvent?.actor_type ?? currentSubtask?.role ?? "supervisor", lang)} />
           <Presence label={t("task.latestCompleted")} value={latestCompleted ? displayLabel(latestCompleted.event_type, lang) : "—"} />
         </div>
+      </section>
+
+      <section className="card task-memory-context">
+        <div className="section-heading"><div><span className="eyebrow">Controlled Memory</span><h2>{lang === "zh" ? "本次任务的记忆上下文" : "Memory context for this task"}</h2></div><span className="connection-pill neutral">{memory.data?.usage.length ?? taskData.memory_context_count ?? 0}</span></div>
+        {(memory.data?.usage.length ?? 0) === 0 ? <p className="muted">{lang === "zh" ? "本次任务未使用长期记忆；当前指令始终优先。" : "No long-term memory was used; the current instruction always has priority."}</p> : <div className="task-memory-list">{memory.data!.usage.map((item) => <article key={`${item.memory_id}-${item.role}`}><div><span className="memory-type">{displayLabel(item.role, lang)}</span><strong>{item.subject} · {item.predicate}</strong></div><p>{item.value}</p><small className="muted">{lang === "zh" ? "选择原因" : "Selected because"}: {item.reason_selected} · {item.scope} · v{item.memory_version} · {item.token_count} Token</small></article>)}</div>}
       </section>
 
       <div className="card"><h2>{t("task.workflow")}</h2><Timeline status={taskData.current_status} /></div>

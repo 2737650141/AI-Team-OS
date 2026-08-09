@@ -213,6 +213,21 @@ def default_resolver(data_dir: Path | None = None) -> SecretResolver:
     return SecretResolver(session=SessionSecretStore(), secure=secure)
 
 
+_PROCESS_RESOLVERS: dict[str, SecretResolver] = {}
+_PROCESS_RESOLVERS_LOCK = threading.Lock()
+
+
+def process_resolver(data_dir: Path | None = None) -> SecretResolver:
+    """One resolver per data directory so session credentials reach task workers."""
+
+    root = (data_dir or Path("data")).resolve()
+    key = str(root)
+    with _PROCESS_RESOLVERS_LOCK:
+        if key not in _PROCESS_RESOLVERS:
+            _PROCESS_RESOLVERS[key] = default_resolver(root)
+        return _PROCESS_RESOLVERS[key]
+
+
 # ---- 工具函数 ----
 def fingerprint(value: str) -> str:
     """密钥指纹（仅用于诊断显示前 8 位，非安全用途）。"""

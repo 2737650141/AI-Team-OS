@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
-import type { ConnectionStatus } from "../api/types";
+import type { ConnectionStatus, CustomProvider } from "../api/types";
 import { useI18n } from "../i18n";
 import { connectionLabel, displayLabel } from "../i18n/labels";
 
@@ -14,6 +14,7 @@ export function Settings() {
   const status = useQuery({ queryKey: ["settings"], queryFn: api.settingsStatus });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const conns = useQuery({ queryKey: ["connections"], queryFn: api.connections });
+  const custom = useQuery({ queryKey: ["custom-providers"], queryFn: api.customProviders });
   const modelHealth = aggregateHealth([
     conns.data?.openai_compatible,
     conns.data?.test_provider,
@@ -120,6 +121,8 @@ export function Settings() {
         </SettingsCard>
       </div>
 
+      <CustomProvidersPanel providers={custom.data?.providers ?? []} />
+
       <details className="card advanced-raw">
         <summary>{t("settings.advancedConfig")}</summary>
         <p className="muted">{t("settings.advancedConfigHint")}</p>
@@ -129,6 +132,120 @@ export function Settings() {
         {t("settings.setupPrompt")} <Link to="/setup">{t("settings.runWizard")}</Link>.
       </p>
     </div>
+  );
+}
+
+function CustomProvidersPanel({ providers }: { providers: CustomProvider[] }) {
+  const { lang } = useI18n();
+  const zh = lang === "zh";
+  const qc = useQueryClient();
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [storage, setStorage] = useState("session");
+  const [modelsEndpoint, setModelsEndpoint] = useState("/models");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [testProvider, setTestProvider] = useState(false);
+  const [msg, setMsg] = useState("");
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["custom-providers"] });
+  const create = useMutation({
+    mutationFn: async () => {
+      const provider = await api.createCustomProvider({
+        provider_name: name,
+        base_url: testProvider ? "https://third-party-test.invalid/v1" : baseUrl,
+        models_endpoint: modelsEndpoint,
+        chat_endpoint: "/chat/completions",
+        default_model: defaultModel,
+        role_models: {},
+        is_default: providers.length === 0,
+        test_provider: testProvider,
+      });
+      if (apiKey) await api.saveCustomCredential(provider.provider_id, apiKey, storage);
+      return provider;
+    },
+    onSuccess: () => {
+      setAdding(false); setName(""); setBaseUrl(""); setApiKey(""); setMsg(zh ? "Provider 已保存。" : "Provider saved."); invalidate();
+    },
+    onError: (error) => setMsg(error instanceof Error ? error.message : String(error)),
+  });
+  return <section className="card custom-providers-section"><div className="section-heading"><div><span className="eyebrow">OpenAI Compatible · 0..N</span><h2>{zh ? "自定义 API Provider" : "Custom API Providers"}</h2><p className="muted">{zh ? "添加第三方中转或兼容网关，自动发现模型并为不同角色分配路由。" : "Add compatible gateways, discover models, and route roles independently."}</p></div><button className="btn btn-primary" onClick={() => setAdding((value) => !value)}>+ {zh ? "添加 Provider" : "Add Provider"}</button></div>
+    {adding && <div className="custom-provider-form"><label className="field">{zh ? "Provider 名称" : "Provider name"}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">Base URL<input value={baseUrl} disabled={testProvider} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://gateway.example.com/v1" /></label><label className="field">API Key<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label><label className="field">Models endpoint<input value={modelsEndpoint} onChange={(event) => setModelsEndpoint(event.target.value)} /></label><label className="field">{zh ? "默认模型（可稍后发现）" : "Default model (discover later)"}<input value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} /></label><label className="field">{zh ? "凭据存储" : "Credential storage"}<select value={storage} onChange={(event) => setStorage(event.target.value)}><option value="session">{zh ? "仅本次会话" : "Session only"}</option><option value="secure">{zh ? "保存到此电脑" : "Save on this PC"}</option></select></label><label className="check-row"><input type="checkbox" checked={testProvider} onChange={(event) => setTestProvider(event.target.checked)} />{zh ? "隔离测试 Provider（不触网）" : "Isolated test provider (no network)"}</label><div className="provider-actions"><button className="btn btn-primary" disabled={create.isPending || !name || (!baseUrl && !testProvider)} onClick={() => create.mutate()}>{zh ? "保存" : "Save"}</button><button className="btn" onClick={() => setAdding(false)}>{zh ? "取消" : "Cancel"}</button></div></div>}
+    {providers.length === 0 && !adding ? <p className="muted">{zh ? "还没有自定义 Provider。" : "No custom providers yet."}</p> : <div className="custom-provider-list">{providers.map((provider) => <CustomProviderCard key={provider.provider_id} provider={provider} zh={zh} onChanged={invalidate} />)}</div>}
+    {msg && <p role="status" className="msg">{msg}</p>}
+  </section>;
+}
+
+function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvider; zh: boolean; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [search, setSearch] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [defaultModel, setDefaultModel] = useState(provider.default_model);
+  const [roles, setRoles] = useState(provider.role_models);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const action = useMutation({
+    mutationFn: async (kind: "test" | "discover" | "refresh" | "delete" | "credential" | "remove" | "save") => {
+      if (kind === "test") return api.testCustomProvider(provider.provider_id);
+      if (kind === "discover" || kind === "refresh") return api.discoverCustomModels(provider.provider_id, kind === "refresh");
+      if (kind === "delete") return api.deleteCustomProvider(provider.provider_id);
+      if (kind === "credential") return api.saveCustomCredential(provider.provider_id, apiKey, "session");
+      if (kind === "remove") return api.deleteCustomCredential(provider.provider_id);
+      return api.updateCustomProvider(provider.provider_id, {
+        provider_name: provider.provider_name, base_url: provider.base_url, models_endpoint: provider.models_endpoint, chat_endpoint: provider.chat_endpoint, api_mode: "openai_compatible", default_model: defaultModel, role_models: roles, is_default: provider.is_default, local_provider: provider.local_provider, test_provider: provider.test_provider,
+      });
+    },
+    onSuccess: (result, kind) => { setApiKey(""); setMsg(kind === "discover" || kind === "refresh" ? `${(result as { count?: number }).count ?? 0} ${zh ? "个模型" : "models"}` : (zh ? "操作成功" : "Done")); onChanged(); },
+    onError: (error) => setMsg(error instanceof Error ? error.message : String(error)),
+  });
+  const modelIds = provider.discovered_models.map((item) => item.id).filter((id) => id.toLowerCase().includes(search.toLowerCase()));
+  return (
+    <article className="custom-provider-card">
+      <div className="custom-provider-head">
+        <div>
+          <h3>
+            {provider.provider_name}
+            {provider.is_default && <span className="memory-scope">{zh ? "默认" : "Default"}</span>}
+          </h3>
+          <p className="muted">{provider.base_url} · {provider.model_count} {zh ? "个模型" : "models"}</p>
+        </div>
+        <span className={`connection-pill ${provider.configured ? "good" : "neutral"}`}>
+          {provider.configured ? (zh ? "已配置" : "Configured") : (zh ? "未配置" : "Not configured")}
+        </span>
+      </div>
+      <div className="provider-actions">
+        <button className="btn" disabled={action.isPending || !provider.configured} onClick={() => action.mutate("test")}>{zh ? "测试连接" : "Test connection"}</button>
+        <button className="btn" disabled={action.isPending || !provider.configured} onClick={() => action.mutate(provider.model_count ? "refresh" : "discover")}>{provider.model_count ? (zh ? "刷新模型" : "Refresh models") : (zh ? "发现模型" : "Discover models")}</button>
+        <button className="btn" onClick={() => setOpen((value) => !value)}>{open ? (zh ? "收起" : "Close") : (zh ? "管理" : "Manage")}</button>
+      </div>
+      {open && (
+        <div className="provider-manage">
+          <label className="field">
+            {provider.configured ? (zh ? "替换凭据" : "Replace credential") : "API Key"}
+            <input type="password" value={apiKey} autoComplete="off" onChange={(event) => setApiKey(event.target.value)} />
+          </label>
+          <div className="provider-actions">
+            <button className="btn" disabled={!apiKey || action.isPending} onClick={() => action.mutate("credential")}>{zh ? "保存凭据" : "Save credential"}</button>
+            {provider.configured && <button className="btn btn-danger" onClick={() => action.mutate("remove")}>{zh ? "移除凭据" : "Remove credential"}</button>}
+          </div>
+          <label className="field">{zh ? "搜索模型" : "Search models"}<input value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <label className="field">
+            {zh ? "默认模型" : "Default model"}
+            {modelIds.length ? (
+              <select value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)}><option value="">—</option>{modelIds.map((id) => <option key={id}>{id}</option>)}</select>
+            ) : <input value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} />}
+          </label>
+          <div className="role-model-grid">
+            {ROLE_KEYS.map((role) => (
+              <label className="field" key={role}>{role}<select value={roles[role] ?? ""} onChange={(event) => setRoles((previous) => ({ ...previous, [role]: event.target.value }))}><option value="">{defaultModel || "default"}</option>{modelIds.map((id) => <option key={id}>{id}</option>)}</select></label>
+            ))}
+          </div>
+          <div className="provider-actions"><button className="btn btn-primary" onClick={() => action.mutate("save")}>{zh ? "保存路由" : "Save routes"}</button><button className="btn btn-danger" onClick={() => setConfirmDelete(true)}>{zh ? "删除 Provider" : "Delete provider"}</button></div>
+          {confirmDelete && <div className="forget-confirm" role="alert"><p>{zh ? "将删除 Provider 配置、模型缓存和测试凭据。" : "Provider configuration, model cache, and test credential will be removed."}</p><button className="btn btn-danger" onClick={() => action.mutate("delete")}>{zh ? "确定删除" : "Confirm delete"}</button><button className="btn" onClick={() => setConfirmDelete(false)}>{zh ? "取消" : "Cancel"}</button></div>}
+        </div>
+      )}
+      {msg && <p className="msg" role="status">{msg}</p>}
+    </article>
   );
 }
 
