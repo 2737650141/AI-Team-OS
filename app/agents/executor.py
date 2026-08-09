@@ -160,6 +160,72 @@ class DeterministicFakeExecutor:
     ) -> ExecutionResult:
         """执行 Executor 子任务：提案 → 校验 → Diff Artifact → 审批 interrupt → 应用/拒绝。"""
         sb = self._sandbox
+        # Reviewer rework can replay this node after an approved patch and its
+        # tests already succeeded. Reuse that immutable result instead of
+        # applying the same diff to a changed target. Failed or unapproved
+        # attempts are never replayed.
+        records = [
+            record
+            for record in sb.artifacts.load_all(sb.task_id)
+            if record.subtask_id == subtask.subtask_id
+        ]
+        for test_artifact in reversed(records):
+            if test_artifact.artifact_type != "test_report" or not test_artifact.approval_id:
+                continue
+            approval = sb.approval.get(test_artifact.approval_id)
+            if approval is None or approval.status != "approved" or not approval.diff_ref:
+                continue
+            try:
+                prior_test_report = json.loads(sb.artifacts.read_content(test_artifact))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if prior_test_report.get("return_code") != 0:
+                continue
+            diff_artifact = sb.artifacts.get(approval.diff_ref, sb.task_id)
+            if diff_artifact is None or diff_artifact.artifact_type != "diff":
+                continue
+            proposal_data = diff_artifact.metadata.get("proposal")
+            expected_effect = approval.summary
+            validated_diff = sb.artifacts.read_content(diff_artifact)
+            if isinstance(proposal_data, dict):
+                expected_effect = str(proposal_data.get("expected_effect") or expected_effect)
+            patch_artifact = next(
+                (
+                    record
+                    for record in reversed(records)
+                    if record.artifact_type == "patch"
+                    and record.approval_id == approval.approval_id
+                ),
+                None,
+            )
+            return ExecutionResult(
+                subtask_id=subtask.subtask_id,
+                summary=(
+                    f"replayed successful approved implementation ({approval.approval_id}); "
+                    "no patch or command was executed again"
+                ),
+                claims=[
+                    Claim(
+                        claim_id=f"{subtask.subtask_id}-c1",
+                        text=expected_effect,
+                        evidence_ids=[diff_artifact.artifact_id, test_artifact.artifact_id],
+                        confidence=1.0,
+                    )
+                ],
+                ts=_now(),
+                metadata={
+                    "approval_id": approval.approval_id,
+                    "diff_artifact_id": diff_artifact.artifact_id,
+                    "patch_artifact_id": (
+                        patch_artifact.artifact_id if patch_artifact is not None else None
+                    ),
+                    "test_artifact_id": test_artifact.artifact_id,
+                    "test_report": prior_test_report,
+                    "validated_diff": validated_diff,
+                    "status": "implemented_replay",
+                    "replayed": True,
+                },
+            )
         try:
             proposal = self._propose(subtask, scenario)
         except ExecutorError as exc:
@@ -418,6 +484,7 @@ class DeterministicFakeExecutor:
                     claim_id=f"{subtask.subtask_id}-c1",
                     text=proposal.expected_effect,
                     evidence_ids=[diff_artifact.artifact_id],
+                    confidence=1.0,
                 )
             ],
             ts=_now(),
@@ -427,6 +494,8 @@ class DeterministicFakeExecutor:
                 "diff_artifact_id": diff_artifact.artifact_id,
                 "patch_artifact_id": patch_artifact.artifact_id,
                 "test_report": test_report,
+                "validated_diff": proposal.unified_diff,
+                "tests_to_run": proposal.tests_to_run,
                 "status": "implemented",
             },
         )

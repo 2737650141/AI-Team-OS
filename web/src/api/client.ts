@@ -10,7 +10,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = `${resp.status}`;
     try {
       const body = await resp.json();
-      detail = body.detail || detail;
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail || detail);
     } catch {
       /* 忽略解析失败 */
     }
@@ -145,6 +145,27 @@ export const api = {
     request<{ reset: number }>(`/personalization/reset${queryString({ project_id: projectId, field })}`, { method: "DELETE" }),
   decidePersonalization: (proposalId: string, decision: string, projectId?: string) =>
     request<Record<string, unknown>>(`/personalization/proposals/${proposalId}/decision`, { method: "POST", body: JSON.stringify({ decision, project_id: projectId ?? null }) }),
+  computer: () => request<import("./types").ComputerStatus>("/computer"),
+  startComputer: (capability: "observe_only" | "low_risk_control" | "ask_every_action") =>
+    request<import("./types").ComputerStatus>("/computer/session/start", {
+      method: "POST",
+      body: JSON.stringify({ capability, ttl_minutes: 15 }),
+    }),
+  pauseComputer: () => request<import("./types").ComputerStatus>("/computer/session/pause", { method: "POST" }),
+  resumeComputer: () => request<import("./types").ComputerStatus>("/computer/session/resume", { method: "POST" }),
+  stopComputer: () => request<import("./types").ComputerStatus>("/computer/session/stop", { method: "POST" }),
+  computerScreen: () => request<import("./types").ComputerScreen>("/computer/screen"),
+  computerWindowScreen: (windowId: string) =>
+    request<import("./types").ComputerScreen>(
+      `/computer/windows/${encodeURIComponent(windowId)}/screen`,
+    ),
+  planComputerTask: (goal: string) => request<import("./types").ComputerTask>("/computer/tasks/plan", {
+    method: "POST",
+    body: JSON.stringify({ goal }),
+  }),
+  runComputerTask: (taskId: string) => request<import("./types").ComputerTask>(`/computer/tasks/${taskId}/run`, { method: "POST" }),
+  approveComputerAction: (approvalId: string) => request<import("./types").ComputerTask>(`/computer/approvals/${approvalId}/approve`, { method: "POST" }),
+  rejectComputerAction: (approvalId: string) => request<import("./types").ComputerTask>(`/computer/approvals/${approvalId}/reject`, { method: "POST" }),
   createTask: (body: {
     goal: string;
     model_mode: string;

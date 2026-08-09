@@ -6,6 +6,7 @@ import {
   Gauge,
   KeyRound,
   ListTodo,
+  MonitorCog,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -22,6 +23,7 @@ export function AppLayout() {
   const NAV = [
     { to: "/", label: t("nav.dashboard"), icon: Gauge },
     { to: "/tasks", label: t("nav.tasks"), icon: ListTodo },
+    { to: "/computer", label: t("nav.computer"), icon: MonitorCog },
     { to: "/agents", label: t("nav.agents"), icon: Bot },
     { to: "/approvals", label: t("nav.approvals"), icon: ShieldCheck },
     { to: "/evidence", label: t("nav.evidence"), icon: FileText },

@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "pypdf>=4.0,<6.0",  # PDF 只读文本提取（007 3.1：许可证 BSD-3-Clause，纯 Python，不执行 PDF 脚本）
+    "pywinauto==0.6.9; sys_platform == 'win32'",  # M5-A：Windows UI Automation / Accessibility
 ]
 
 [project.optional-dependencies]

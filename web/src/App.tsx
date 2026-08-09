@@ -6,6 +6,7 @@ import { I18nProvider, useI18n } from "./i18n";
 import { AppLayout } from "./layouts/AppLayout";
 import { Agents } from "./pages/Agents";
 import { Dashboard } from "./pages/Dashboard";
+import { Computer } from "./pages/Computer";
 import { Evidence } from "./pages/Evidence";
 import { Logs } from "./pages/Logs";
 import { Memory } from "./pages/Memory";
@@ -38,6 +39,7 @@ export function App() {
             <Route element={<AppLayout />}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/tasks" element={<Tasks />} />
+              <Route path="/computer" element={<Computer />} />
               <Route path="/tasks/:runId" element={<TaskDetail />} />
               <Route path="/approvals" element={<ApprovalsRedirect />} />
               <Route path="/agents" element={<Agents />} />

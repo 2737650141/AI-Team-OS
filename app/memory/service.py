@@ -183,6 +183,21 @@ class MemoryService:
                     tags=["output", "concise"],
                 )
             )
+        if re.search(
+            r"(控制|操作).{0,8}(电脑|windows).{0,12}(前|之前).{0,12}(计划|plan)",
+            lowered,
+            re.I,
+        ) or re.search(r"(before).{0,12}(computer|windows).{0,12}(plan)", lowered, re.I):
+            candidates.append(
+                dict(
+                    memory_type="procedural_preference",
+                    subject="windows_control_workflow",
+                    predicate="require_before_action",
+                    value="控制电脑前先显示操作计划",
+                    reason="用户明确要求 Windows 控制前先查看操作计划",
+                    tags=["windows", "plan", "control"],
+                )
+            )
         proposals: list[MemoryProposal] = []
         for candidate in candidates:
             expires_at = None

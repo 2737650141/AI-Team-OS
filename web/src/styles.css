@@ -404,6 +404,46 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .custom-provider-card p { margin: 3px 0; overflow-wrap: anywhere; }
 .provider-manage { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); display: grid; gap: 9px; }
 
+/* M5-A · JARVIS Windows Action Layer */
+.computer-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.computer-header > div:first-child { flex: 1; min-width: 280px; }
+.jarvis-state { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid #274774; border-radius: 999px; background: rgba(15, 35, 60, .7); color: #9cc8ff; font-size: 11px; letter-spacing: .06em; }
+.jarvis-state > span { width: 7px; height: 7px; border-radius: 50%; background: #60a5fa; box-shadow: 0 0 9px #60a5fa; animation: presence-pulse 1.6s ease-in-out infinite; }
+.jarvis-state.idle > span, .jarvis-state.stopped > span { animation: none; background: var(--muted); box-shadow: none; }
+.stop-control { text-transform: uppercase; font-weight: 800; letter-spacing: .04em; }
+.computer-privacy-strip { display: flex; flex-wrap: wrap; gap: 18px; padding: 9px 13px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg2); color: var(--muted); font-size: 11px; }
+.computer-privacy-strip span { display: inline-flex; align-items: center; gap: 6px; }
+.computer-privacy-strip .ok { color: var(--green); }
+.computer-start-card { min-height: 330px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 9px; border-color: #274774; background: radial-gradient(circle at 50% 25%, rgba(30, 74, 130, .23), transparent 55%), var(--panel); }
+.computer-start-card label { display: grid; gap: 6px; width: min(380px, 100%); text-align: left; }
+.computer-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(300px, .7fr); gap: 12px; }
+.live-screen-panel { min-width: 0; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.section-head h2 { margin: 0; }
+.live-screen { min-height: 420px; margin-top: 10px; display: grid; place-items: center; overflow: hidden; border: 1px solid #27354d; border-radius: 9px; background: #05070b; }
+.live-screen img { display: block; max-width: 100%; max-height: 620px; object-fit: contain; }
+.live-screen > div { text-align: center; color: var(--muted); }
+.privacy-note, .memory-applied { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.computer-side { display: grid; gap: 12px; align-content: start; }
+.session-card dl { display: grid; grid-template-columns: 95px 1fr; gap: 7px; font-size: 12px; }
+.session-card dt { color: var(--muted); }.session-card dd { margin: 0; overflow-wrap: anywhere; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }.status-dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }.status-dot.paused { background: var(--yellow); }
+.button-row { display: flex; gap: 7px; flex-wrap: wrap; }
+.active-app-card { display: grid; gap: 7px; }.active-app-card strong { overflow-wrap: anywhere; }.active-app-card small { color: var(--muted); }
+.action-task-panel, .action-plan-panel, .approval-panel, .action-history-panel, .safety-panel { grid-column: 1 / -1; }
+.action-task-panel textarea { min-height: 86px; margin: 8px 0; resize: vertical; }
+.task-status { padding: 3px 8px; border-radius: 999px; background: var(--bg2); color: var(--muted); font-size: 11px; }.task-status.completed { color: var(--green); }.task-status.waiting_approval { color: var(--yellow); }.task-status.failed, .task-status.rejected { color: var(--red); }
+.action-plan-list { display: grid; gap: 7px; list-style: none; padding: 0; }
+.action-plan-list li { display: grid; grid-template-columns: 28px 1fr; gap: 9px; align-items: start; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(11, 15, 23, .5); }
+.action-plan-list li.completed { border-color: rgba(34, 197, 94, .35); }.action-plan-list li.failed, .action-plan-list li.rejected { border-color: rgba(239, 68, 68, .45); }
+.step-number { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #1e3a5f; color: var(--blue); font-size: 11px; }
+.action-plan-list p { margin: 2px 0; }.action-plan-list small { color: var(--muted); }
+.task-result { padding: 10px; border-left: 3px solid var(--accent); background: var(--bg2); }
+.approval-panel article { display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: start; padding: 12px; border: 1px solid #745916; border-radius: 8px; background: rgba(117, 80, 12, .11); }
+.approval-panel pre { white-space: pre-wrap; color: var(--muted); font-size: 11px; }
+.action-feed { display: grid; max-height: 360px; overflow: auto; }.action-feed article { display: grid; grid-template-columns: 82px 20px 1fr; gap: 8px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--border); }.action-feed time, .action-feed small { color: var(--muted); font-size: 11px; }.action-feed div { display: grid; gap: 2px; }.action-icon.completed { color: var(--green); }.action-icon.failed { color: var(--red); }
+.safety-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 7px; }.safety-grid span { display: grid; grid-template-columns: 18px 1fr; padding: 9px; border-radius: 8px; background: var(--bg2); }.safety-grid span svg { grid-row: 1 / 3; color: var(--blue); }.safety-grid small { color: var(--muted); }.safety-grid strong { font-size: 11px; }
+
 @keyframes reveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes presence-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
 
@@ -432,6 +472,9 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
   .memory-toolbar { align-items: stretch; flex-direction: column; }
   .memory-search { min-width: 0; }
   .proposal-card, .memory-controls { grid-template-columns: 1fr; }
+  .computer-grid { grid-template-columns: 1fr; }
+  .approval-panel article { grid-template-columns: 24px 1fr; }
+  .approval-panel article .button-row { grid-column: 2; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

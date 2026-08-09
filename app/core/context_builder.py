@@ -65,6 +65,16 @@ class ContextBuilder:
                 "input_refs": subtask.input_refs,
                 "acceptance_criteria": subtask.acceptance_criteria,
                 "rework_count": subtask.rework_count,
+                "review_feedback": [
+                    {
+                        "issues": [
+                            issue.model_dump() if hasattr(issue, "model_dump") else issue
+                            for issue in review.issues
+                        ],
+                        "rework_targets": list(review.rework_targets),
+                    }
+                    for review in subtask.review_history[-2:]
+                ],
             },
             "evidence": [
                 {"id": e["id"], "tool": e["tool"], "summary": e.get("summary", "")[:300]}
@@ -78,16 +88,22 @@ class ContextBuilder:
         evidence = []
         for item in state.evidence:
             if isinstance(item, dict):
-                evidence.append(
-                    {"id": item.get("id", ""), "summary": item.get("summary", "")[:300]}
-                )
+                entry = {"id": item.get("id", ""), "summary": item.get("summary", "")[:500]}
+                for key in ("source_uri", "content_hash", "truncated"):
+                    value = item.get(key)
+                    if value not in (None, "", False):
+                        entry[key] = value
+                evidence.append(entry)
             else:
-                evidence.append(
-                    {
-                        "id": getattr(item, "id", ""),
-                        "summary": getattr(item, "summary", "")[:300],
-                    }
-                )
+                entry = {
+                    "id": getattr(item, "id", ""),
+                    "summary": getattr(item, "summary", "")[:500],
+                }
+                for key in ("source_uri", "content_hash", "truncated"):
+                    value = getattr(item, key, None)
+                    if value not in (None, "", False):
+                        entry[key] = value
+                evidence.append(entry)
         return {
             "requirement": subtask.objective,
             "acceptance": subtask.acceptance_criteria,

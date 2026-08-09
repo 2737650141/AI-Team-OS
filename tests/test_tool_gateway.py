@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.gateway.audit import AuditLog
 from app.gateway.tool_gateway import ToolGateway
+from app.gateway.tool_policy import ToolExecutionContext
 from app.tools.fixture_repo import DangerousWriteTool
 
 
@@ -84,6 +85,26 @@ def test_idempotency_skips_duplicate(tool_gateway: ToolGateway) -> None:
     assert second.evidence_id == first.evidence_id  # Evidence 复用
     # 两次调用均有记录（原始 ok + 缓存命中 cached_success_result），审计轨迹完整
     assert len(tool_gateway.evidence) == 1
+
+
+def test_cached_success_does_not_consume_a_second_quota_unit(tool_gateway: ToolGateway) -> None:
+    ctx = ToolExecutionContext(
+        task_id="t1",
+        subtask_id="s1",
+        role="researcher",
+        tool_call_budget=1,
+        replay=True,
+    )
+    first = tool_gateway.invoke(
+        "fixture_repo_lookup", {"repo_name": "langgraph"}, ctx=ctx
+    )
+    replay = tool_gateway.invoke(
+        "fixture_repo_lookup", {"repo_name": "langgraph"}, ctx=ctx
+    )
+
+    assert first.ok is True
+    assert replay.ok is True
+    assert replay.status == "cached_success_result"
 
 
 def test_read_only_replays_when_restart_cache_is_unavailable(tmp_path: Path) -> None:

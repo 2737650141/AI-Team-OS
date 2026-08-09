@@ -44,6 +44,7 @@ app = FastAPI(title="AI Team OS", version="0.3.0")
 
 # 本地单用户开发模式：不实现用户认证，文档注明不可暴露公网（005 十七/二十）
 _settings_cache: AppSettings | None = None
+_computer_cache = None
 
 
 def _data_dir() -> Path:
@@ -55,6 +56,30 @@ def _settings() -> AppSettings:
     if _settings_cache is None:
         _settings_cache = load_settings()
     return _settings_cache
+
+
+def _computer_service():
+    global _computer_cache
+    if _computer_cache is None:
+        from app.windows_control.service import WindowsComputerService
+
+        _computer_cache = WindowsComputerService(_data_dir(), Path.cwd())
+    return _computer_cache
+
+
+def _computer_error(exc: Exception) -> HTTPException:
+    code = str(getattr(exc, "code", "computer_error"))
+    status = 409 if code in {
+        "inactive_session",
+        "expired_session",
+        "paused_session",
+        "action_after_stop",
+        "approval_required",
+        "invalid_task_state",
+    } else 400
+    if code in {"task_not_found", "approval_not_found"}:
+        status = 404
+    return HTTPException(status_code=status, detail={"code": code, "message": str(exc)})
 
 
 class TaskCreate(BaseModel):
@@ -974,6 +999,137 @@ def task_events(run_id: str, after: int = 0) -> Any:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ============ M5-A Computer Control（默认 OFF，所有动作经 WindowsActionGateway） ============
+
+
+class ComputerStartBody(BaseModel):
+    capability: Literal["observe_only", "low_risk_control", "ask_every_action"] = (
+        "observe_only"
+    )
+    ttl_minutes: int = Field(default=15, ge=1, le=60)
+
+
+class ComputerTaskBody(BaseModel):
+    goal: str = Field(min_length=1, max_length=4000)
+
+
+@app.get("/computer")
+def computer_status() -> dict[str, Any]:
+    return _computer_service().snapshot().model_dump(mode="json")
+
+
+@app.post("/computer/session/start")
+def computer_start(body: ComputerStartBody) -> dict[str, Any]:
+    from app.windows_control.models import SessionCapability
+
+    try:
+        _computer_service().start_session(
+            SessionCapability(body.capability), ttl_minutes=body.ttl_minutes
+        )
+        return _computer_service().snapshot().model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/session/pause")
+def computer_pause() -> dict[str, Any]:
+    try:
+        _computer_service().pause()
+        return _computer_service().snapshot(refresh_windows=False).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/session/resume")
+def computer_resume() -> dict[str, Any]:
+    try:
+        _computer_service().resume()
+        return _computer_service().snapshot().model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/session/stop")
+def computer_stop() -> dict[str, Any]:
+    try:
+        _computer_service().stop()
+        return _computer_service().snapshot(refresh_windows=False).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.get("/computer/screen")
+def computer_screen() -> dict[str, Any]:
+    try:
+        return _computer_service().capture_screen().model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.get("/computer/windows/{window_id}/screen")
+def computer_window_screen(window_id: str) -> dict[str, Any]:
+    try:
+        return _computer_service().capture_window(window_id).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.get("/computer/windows/{window_id}/accessibility")
+def computer_window_accessibility(window_id: str) -> dict[str, Any]:
+    try:
+        elements = _computer_service().accessibility_tree(window_id)
+        return {"elements": [item.model_dump(mode="json") for item in elements]}
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/tasks/plan")
+def computer_plan(body: ComputerTaskBody) -> dict[str, Any]:
+    try:
+        return _computer_service().plan_task(body.goal).model_dump(mode="json")
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code.value, "message": "Real model could not create a safe plan"},
+        ) from exc
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/tasks/{task_id}/run")
+def computer_run(task_id: str) -> dict[str, Any]:
+    try:
+        return _computer_service().run_planned_task(task_id).model_dump(mode="json")
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code.value, "message": "Real Reviewer could not complete"},
+        ) from exc
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/approvals/{approval_id}/approve")
+def computer_approve(approval_id: str) -> dict[str, Any]:
+    try:
+        return _computer_service().approve(approval_id).model_dump(mode="json")
+    except ProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": exc.code.value, "message": "Real Reviewer could not complete"},
+        ) from exc
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/approvals/{approval_id}/reject")
+def computer_reject(approval_id: str) -> dict[str, Any]:
+    try:
+        return _computer_service().reject(approval_id).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
 
 
 # ============ Connections / Secret 管理（010 三十~三十六 / 009-A） ============

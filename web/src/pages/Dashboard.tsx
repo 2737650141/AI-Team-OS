@@ -150,7 +150,7 @@ export function Dashboard() {
                 {lang === "zh" ? "标准权限" : "Standard"}
               </button>
               <button type="button" className={permissionMode === "full_access" ? "on danger" : ""} onClick={() => setPermissionMode("full_access")}>
-                {lang === "zh" ? "最高权限（免审批）" : "Full access (no approvals)"}
+                {lang === "zh" ? "扩展任务权限" : "Expanded task capability"}
               </button>
             </div>
             {permissionMode === "full_access" && (

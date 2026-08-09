@@ -317,3 +317,95 @@ export interface DiffFile {
   path: string;
   status: "M" | "A" | "D" | string;
 }
+
+export interface ComputerWindow {
+  window_id: string;
+  title: string;
+  process_id?: number | null;
+  app_name: string;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  is_active: boolean;
+  window_hash: string;
+}
+
+export interface ComputerActionStep {
+  step_id: string;
+  tool: string;
+  arguments: Record<string, unknown>;
+  rationale: string;
+  expected_state: string;
+  risk: "observe" | "low" | "medium" | "high" | "forbidden";
+  status: string;
+}
+
+export interface ComputerTask {
+  task_id: string;
+  goal: string;
+  status: string;
+  created_at: string;
+  completed_at?: string | null;
+  model_mode: "real";
+  provider: string;
+  model: string;
+  real_call: boolean;
+  planner_recovered: boolean;
+  replan_count: number;
+  action_plan: ComputerActionStep[];
+  current_step: number;
+  result: string;
+  error_code?: string | null;
+  memory_preference_applied: boolean;
+  reviewer_verdict?: string | null;
+  token_usage: Record<string, number | null>;
+}
+
+export interface ComputerStatus {
+  session?: {
+    session_id: string;
+    started_at: string;
+    expires_at: string;
+    status: string;
+    capability: string;
+    action_count: number;
+    last_action_at?: string | null;
+  } | null;
+  screen_access: boolean;
+  control: "on" | "paused" | "off";
+  jarvis_status: string;
+  active_window?: ComputerWindow | null;
+  windows: ComputerWindow[];
+  current_task?: ComputerTask | null;
+  pending_actions: Array<{
+    approval_id: string;
+    task_id: string;
+    step_id: string;
+    tool: string;
+    risk: string;
+    summary: string;
+    arguments_display: Record<string, unknown>;
+    status: string;
+  }>;
+  recent_actions: Array<{
+    action_id: string;
+    task_id?: string | null;
+    step_id?: string | null;
+    timestamp: string;
+    tool: string;
+    risk: string;
+    status: string;
+    summary: string;
+    verification?: string | null;
+    error_code?: string | null;
+    retry_count: number;
+  }>;
+  safety_status: Record<string, unknown>;
+}
+
+export interface ComputerScreen {
+  captured_at: string;
+  screenshot_hash: string;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  image_base64: string;
+  mime_type: string;
+  ephemeral: boolean;
+}

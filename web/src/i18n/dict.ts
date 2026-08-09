@@ -5,6 +5,7 @@ const zh = {
   // 布局/导航
   "nav.dashboard": "仪表盘",
   "nav.tasks": "任务",
+  "nav.computer": "电脑控制",
   "nav.agents": "智能体",
   "nav.approvals": "审批",
   "nav.evidence": "证据",
@@ -329,6 +330,7 @@ const zh = {
 const en: Record<string, string> = {
   "nav.dashboard": "Dashboard",
   "nav.tasks": "Tasks",
+  "nav.computer": "Computer",
   "nav.agents": "Agents",
   "nav.approvals": "Approvals",
   "nav.evidence": "Evidence",

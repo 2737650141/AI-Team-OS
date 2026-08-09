@@ -219,17 +219,23 @@ class ToolGateway:
                         return ToolResult(
                             ok=False, error="path rejected by policy", status="blocked"
                         )
-        try:
-            self._quota.check_and_reserve(ctx)
-            self._quota.check_evidence(self.evidence_writer)
-        except ValueError as exc:
-            self._audit.entry(
-                "tool_quota_exceeded",
-                task_id=self._task_id,
-                tool=tool_name,
-                error=redact(str(exc))[:200],
-            )
-            return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
+        # Normal same-run calls still consume quota even when their handler is
+        # skipped by idempotency. Only a scheduler-attested replay may reuse a
+        # cached success without consuming another quota unit.
+        quota_reserved = False
+        if ctx is not None and not ctx.replay:
+            try:
+                self._quota.check_and_reserve(ctx)
+                self._quota.check_evidence(self.evidence_writer)
+                quota_reserved = True
+            except ValueError as exc:
+                self._audit.entry(
+                    "tool_quota_exceeded",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    error=redact(str(exc))[:200],
+                )
+                return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
 
         # R19：幂等键查重，恢复/重放时不重复执行（JSON 规范化，兼容非字符串参数）
         key = hashlib.sha256(
@@ -290,6 +296,19 @@ class ToolGateway:
             self._audit.entry(
                 "tool_read_replayed", task_id=self._task_id, tool=tool_name, key=key
             )
+
+        if not quota_reserved:
+            try:
+                self._quota.check_and_reserve(ctx)
+                self._quota.check_evidence(self.evidence_writer)
+            except ValueError as exc:
+                self._audit.entry(
+                    "tool_quota_exceeded",
+                    task_id=self._task_id,
+                    tool=tool_name,
+                    error=redact(str(exc))[:200],
+                )
+                return ToolResult(ok=False, error=f"quota exceeded: {exc}", status="blocked")
 
         record = _new_record(
             self._task_id, tool_name, args, key, role, ctx.subtask_id if ctx else None

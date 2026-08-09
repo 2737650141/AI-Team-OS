@@ -29,6 +29,7 @@ class ToolExecutionContext:
     max_evidence: int = 50  # 每子任务最大 Evidence 数（十二）
     max_read_bytes: int = 2 * 1024 * 1024  # 每子任务最大读取字节（十二）
     approval_id: str | None = None  # M3-C：写工具放行需已批准审批（007 5.4）
+    replay: bool = False  # 调度器证明为 checkpoint/rework 重放时，缓存命中不重复占配额
 
 
 @dataclass
