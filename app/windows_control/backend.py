@@ -242,15 +242,20 @@ class WindowsAutomationBackend:
     def find_element(
         self, window_id: str, *, control_types: tuple[str, ...], name: str = ""
     ) -> AccessibilityElement:
-        candidates = self.accessibility_tree(window_id)
         normalized_types = {item.lower() for item in control_types}
-        for item in candidates:
-            if item.control_type.lower() not in normalized_types:
-                continue
-            if name and name.lower() not in item.name.lower():
-                continue
-            if item.enabled:
-                return item
+        deadline = time.monotonic() + 1.5
+        while True:
+            candidates = self.accessibility_tree(window_id)
+            for item in candidates:
+                if item.control_type.lower() not in normalized_types:
+                    continue
+                if name and name.lower() not in item.name.lower():
+                    continue
+                if item.enabled:
+                    return item
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
         raise AutomationError("element_not_found", "Accessible target element not found")
 
     def click_element(self, window_id: str, element_id: str) -> AccessibilityElement:
@@ -258,7 +263,12 @@ class WindowsAutomationBackend:
         if element.password:
             raise AutomationError("credential_field_forbidden", "Credential fields are forbidden")
         try:
-            if hasattr(wrapper, "invoke"):
+            # Native Win32 list items can expose an Invoke wrapper even though the
+            # underlying UIA Invoke pattern rejects the call. SelectionItem is the
+            # semantic, coordinate-free action for these controls.
+            if element.control_type.lower() == "listitem" and hasattr(wrapper, "select"):
+                wrapper.select()
+            elif hasattr(wrapper, "invoke"):
                 wrapper.invoke()
             else:
                 wrapper.click_input()

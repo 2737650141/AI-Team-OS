@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.windows_control.backend import AutomationError
+from app.windows_control.backend import AutomationError, WindowsAutomationBackend
 from app.windows_control.gateway import ActionError, ApprovalRequired, WindowsActionGateway
 from app.windows_control.models import (
     AccessibilityElement,
@@ -123,6 +124,25 @@ def gateway(tmp_path: Path):
 
 def observe_step(tool: str = "windows_get_active_window") -> ActionStep:
     return ActionStep(step_id="s1", tool=tool, risk=ActionRisk.OBSERVE)
+
+
+def test_backend_selects_list_item_without_calling_broken_invoke(monkeypatch) -> None:
+    backend = WindowsAutomationBackend()
+    element = AccessibilityElement(
+        element_id="uia:list-two",
+        window_id="hwnd:a",
+        name="Two",
+        control_type="ListItem",
+    )
+    calls: list[str] = []
+    wrapper = SimpleNamespace(
+        select=lambda: calls.append("select"),
+        invoke=lambda: calls.append("invoke"),
+    )
+    monkeypatch.setattr(backend, "_resolve_element", lambda *_args: (wrapper, element))
+
+    assert backend.click_element("hwnd:a", element.element_id) == element
+    assert calls == ["select"]
 
 
 def test_computer_control_defaults_off_and_inactive_session_blocks(gateway) -> None:
