@@ -16,6 +16,7 @@ import { Settings } from "./pages/Settings";
 import { TaskDetail } from "./pages/TaskDetail";
 import { Tasks } from "./pages/Tasks";
 import { Tools } from "./pages/Tools";
+import { Voice } from "./pages/Voice";
 
 const qc = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 2000 } },
@@ -40,6 +41,7 @@ export function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/computer" element={<Computer />} />
+              <Route path="/voice" element={<Voice />} />
               <Route path="/tasks/:runId" element={<TaskDetail />} />
               <Route path="/approvals" element={<ApprovalsRedirect />} />
               <Route path="/agents" element={<Agents />} />

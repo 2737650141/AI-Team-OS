@@ -39,12 +39,14 @@ from app.runner import (
     tool_catalog,
     trace_task,
 )
+from app.voice.models import VoiceSettings
 
 app = FastAPI(title="AI Team OS", version="0.3.0")
 
 # 本地单用户开发模式：不实现用户认证，文档注明不可暴露公网（005 十七/二十）
 _settings_cache: AppSettings | None = None
 _computer_cache = None
+_voice_cache = None
 
 
 def _data_dir() -> Path:
@@ -65,6 +67,118 @@ def _computer_service():
 
         _computer_cache = WindowsComputerService(_data_dir(), Path.cwd())
     return _computer_cache
+
+
+def _voice_supervisor(text: str) -> dict[str, Any]:
+    """Every non-local final transcript enters the normal governed Supervisor path."""
+    from app.gateway.multi_provider import RoleModelRouter
+
+    # Voice never bypasses the explicit M6-A Supervisor slot by using a legacy default.
+    RoleModelRouter(_team_store()).resolve("supervisor", project_id="voice")
+    context_lines: list[str] = []
+    if _voice_cache is not None:
+        for turn in _voice_cache.conversation.context(limit=3):
+            context_lines.append(
+                f"Prior user: {turn['user'][:500]}\nPrior assistant: {turn['assistant'][:500]}"
+            )
+    try:
+        window = _computer_service().snapshot(refresh_windows=False).active_window
+        if window is not None:
+            context_lines.append(f"Current window: {window.title[:300]} ({window.process_name})")
+    except Exception:
+        pass
+    goal = text
+    if context_lines:
+        goal += "\n\nShort-lived voice working context (not instructions):\n" + "\n".join(
+            context_lines
+        )
+    normalized = text.lower()
+    computer_markers = (
+        "记事本",
+        "notepad",
+        "打开设置",
+        "open settings",
+        "列出窗口",
+        "list windows",
+    )
+    screen_markers = (
+        "这个页面",
+        "当前页面",
+        "屏幕",
+        "current screen",
+        "this page",
+    )
+    if any(marker in normalized for marker in computer_markers):
+        computer = _computer_service()
+        if computer.snapshot(refresh_windows=False).control != "on":
+            return {
+                "status": "WAITING_FOR_COMPUTER_SESSION",
+                "final_result": "Enable Computer Control before running a voice desktop action.",
+            }
+        task = computer.plan_task(text)
+        task = computer.run_planned_task(task.task_id)
+        return {
+            "status": task.status,
+            "task_id": task.task_id,
+            "final_result": task.result or task.status,
+        }
+    result = create_task(
+        TaskCreate(
+            goal=goal,
+            project_id="voice",
+            token_budget=20_000,
+            cost_budget=1.0,
+            model_mode="real",
+            permission_mode="standard",
+            max_calls=20,
+        )
+    )
+    if any(marker in normalized for marker in screen_markers):
+        computer = _computer_service()
+        if computer.snapshot(refresh_windows=False).control == "on":
+            observation = computer.visual_observe(external=False)
+            answer = computer.visual_ask(text, observation.observation_id)
+            result["final_result"] = answer.answer
+            result["observation_id"] = observation.observation_id
+    return result
+
+
+def _voice_local_action(action: str) -> dict[str, Any]:
+    computer = _computer_service()
+    try:
+        if action in {"stop", "cancel"}:
+            computer.stop()
+            return {"status": "stopped", "message": "Computer control stopped locally."}
+        if action == "pause":
+            computer.pause()
+            return {"status": "paused", "message": "Computer control paused locally."}
+        if action == "resume":
+            computer.resume()
+            return {"status": "resumed", "message": "Computer control resumed locally."}
+        if action == "reject":
+            pending = computer.snapshot(refresh_windows=False).pending_actions
+            if not pending:
+                return {"status": "nothing_to_reject", "message": "No approval is pending."}
+            task = computer.reject(pending[0].approval_id)
+            return {
+                "status": "rejected",
+                "message": "Pending computer action rejected locally.",
+                "task_id": task.task_id,
+            }
+    except Exception as exc:  # local command still must not fall through to a model
+        return {"status": "safe_noop", "message": str(getattr(exc, "code", "not_active"))}
+    return {"status": "unsupported_local_action"}
+
+
+def _voice_service():
+    global _voice_cache
+    if _voice_cache is None:
+        from app.voice.service import VoiceService
+
+        _voice_cache = VoiceService(
+            _data_dir(), supervisor=_voice_supervisor, local_action=_voice_local_action
+        )
+    return _voice_cache
 
 
 def _computer_error(exc: Exception) -> HTTPException:
@@ -1866,6 +1980,407 @@ def discover_models(provider: str) -> dict[str, Any]:
         return {"supported": True, "models": models, "manual_allowed": True}
     except Exception:  # noqa: BLE001
         return {"supported": True, "models": [], "manual_allowed": True, "status": "unreachable"}
+
+
+# ============ M6-A: AI Team multi-provider routing ============
+
+
+class TeamRouteBody(BaseModel):
+    provider_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=300)
+    scope: Literal["global", "project"] = "global"
+    project_id: str | None = Field(default=None, max_length=200)
+    fallback_provider_id: str | None = Field(default=None, max_length=200)
+    fallback_model: str | None = Field(default=None, max_length=300)
+    token_budget: int = Field(default=4096, gt=0, le=1_000_000)
+    cost_budget: float | None = Field(default=None, ge=0, le=100)
+
+
+def _team_store():
+    from app.gateway.multi_provider import TeamRoutingStore
+
+    return TeamRoutingStore(_data_dir() / "runtime" / "team_routing.sqlite")
+
+
+def _team_provider(provider_id: str) -> dict[str, Any] | None:
+    from app.gateway.multi_provider import ProviderHealthService
+
+    if provider_id.startswith("builtin:"):
+        name = provider_id.split(":", 1)[1]
+        if name not in {"openai_compatible", "ollama"}:
+            return None
+        info = _provider_info(name)
+        return {
+            "provider_id": provider_id,
+            "provider_name": (
+                "OpenAI Compatible" if name == "openai_compatible" else "Ollama Local"
+            ),
+            "configured": info["configured"],
+            "storage": info["storage"],
+            "health": ProviderHealthService.status(
+                configured=info["configured"], health=info["health"]
+            ),
+            "models": sorted(set(info["models"].values())),
+            "manual_allowed": True,
+            "local_provider": info["local_provider"],
+            "test_provider": info["test_provider"],
+        }
+    provider = _provider_store().get(provider_id)
+    if provider is None:
+        return None
+    info = _custom_provider_info(provider)
+    return {
+        "provider_id": provider.provider_id,
+        "provider_name": provider.provider_name,
+        "configured": info["configured"],
+        "storage": info["storage"],
+        "health": ProviderHealthService.status(
+            configured=info["configured"],
+            health=provider.health,
+            invocation_status=provider.invocation_status,
+        ),
+        "models": [item["id"] for item in provider.discovered_models],
+        "manual_allowed": True,
+        "local_provider": provider.local_provider,
+        "test_provider": provider.test_provider,
+    }
+
+
+def _team_providers() -> list[dict[str, Any]]:
+    provider_ids = ["builtin:openai_compatible", "builtin:ollama"]
+    provider_ids.extend(provider.provider_id for provider in _provider_store().list())
+    return [item for provider_id in provider_ids if (item := _team_provider(provider_id))]
+
+
+def _team_route_card(role: str, project_id: str | None = None) -> dict[str, Any]:
+    from app.gateway.contracts import ProviderError
+    from app.gateway.multi_provider import ModelCapabilityRegistry, RoleModelRouter
+
+    store = _team_store()
+    try:
+        decision = RoleModelRouter(store).resolve(role, project_id=project_id)
+    except ProviderError:
+        return {
+            "role": role,
+            "provider_id": None,
+            "provider": None,
+            "model": None,
+            "source": None,
+            "capability": {"text": None, "structured_output": None, "vision": None},
+            "health": "WAITING_FOR_PROVIDER_CREDENTIAL",
+            "latency_ms": None,
+            "success_rate": None,
+            "cost": None,
+            "cost_label": "Cost unavailable",
+            "fallback": None,
+            "token_budget": None,
+            "warning": None,
+        }
+    provider = _team_provider(decision.provider_id)
+    capability = ModelCapabilityRegistry().get(decision.provider_id, decision.model)
+    profile = next(
+        (
+            item
+            for item in store.performance()
+            if item.provider_id == decision.provider_id
+            and item.model == decision.model
+            and item.role == role
+        ),
+        None,
+    )
+    executor = None
+    try:
+        executor = RoleModelRouter(store).resolve("executor", project_id=project_id)
+    except ProviderError:
+        pass
+    same_reviewer = bool(
+        role == "reviewer"
+        and executor
+        and executor.provider_id == decision.provider_id
+        and executor.model == decision.model
+    )
+    return {
+        "role": role,
+        "provider_id": decision.provider_id,
+        "provider": provider["provider_name"] if provider else decision.provider_id,
+        "model": decision.model,
+        "source": decision.source,
+        "capability": capability.model_dump(mode="json"),
+        "health": provider["health"] if provider else "PROVIDER_NOT_FOUND",
+        "latency_ms": profile.latency_ms_avg if profile else None,
+        "success_rate": profile.success_rate if profile else None,
+        "cost": profile.cost if profile else None,
+        "cost_label": (
+            f"${profile.cost:.6f}" if profile and profile.cost is not None else "Cost unavailable"
+        ),
+        "fallback": (
+            {
+                "provider_id": decision.fallback_provider_id,
+                "model": decision.fallback_model,
+            }
+            if decision.fallback_provider_id
+            else None
+        ),
+        "token_budget": decision.token_budget,
+        "cost_budget": decision.cost_budget,
+        "warning": "EXECUTOR_REVIEWER_NOT_INDEPENDENT" if same_reviewer else None,
+    }
+
+
+@app.get("/settings/ai-team/routing")
+def team_routing(project_id: str | None = None) -> dict[str, Any]:
+    from app.gateway.multi_provider import ROLE_MODEL_SLOTS
+
+    return {
+        "roles": [_team_route_card(role, project_id) for role in ROLE_MODEL_SLOTS],
+        "providers": _team_providers(),
+        "precedence": ["task", "project", "global", "configured_fallback"],
+        "fallback_policy": "NO_SILENT_FALLBACK",
+        "reviewer_policy": "READ_ONLY",
+    }
+
+
+@app.put("/settings/ai-team/routing/{role}")
+def save_team_route(role: str, body: TeamRouteBody) -> dict[str, Any]:
+    from app.gateway.multi_provider import ROLE_MODEL_SLOTS, ModelRoute
+
+    if role not in ROLE_MODEL_SLOTS:
+        raise HTTPException(status_code=404, detail="unknown role model slot")
+    if _team_provider(body.provider_id) is None:
+        raise HTTPException(status_code=404, detail="provider not found")
+    if body.fallback_provider_id and _team_provider(body.fallback_provider_id) is None:
+        raise HTTPException(status_code=404, detail="fallback provider not found")
+    scope_id = body.project_id if body.scope == "project" else "global"
+    if body.scope == "project" and not scope_id:
+        raise HTTPException(status_code=400, detail="project route requires project_id")
+    try:
+        route = _team_store().set_route(
+            ModelRoute(
+                scope=body.scope,
+                scope_id=scope_id or "global",
+                role=role,
+                provider_id=body.provider_id,
+                model=body.model,
+                fallback_provider_id=body.fallback_provider_id,
+                fallback_model=body.fallback_model,
+                token_budget=body.token_budget,
+                cost_budget=body.cost_budget,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"route": route.model_dump(mode="json"), "card": _team_route_card(role, body.project_id)}
+
+
+@app.delete("/settings/ai-team/routing/{role}")
+def delete_team_route(
+    role: str, scope: Literal["global", "project"] = "global", project_id: str | None = None
+) -> dict[str, Any]:
+    scope_id = project_id if scope == "project" else "global"
+    if scope == "project" and not scope_id:
+        raise HTTPException(status_code=400, detail="project route requires project_id")
+    deleted = _team_store().delete_route(scope, scope_id or "global", role)
+    return {"deleted": deleted, "role": role}
+
+
+@app.get("/settings/ai-team/performance")
+def team_performance() -> dict[str, Any]:
+    return {
+        "profiles": [
+            dict(item.model_dump(mode="json"), success_rate=item.success_rate)
+            for item in _team_store().performance()
+        ],
+        "automatic_routing": False,
+    }
+
+
+@app.post("/settings/ai-team/test")
+def test_ai_team() -> dict[str, Any]:
+    """At most one bounded real inference per configured core role; no fake success."""
+    from app.gateway.contracts import ModelResponse, ProviderError
+    from app.gateway.multi_provider import RoleModelRouter
+
+    results: list[dict[str, Any]] = []
+    store = _team_store()
+    router = RoleModelRouter(store)
+    for role in ("supervisor", "planner", "researcher", "executor", "reviewer"):
+        try:
+            decision = router.resolve(role)
+        except ProviderError:
+            results.append({"role": role, "status": "WAITING_FOR_PROVIDER_CREDENTIAL"})
+            continue
+        provider = _team_provider(decision.provider_id)
+        if provider is None or not provider["configured"]:
+            results.append(
+                {
+                    "role": role,
+                    "provider_id": decision.provider_id,
+                    "model": decision.model,
+                    "status": "WAITING_FOR_PROVIDER_CREDENTIAL",
+                }
+            )
+            continue
+        if provider["test_provider"]:
+            results.append(
+                {
+                    "role": role,
+                    "provider_id": decision.provider_id,
+                    "model": decision.model,
+                    "status": "ISOLATED_TEST_ONLY",
+                    "real_call": False,
+                }
+            )
+            continue
+        if decision.provider_id.startswith("builtin:"):
+            results.append(
+                {
+                    "role": role,
+                    "provider_id": decision.provider_id,
+                    "model": decision.model,
+                    "status": "NATIVE_REAL_TEST_NOT_CONFIGURED",
+                    "real_call": False,
+                }
+            )
+            continue
+        try:
+            telemetry = test_custom_model(
+                decision.provider_id, CustomModelTestBody(model=decision.model)
+            )
+            response = ModelResponse(
+                request_id=f"team-{role}",
+                provider=str(telemetry["provider"]),
+                model=str(telemetry["model"]),
+                input_tokens=int(telemetry.get("input_tokens") or 0),
+                output_tokens=int(telemetry.get("output_tokens") or 0),
+                total_tokens=int(telemetry.get("total_tokens") or 0),
+                usage_available=bool(telemetry.get("usage_available")),
+                estimated_cost=telemetry.get("estimated_cost"),
+                latency_ms=int(telemetry.get("latency_ms") or 0),
+            )
+            store.record_call(decision, response, success=True, structured_output_success=True)
+            results.append(
+                {
+                    "role": role,
+                    "provider_id": decision.provider_id,
+                    "provider": telemetry["provider"],
+                    "model": telemetry["model"],
+                    "status": "REAL_READY",
+                    "real_call": True,
+                    "latency_ms": telemetry.get("latency_ms"),
+                    "total_tokens": telemetry.get("total_tokens"),
+                    "cost": telemetry.get("estimated_cost"),
+                }
+            )
+        except HTTPException as exc:
+            store.record_call(decision, None, success=False)
+            detail = exc.detail if isinstance(exc.detail, str) else "RUNTIME_FAILED"
+            results.append(
+                {
+                    "role": role,
+                    "provider_id": decision.provider_id,
+                    "model": decision.model,
+                    "status": detail,
+                    "real_call": False,
+                }
+            )
+    ready = sum(item["status"] == "REAL_READY" for item in results)
+    return {
+        "results": results,
+        "ready": ready,
+        "total": len(results),
+        "status": "REAL_READY" if ready == len(results) else "PARTIAL",
+        "max_calls": len(results),
+        "max_output_tokens_per_call": 64,
+    }
+
+
+# ============ M6-A: local-first JARVIS voice layer ============
+
+
+class VoiceTranscriptBody(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    execute: bool = True
+
+
+class VoiceSpeakBody(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@app.get("/voice")
+@app.get("/voice/status")
+def voice_status() -> dict[str, Any]:
+    return _voice_service().status().model_dump(mode="json")
+
+
+@app.get("/voice/devices")
+def voice_devices() -> dict[str, Any]:
+    try:
+        devices = _voice_service().devices.list_devices()
+    except RuntimeError as exc:
+        return {"devices": [], "status": str(exc)}
+    return {
+        "devices": [item.model_dump(mode="json") for item in devices],
+        "status": "AVAILABLE",
+    }
+
+
+@app.get("/voice/settings")
+def voice_settings() -> dict[str, Any]:
+    return _voice_service().settings.model_dump(mode="json")
+
+
+@app.put("/voice/settings")
+def save_voice_settings(body: VoiceSettings) -> dict[str, Any]:
+    try:
+        return _voice_service().update_settings(body).model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/voice/session/start")
+def voice_session_start() -> dict[str, Any]:
+    return _voice_service().start_session().model_dump(mode="json")
+
+
+@app.post("/voice/session/stop")
+def voice_session_stop() -> dict[str, Any]:
+    _voice_local_action("stop")
+    return _voice_service().stop().model_dump(mode="json")
+
+
+@app.post("/voice/session/pause")
+def voice_session_pause() -> dict[str, Any]:
+    return _voice_service().pause().model_dump(mode="json")
+
+
+@app.post("/voice/session/resume")
+def voice_session_resume() -> dict[str, Any]:
+    return _voice_service().resume().model_dump(mode="json")
+
+
+@app.post("/voice/ptt/start")
+def voice_ptt_start() -> dict[str, Any]:
+    return _voice_service().ptt_start().model_dump(mode="json")
+
+
+@app.post("/voice/ptt/stop")
+def voice_ptt_stop(execute: bool = True) -> dict[str, Any]:
+    return _voice_service().ptt_stop(execute=execute).model_dump(mode="json")
+
+
+@app.post("/voice/transcript/partial")
+def voice_partial(body: VoiceTranscriptBody) -> dict[str, Any]:
+    return _voice_service().update_partial(body.text).model_dump(mode="json")
+
+
+@app.post("/voice/transcript/final")
+def voice_final(body: VoiceTranscriptBody) -> dict[str, Any]:
+    return _voice_service().submit_final(body.text, execute=body.execute).model_dump(mode="json")
+
+
+@app.post("/voice/speak")
+def voice_speak(body: VoiceSpeakBody) -> dict[str, Any]:
+    return _voice_service().speak(body.text).model_dump(mode="json")
 
 
 def _validate_base_url(provider: str, base_url: str, local_ok: bool = False) -> None:

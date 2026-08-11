@@ -137,6 +137,27 @@ export const api = {
     request<{ status: string; real_call: boolean; provider: string; model: string; input_tokens: number; output_tokens: number; cached_tokens: number | null; total_tokens: number; usage_available: boolean; latency_ms: number; estimated_cost: number | null; repair_attempts: number }>(`/settings/connections/providers/${providerId}/test-model`, { method: "POST", body: JSON.stringify({ model: model || null }) }),
   discoverCustomModels: (providerId: string, refresh = false) =>
     request<{ status: string; models: Array<{ id: string }>; count: number }>(`/settings/connections/providers/${providerId}/${refresh ? "refresh-models" : "discover-models"}`, { method: "POST" }),
+  teamRouting: (projectId?: string) =>
+    request<import("./types").TeamRoutingData>(`/settings/ai-team/routing${queryString({ project_id: projectId })}`),
+  saveTeamRoute: (role: string, body: Record<string, unknown>) =>
+    request<{ route: Record<string, unknown>; card: import("./types").TeamRoleCard }>(`/settings/ai-team/routing/${encodeURIComponent(role)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteTeamRoute: (role: string, scope = "global", projectId?: string) =>
+    request<{ deleted: boolean }>(`/settings/ai-team/routing/${encodeURIComponent(role)}${queryString({ scope, project_id: projectId })}`, { method: "DELETE" }),
+  testAiTeam: () => request<import("./types").TeamTestResult>("/settings/ai-team/test", { method: "POST" }),
+  teamPerformance: () => request<{ profiles: Array<Record<string, unknown>>; automatic_routing: boolean }>("/settings/ai-team/performance"),
+  voice: () => request<import("./types").VoiceStatus>("/voice/status"),
+  voiceDevices: () => request<{ devices: import("./types").AudioDevice[]; status: string }>("/voice/devices"),
+  saveVoiceSettings: (body: import("./types").VoiceSettings) => request<import("./types").VoiceStatus>("/voice/settings", { method: "PUT", body: JSON.stringify(body) }),
+  startVoice: () => request<import("./types").VoiceStatus>("/voice/session/start", { method: "POST" }),
+  stopVoice: () => request<import("./types").VoiceStatus>("/voice/session/stop", { method: "POST" }),
+  pauseVoice: () => request<import("./types").VoiceStatus>("/voice/session/pause", { method: "POST" }),
+  resumeVoice: () => request<import("./types").VoiceStatus>("/voice/session/resume", { method: "POST" }),
+  startVoicePtt: () => request<import("./types").VoiceStatus>("/voice/ptt/start", { method: "POST" }),
+  stopVoicePtt: () => request<import("./types").VoiceStatus>("/voice/ptt/stop", { method: "POST" }),
+  speakVoice: (text: string) => request<import("./types").VoiceStatus>("/voice/speak", { method: "POST", body: JSON.stringify({ text }) }),
   personalization: (projectId?: string, taskType = "general", goal = "") =>
     request<{ profile: import("./types").PersonalizationProfile; proposals: import("./types").MemoryProposal[] }>(`/personalization${queryString({ project_id: projectId, task_type: taskType, goal })}`),
   savePersonalizationControl: (body: Record<string, unknown>) =>

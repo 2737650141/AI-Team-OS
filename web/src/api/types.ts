@@ -51,6 +51,7 @@ export interface AgentCard {
   tokens: number;
   last_action: string | null;
   provider?: string;
+  route_source?: string | null;
   model_mode?: string;
 }
 
@@ -209,6 +210,132 @@ export interface CustomProvider {
   is_default: boolean;
   local_provider: boolean;
   test_provider: boolean;
+}
+
+export interface TeamProvider {
+  provider_id: string;
+  provider_name: string;
+  configured: boolean;
+  storage: string;
+  health: string;
+  models: string[];
+  manual_allowed: boolean;
+  local_provider: boolean;
+  test_provider: boolean;
+}
+
+export interface TeamRoleCard {
+  role: string;
+  provider_id: string | null;
+  provider: string | null;
+  model: string | null;
+  source: "task" | "project" | "global" | null;
+  capability: {
+    text?: boolean | null;
+    structured_output?: boolean | null;
+    tool_calling?: boolean | null;
+    vision?: boolean | null;
+    streaming?: boolean | null;
+  };
+  health: string;
+  latency_ms: number | null;
+  success_rate: number | null;
+  cost: number | null;
+  cost_label: string;
+  fallback: { provider_id: string; model: string } | null;
+  token_budget: number | null;
+  cost_budget?: number | null;
+  warning: string | null;
+}
+
+export interface TeamRoutingData {
+  roles: TeamRoleCard[];
+  providers: TeamProvider[];
+  precedence: string[];
+  fallback_policy: string;
+  reviewer_policy: string;
+}
+
+export interface TeamTestResult {
+  results: Array<{
+    role: string;
+    provider_id?: string;
+    provider?: string;
+    model?: string;
+    status: string;
+    real_call?: boolean;
+    latency_ms?: number | null;
+    total_tokens?: number | null;
+    cost?: number | null;
+  }>;
+  ready: number;
+  total: number;
+  status: string;
+  max_calls: number;
+  max_output_tokens_per_call: number;
+}
+
+export interface VoiceSettings {
+  voice_enabled: boolean;
+  microphone_enabled: boolean;
+  wake_word_enabled: boolean;
+  push_to_talk: boolean;
+  input_device_id: number | null;
+  output_device_id: number | null;
+  language: "auto" | "zh" | "en";
+  whisper_executable: string;
+  whisper_model: string;
+  vad_model: string;
+  wake_model: string;
+  tts_voice: string;
+  tts_rate: number;
+  max_record_seconds: number;
+  max_session_turns: number;
+  max_session_tokens: number;
+  conversation_mode: "single" | "conversation";
+  conversation_timeout_seconds: number;
+  allow_external_speech_processing: boolean;
+}
+
+export interface AudioDevice {
+  id: number;
+  name: string;
+  input_channels: number;
+  output_channels: number;
+  default_sample_rate: number;
+  is_default_input: boolean;
+  is_default_output: boolean;
+}
+
+export interface VoiceTurn {
+  turn_id: string;
+  created_at: string;
+  user_text: string;
+  assistant_text: string;
+  route: string;
+  action: string;
+  task_id: string | null;
+}
+
+export interface VoiceStatus {
+  state: "idle" | "wake_listening" | "listening" | "transcribing" | "thinking" | "speaking" | "interrupted" | "paused" | "error";
+  mic_state: "MIC OFF" | "MIC LISTENING" | "MIC ACTIVE" | "MIC MUTED" | "MIC ERROR";
+  session_active: boolean;
+  partial_transcript: string;
+  final_transcript: string;
+  error_code: string | null;
+  error_message: string | null;
+  input_device: string | null;
+  output_device: string | null;
+  asr_status: string;
+  wake_status: string;
+  tts_status: string;
+  raw_audio_persisted: boolean;
+  local_command_priority: boolean;
+  output_suppression: boolean;
+  latency: Record<string, number | null>;
+  settings: VoiceSettings;
+  turns: VoiceTurn[];
 }
 
 export interface PersonalizationItem {

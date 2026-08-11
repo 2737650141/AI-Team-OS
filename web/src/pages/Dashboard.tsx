@@ -246,7 +246,8 @@ export function Dashboard() {
             <div key={a.role} className="agent-card">
               <strong>{displayLabel(a.role, lang)}</strong>
               <StatusBadge status={a.status} />
-              <span className="muted">{a.model}</span>
+              <span className="muted">{a.provider ?? "Unconfigured"} · {a.model}</span>
+              {a.route_source && <span className="muted">Route: {a.route_source}</span>}
               <span className="muted">
                 {a.tokens} {t("dash.tokenUnit")}
               </span>

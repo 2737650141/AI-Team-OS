@@ -4,6 +4,8 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { ConnectionStatus, CustomProvider } from "../api/types";
+import { ModelRoutingPanel } from "../components/ModelRoutingPanel";
+import { VoiceSettingsPanel } from "../components/VoiceSettingsPanel";
 import { useI18n } from "../i18n";
 import { connectionLabel, displayLabel } from "../i18n/labels";
 
@@ -120,6 +122,10 @@ export function Settings() {
           </dl>
         </SettingsCard>
       </div>
+
+      <ModelRoutingPanel />
+
+      <VoiceSettingsPanel />
 
       <VisionConnectionPanel />
 

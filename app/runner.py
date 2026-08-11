@@ -121,6 +121,25 @@ def _default_custom_provider(data_dir: Path | None):
     ) or ""
 
 
+def _team_route_has_runtime(data_dir: Path) -> bool:
+    from app.core.provider_store import ProviderStore
+    from app.core.secret_store import process_resolver
+    from app.gateway.multi_provider import TeamRoutingStore
+
+    routes = TeamRoutingStore(data_dir / "runtime" / "team_routing.sqlite").list_routes()
+    if not routes:
+        return False
+    if any(route.provider_id == "builtin:ollama" for route in routes):
+        return True
+    resolver = process_resolver(data_dir)
+    providers = ProviderStore(data_dir / "runtime" / "providers.sqlite")
+    return any(
+        resolver.resolve(providers.secret_key(provider.provider_id))
+        for provider in providers.list()
+        if not provider.test_provider
+    )
+
+
 def _settings_with_custom_routes(settings: AppSettings, data_dir: Path) -> AppSettings:
     provider, key = _default_custom_provider(data_dir)
     if provider is None or not key:
@@ -146,12 +165,73 @@ def _settings_with_custom_routes(settings: AppSettings, data_dir: Path) -> AppSe
     return settings.model_copy(update={"routing": routing})
 
 
-def build_provider(settings: AppSettings, data_dir: Path | None = None):
+def build_provider(
+    settings: AppSettings, data_dir: Path | None = None, project_id: str | None = None
+):
     """按配置构造 Provider（005 7.4：real 模式必须显式开启）。
 
     base_url/api_key/default_model 支持 SecretStore 回退（网页 Connections 保存后
     对真实任务生效；env/config 优先）。
     """
+    data_dir = data_dir or Path("data")
+    from app.core.provider_store import ProviderStore
+    from app.core.secret_store import process_resolver
+    from app.gateway.multi_provider import (
+        MultiProviderRoutedProvider,
+        RoleModelRouter,
+        TeamRoutingStore,
+    )
+
+    team_store = TeamRoutingStore(data_dir / "runtime" / "team_routing.sqlite")
+    if team_store.list_routes():
+        resolver = process_resolver(data_dir)
+        provider_store = ProviderStore(data_dir / "runtime" / "providers.sqlite")
+        routed_providers: dict[str, object] = {}
+        for configured in provider_store.list():
+            key = resolver.resolve(provider_store.secret_key(configured.provider_id)) or ""
+            if not key or configured.test_provider:
+                continue
+            routed_providers[configured.provider_id] = OpenAICompatibleProvider(
+                base_url=configured.base_url,
+                api_key=key,
+                default_model=configured.default_model,
+                enable_real=True,
+                timeout_seconds=settings.model.timeout_seconds,
+                temperature=settings.model.temperature,
+                max_output_tokens=settings.model.max_output_tokens,
+                allow_local=configured.local_provider,
+                chat_endpoint=configured.chat_endpoint,
+                provider_name=configured.provider_name,
+            )
+        base_url, key, default_model = _web_configured_credentials(settings, data_dir)
+        if base_url and key:
+            routed_providers["builtin:openai_compatible"] = OpenAICompatibleProvider(
+                base_url=base_url,
+                api_key=key,
+                default_model=default_model,
+                enable_real=True,
+                timeout_seconds=settings.model.timeout_seconds,
+                temperature=settings.model.temperature,
+                max_output_tokens=settings.model.max_output_tokens,
+            )
+        routed_providers["builtin:ollama"] = OpenAICompatibleProvider(
+            base_url="http://127.0.0.1:11434/v1",
+            api_key="TEST-TOKEN-LOCAL-OLLAMA",
+            default_model="",
+            enable_real=True,
+            timeout_seconds=settings.model.timeout_seconds,
+            temperature=settings.model.temperature,
+            max_output_tokens=settings.model.max_output_tokens,
+            allow_local=True,
+            provider_name="Ollama Local",
+        )
+        return MultiProviderRoutedProvider(
+            RoleModelRouter(team_store),
+            routed_providers,
+            team_store,
+            project_id=project_id,
+        )
+
     custom, custom_key = _default_custom_provider(data_dir)
     if custom is not None and custom_key:
         if custom.test_provider:
@@ -206,6 +286,7 @@ def _build_context(
         settings.model.enable_real
         or bool(_web_configured_credentials(settings, data_dir)[1])
         or bool(custom_key)
+        or _team_route_has_runtime(data_dir)
     )
     if model_mode == "real" and not real_effective:
         # 005 7.4 / 006 3.2：真实调用必须显式开启，未启用时明确拒绝（不静默进入图内失败）
@@ -235,7 +316,7 @@ def _build_context(
     )
     audit = AuditLog(data_dir / "audit.jsonl")
     if model_mode == "real":
-        provider = build_provider(settings, data_dir)
+        provider = build_provider(settings, data_dir, project_id=state.project_id)
     else:
         provider = DeterministicFakeModel(responses=model_responses)
     model_gateway = ModelGateway(
@@ -1018,6 +1099,7 @@ def _system_health(data_dir: Path) -> dict[str, str]:
     real_enabled = bool(
         getattr(settings.model, "enable_real", False)
         or (custom_provider is not None and custom_key)
+        or _team_route_has_runtime(data_dir)
     )
     if get_store() is None:
         events_init(data_dir)
@@ -1047,17 +1129,47 @@ def _agent_team_status(tasks: list[dict[str, Any]], data_dir: Path) -> list[dict
         latest = tasks[0]
     role_tokens = {role: 0 for role in roles}
     role_models = {role: "(default)" for role in roles}
+    role_providers = {role: "Unconfigured" for role in roles}
+    role_sources: dict[str, str | None] = {role: None for role in roles}
     role_actions: dict[str, str | None] = {role: None for role in roles}
+    from app.core.provider_store import ProviderStore
+    from app.gateway.contracts import ProviderError
+    from app.gateway.multi_provider import RoleModelRouter, TeamRoutingStore
+
+    provider_names = {
+        provider.provider_id: provider.provider_name
+        for provider in ProviderStore(data_dir / "runtime" / "providers.sqlite").list()
+    }
+    provider_names.update(
+        {
+            "builtin:openai_compatible": "OpenAI Compatible",
+            "builtin:ollama": "Ollama Local",
+        }
+    )
+    route_store = TeamRoutingStore(data_dir / "runtime" / "team_routing.sqlite")
+    route_router = RoleModelRouter(route_store)
+    for role in roles:
+        try:
+            route = route_router.resolve(
+                role, project_id=str(latest.get("project_id")) if latest else None
+            )
+        except ProviderError:
+            continue
+        role_models[role] = route.model
+        role_providers[role] = provider_names.get(route.provider_id, route.provider_id)
+        role_sources[role] = route.source
     if latest is not None:
         if latest.get("model_mode") == "real":
             provider, _key = _default_custom_provider(data_dir)
-            if provider is not None:
+            if provider is not None and not route_store.list_routes():
                 role_models = {
                     role: provider.role_models.get(role) or provider.default_model or "(default)"
                     for role in roles
                 }
+                role_providers = {role: provider.provider_name for role in roles}
         else:
             role_models = {role: "deterministic-fake" for role in roles}
+            role_providers = {role: "Fake Model" for role in roles}
         from app.core.events import get_store
 
         store = get_store()
@@ -1069,15 +1181,17 @@ def _agent_team_status(tasks: list[dict[str, Any]], data_dir: Path) -> list[dict
                 events.extend(store.list_events(run_id=task_id, limit=5000))
             events.sort(key=lambda event: event.sequence)
             for event in events:
-                role = event.actor_id if event.actor_id in roles else event.actor_type
-                if role not in roles:
+                event_role = (
+                    event.actor_id if event.actor_id in roles else (event.actor_type or "")
+                )
+                if event_role not in roles:
                     continue
-                role_actions[role] = event.summary or event.event_type
+                role_actions[event_role] = event.summary or event.event_type
                 if event.event_type == "model_call_completed":
-                    role_tokens[role] += int(event.payload_safe.get("total_tokens") or 0)
+                    role_tokens[event_role] += int(event.payload_safe.get("total_tokens") or 0)
                     model = str(event.payload_safe.get("model") or "")
                     if model:
-                        role_models[role] = model
+                        role_models[event_role] = model
     team: list[dict[str, Any]] = []
     for role in roles:
         team.append(
@@ -1086,6 +1200,8 @@ def _agent_team_status(tasks: list[dict[str, Any]], data_dir: Path) -> list[dict
                 "status": "idle",
                 "current_task": latest.get("goal") if latest else None,
                 "model": role_models[role],
+                "provider": role_providers[role],
+                "route_source": role_sources[role],
                 "tokens": role_tokens[role],
                 "last_action": role_actions[role],
             }
