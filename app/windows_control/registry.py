@@ -65,6 +65,14 @@ class ApplicationRegistry:
                 arguments=(str(fixture),),
                 expected_title="AI Team OS Windows UI Automation Test Fixture",
             )
+        visual_fixture = project_root / "fixtures/visual_desktop/fixture.py"
+        if visual_fixture.is_file():
+            self._apps["visual_test_fixture"] = RegisteredApplication(
+                "visual_test_fixture",
+                Path(sys.executable),
+                arguments=(str(visual_fixture),),
+                expected_title="AI Team OS Visual Desktop Test App",
+            )
 
     def get(self, app_id: str) -> RegisteredApplication:
         normalized = app_id.strip().lower()

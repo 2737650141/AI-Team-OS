@@ -2,7 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
+  Crosshair,
   Eye,
+  Layers3,
+  MessageSquare,
   Monitor,
   Pause,
   Play,
@@ -11,10 +14,10 @@ import {
   Square,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
-import type { ComputerStatus } from "../api/types";
+import type { ComputerStatus, DesktopObservation, VisualGrounding } from "../api/types";
 import { useI18n } from "../i18n";
 import { displayLabel } from "../i18n/labels";
 
@@ -26,11 +29,18 @@ export function Computer() {
   const [capability, setCapability] = useState<Capability>("observe_only");
   const [goal, setGoal] = useState("");
   const [screen, setScreen] = useState<string | null>(null);
+  const [observation, setObservation] = useState<DesktopObservation | null>(null);
+  const [grounding, setGrounding] = useState<VisualGrounding | null>(null);
+  const [target, setTarget] = useState("");
+  const [question, setQuestion] = useState("");
+  const [screenAnswer, setScreenAnswer] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [overlay, setOverlay] = useState({ controls: true, accessibility: false, grounding: true });
   const [error, setError] = useState("");
   const zh = lang === "zh";
   const text = useMemo(() => ({
-    title: zh ? "电脑控制" : "Computer Control",
-    subtitle: zh ? "Windows 桌面感知、受控操作与实时可视化" : "Windows observation, governed actions and live visibility",
+    title: "JARVIS Desktop Control",
+    subtitle: zh ? "Windows 屏幕视觉理解、融合定位与受控操作" : "Windows screen understanding, fused grounding and governed actions",
     screen: zh ? "当前屏幕" : "Current Screen",
     session: zh ? "控制会话" : "Control Session",
     active: zh ? "当前应用" : "Active App",
@@ -43,6 +53,15 @@ export function Computer() {
     resume: zh ? "继续" : "Resume",
     stop: zh ? "立即停止控制" : "STOP CONTROL",
     refresh: zh ? "刷新屏幕" : "Refresh screen",
+    autoRefresh: zh ? "自动刷新（最高 1 FPS）" : "Auto refresh (max 1 FPS)",
+    visionOverlay: zh ? "视觉叠加" : "Vision Overlay",
+    detected: zh ? "识别控件" : "Detected controls",
+    accessibility: "Accessibility",
+    grounding: zh ? "定位目标" : "Grounding target",
+    ask: zh ? "询问当前屏幕" : "Ask about current screen",
+    askPlaceholder: zh ? "这个页面现在有什么？" : "What is on this page?",
+    locate: zh ? "视觉定位" : "Ground visual target",
+    targetPlaceholder: zh ? "例如：右下角那个蓝色确认按钮" : "Example: the blue confirm button at bottom right",
     planTask: zh ? "生成操作计划" : "Create action plan",
     runPlan: zh ? "执行已显示的计划" : "Run displayed plan",
     approve: zh ? "批准" : "Approve",
@@ -74,7 +93,12 @@ export function Computer() {
       if (action === "resume") return api.resumeComputer();
       return api.stopComputer();
     },
-    onSuccess: (data) => { refresh(data); if (data.control === "off") setScreen(null); },
+    onSuccess: (data) => {
+      refresh(data);
+      if (data.control === "off") {
+        setScreen(null); setObservation(null); setGrounding(null); setAutoRefresh(false);
+      }
+    },
     onError: (e: Error) => setError(e.message),
   });
   const planMutation = useMutation({
@@ -93,19 +117,63 @@ export function Computer() {
     onSuccess: () => refresh(),
     onError: (e: Error) => { setError(e.message); refresh(); },
   });
+  const groundingMutation = useMutation({
+    mutationFn: ({ observationId, description }: { observationId: string; description: string }) =>
+      api.groundComputerVision(observationId, description),
+    onSuccess: setGrounding,
+    onError: (e: Error) => setError(e.message),
+  });
+  const askMutation = useMutation({
+    mutationFn: ({ prompt, observationId }: { prompt: string; observationId?: string }) =>
+      api.askComputerScreen(prompt, observationId),
+    onSuccess: (answer) => setScreenAnswer(answer.answer),
+    onError: (e: Error) => setError(e.message),
+  });
+  const visualActionMutation = useMutation({
+    mutationFn: (groundingId: string) => api.actComputerVision(groundingId, true),
+    onSuccess: (result) => {
+      setScreenAnswer(result.verification); setGrounding(null);
+      void qc.invalidateQueries({ queryKey: ["computer"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
   const data = status.data;
   const controlOn = data?.control === "on";
   const controlPaused = data?.control === "paused";
 
-  async function capture() {
+  const capture = useCallback(async () => {
     try {
       setError("");
-      const frame = data?.active_window?.window_id
-        ? await api.computerWindowScreen(data.active_window.window_id)
-        : await api.computerScreen();
+      const current = await api.observeComputerVision({ scope: "active_window", external: false });
+      const frame = await api.computerVisionPreview(current.observation_id);
+      setObservation(current);
+      setGrounding(null);
       setScreen(`data:${frame.mime_type};base64,${frame.image_base64}`);
-      refresh();
+      void qc.invalidateQueries({ queryKey: ["computer"] });
     } catch (e) { setError((e as Error).message); }
+  }, [qc]);
+
+  useEffect(() => {
+    if (!autoRefresh || !controlOn) return;
+    const timer = window.setInterval(() => { void capture(); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, capture, controlOn]);
+
+  const overlayElements = observation?.visual_elements.filter((item) => {
+    if (item.sensitive) return false;
+    if (grounding?.selected_element?.visual_element_id === item.visual_element_id) return overlay.grounding;
+    if (overlay.accessibility && item.accessibility_element_id) return true;
+    return overlay.controls && (item.clickable_estimate || item.editable_estimate);
+  }) ?? [];
+
+  function overlayStyle(item: DesktopObservation["visual_elements"][number]) {
+    const frame = observation!.capture_bounds;
+    return {
+      left: `${((item.bounds.left - frame.left) / (frame.right - frame.left)) * 100}%`,
+      top: `${((item.bounds.top - frame.top) / (frame.bottom - frame.top)) * 100}%`,
+      width: `${((item.bounds.right - item.bounds.left) / (frame.right - frame.left)) * 100}%`,
+      height: `${((item.bounds.bottom - item.bounds.top) / (frame.bottom - frame.top)) * 100}%`,
+    };
   }
 
   return (
@@ -125,6 +193,9 @@ export function Computer() {
       <section className="computer-privacy-strip">
         <span><Eye size={15} /> {text.screenAccess} <strong className={data?.screen_access ? "ok" : "muted"}>{data?.screen_access ? "ON" : "OFF"}</strong></span>
         <span><Monitor size={15} /> {text.control} <strong>{(data?.control ?? "off").toUpperCase()}</strong></span>
+        <span><Layers3 size={15} /> Vision <strong>{displayLabel(observation?.vision_mode ?? "accessibility_only", lang)}</strong></span>
+        <span>{text.active} <strong>{data?.active_window?.app_name || "—"}</strong></span>
+        <span>Model <strong>DeepSeek · {data?.vision_status?.vision_provider?.multimodal_status ?? "NOT_CONFIGURED"}</strong></span>
         <span><Shield size={15} /> {text.ephemeral}</span>
       </section>
 
@@ -143,10 +214,12 @@ export function Computer() {
       ) : (
         <div className="computer-grid">
           <section className="card live-screen-panel">
-            <div className="section-head"><h2>{text.screen}</h2><button onClick={capture}><RefreshCw size={14} /> {text.refresh}</button></div>
-            <div className="live-screen">
-              {screen ? <img src={screen} alt={text.screen} /> : <div><Eye size={32} /><p>{zh ? "手动刷新以获取一次临时截图" : "Refresh manually for one ephemeral screen frame"}</p></div>}
+            <div className="section-head"><h2>{text.screen}</h2><div className="button-row"><button onClick={() => void capture()}><RefreshCw size={14} /> {text.refresh}</button><button className={autoRefresh ? "active" : ""} onClick={() => setAutoRefresh((value) => !value)}><Play size={14} /> {autoRefresh ? text.pause : text.autoRefresh}</button></div></div>
+            <div className="live-screen visual-screen">
+              {screen ? <><img src={screen} alt={text.screen} />{overlayElements.map((item) => <span key={item.visual_element_id} className={`vision-box ${grounding?.selected_element?.visual_element_id === item.visual_element_id ? "target" : ""} ${item.accessibility_element_id ? "access" : "visual"}`} style={overlayStyle(item)} title={`${item.label || item.element_type} · ${Math.round(item.confidence * 100)}%`}><small>{item.label || item.element_type}</small></span>)}</> : <div><Eye size={32} /><p>{zh ? "手动刷新以获取一次临时截图" : "Refresh manually for one ephemeral screen frame"}</p></div>}
             </div>
+            <div className="vision-overlay-controls"><strong><Layers3 size={14} /> {text.visionOverlay}</strong><label><input type="checkbox" checked={overlay.controls} onChange={(event) => setOverlay({ ...overlay, controls: event.target.checked })} /> {text.detected}</label><label><input type="checkbox" checked={overlay.accessibility} onChange={(event) => setOverlay({ ...overlay, accessibility: event.target.checked })} /> {text.accessibility}</label><label><input type="checkbox" checked={overlay.grounding} onChange={(event) => setOverlay({ ...overlay, grounding: event.target.checked })} /> {text.grounding}</label></div>
+            {observation && <p className="vision-metadata"><span>{displayLabel(observation.vision_mode, lang)}</span><span>{observation.visual_elements.length} {zh ? "个元素" : "elements"}</span><span>{Math.round(observation.confidence * 100)}%</span><span>{zh ? "预览到期" : "Preview expires"} {new Date(observation.capture_expires_at).toLocaleTimeString()}</span></p>}
             <p className="privacy-note"><Shield size={13} /> {text.ephemeral}</p>
           </section>
 
@@ -167,6 +240,16 @@ export function Computer() {
             <textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder={zh ? "例如：打开记事本，在里面输入测试文字，不要保存文件。" : "Example: Open Notepad, type test text, and do not save."} />
             <button onClick={() => planMutation.mutate(goal)} disabled={!goal.trim() || planMutation.isPending}><Play size={14} /> {text.planTask}</button>
             {data.current_task && <div className="real-identity"><span className="mode-badge real">REAL</span><strong>{data.current_task.provider}</strong><span>{data.current_task.model}</span><span className={`task-status ${data.current_task.status}`}>{displayLabel(data.current_task.status, lang)}</span></div>}
+          </section>
+
+          <section className="card screen-intelligence-panel">
+            <div className="section-head"><h2><MessageSquare size={17} /> {text.ask}</h2><span className="observe-badge">OBSERVE · 0 ACTION</span></div>
+            <div className="screen-query-row"><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={text.askPlaceholder} /><button disabled={!question.trim() || askMutation.isPending} onClick={() => askMutation.mutate({ prompt: question, observationId: observation?.observation_id })}><Eye size={14} /> {text.ask}</button></div>
+            {screenAnswer && <p className="screen-answer">{screenAnswer}</p>}
+            <hr />
+            <div className="section-head"><h2><Crosshair size={17} /> {text.locate}</h2><span className="muted">Ground → Validate → Act → Verify</span></div>
+            <div className="screen-query-row"><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={text.targetPlaceholder} /><button disabled={!target.trim() || !observation || groundingMutation.isPending} onClick={() => observation && groundingMutation.mutate({ observationId: observation.observation_id, description: target })}><Crosshair size={14} /> {text.locate}</button></div>
+            {grounding && <div className={`visual-target-preview ${grounding.status}`}><div><span>{zh ? "目标" : "Target"}</span><strong>{grounding.selected_element?.label || grounding.target_description}</strong></div><div><span>{zh ? "置信度" : "Confidence"}</span><strong>{Math.round(grounding.confidence * 100)}% · {grounding.confidence_band.toUpperCase()}</strong></div><div><span>{zh ? "来源" : "Source"}</span><strong>{grounding.accessibility_match ? "Accessibility + Vision" : "Visual coordinate fallback"}</strong></div><p>{grounding.reason_summary_safe}</p>{grounding.status === "needs_clarification" ? <p className="warning">{zh ? "存在多个相似目标，请选择高亮候选。" : grounding.clarification_prompt}</p> : grounding.status === "resolved" && <button className="danger" disabled={visualActionMutation.isPending} onClick={() => visualActionMutation.mutate(grounding.grounding_id)}>{zh ? "确认目标并执行" : "Approve target and act"}</button>}</div>}
           </section>
 
           <section className="card action-plan-panel">

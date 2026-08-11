@@ -103,7 +103,7 @@ def main() -> int:
             backend.capture_window(notepad.window_id), args.evidence_dir / "notepad-typed.png"
         )
 
-    browser = next(
+    switch_target = next(
         (
             item
             for item in backend.list_windows()
@@ -111,20 +111,31 @@ def main() -> int:
         ),
         None,
     )
-    if browser is not None:
-        backend.focus_window(notepad.window_id)
-        backend.focus_window(browser.window_id)
-        final_focus = backend.focus_window(notepad.window_id)
-        switch_pass = final_focus.window_id == notepad.window_id
-    else:
-        switch_pass = False
+    fixture = None
+    if switch_target is None:
+        # Keep the acceptance self-contained when no user browser happens to be open.
+        fixture, _ = gateway.execute(
+            step(
+                "GT-WIN05-switch-app",
+                "windows_launch_app",
+                ActionRisk.LOW,
+                app_id="test_fixture",
+            ),
+            task_id="gt-win",
+        )
+        switch_target = fixture
+    backend.focus_window(notepad.window_id)
+    backend.focus_window(switch_target.window_id)
+    final_focus = backend.focus_window(notepad.window_id)
+    switch_pass = final_focus.window_id == notepad.window_id
     results["GT-WIN05"] = {"pass": switch_pass}
     mark("GT-WIN05 complete")
 
-    fixture, _ = gateway.execute(
-        step("GT-WIN06-launch", "windows_launch_app", ActionRisk.LOW, app_id="test_fixture"),
-        task_id="gt-win",
-    )
+    if fixture is None:
+        fixture, _ = gateway.execute(
+            step("GT-WIN06-launch", "windows_launch_app", ActionRisk.LOW, app_id="test_fixture"),
+            task_id="gt-win",
+        )
     mark("GT-WIN06 fixture launched")
     button = backend.find_element(
         fixture.window_id, control_types=("Button",), name="Fixture Action"

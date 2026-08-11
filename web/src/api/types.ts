@@ -399,6 +399,7 @@ export interface ComputerStatus {
     retry_count: number;
   }>;
   safety_status: Record<string, unknown>;
+  vision_status?: VisionStatus;
 }
 
 export interface ComputerScreen {
@@ -408,4 +409,87 @@ export interface ComputerScreen {
   image_base64: string;
   mime_type: string;
   ephemeral: boolean;
+}
+
+export interface VisualElement {
+  visual_element_id: string;
+  label: string;
+  element_type: string;
+  text: string;
+  icon_hint: string;
+  bounds: { left: number; top: number; right: number; bottom: number };
+  confidence: number;
+  source: string;
+  accessibility_element_id?: string | null;
+  clickable_estimate: boolean;
+  editable_estimate: boolean;
+  sensitive: boolean;
+}
+
+export interface DesktopObservation {
+  observation_id: string;
+  timestamp: string;
+  active_window?: ComputerWindow | null;
+  screen_bounds: { left: number; top: number; right: number; bottom: number };
+  capture_bounds: { left: number; top: number; right: number; bottom: number };
+  visual_elements: VisualElement[];
+  privacy_redactions: Array<{
+    redaction_id: string;
+    bounds: { left: number; top: number; right: number; bottom: number };
+    reason: string;
+  }>;
+  source_modes: string[];
+  capture_id: string;
+  capture_hash: string;
+  capture_expires_at: string;
+  confidence: number;
+  vision_mode: string;
+}
+
+export interface VisualGrounding {
+  grounding_id: string;
+  observation_id: string;
+  capture_id: string;
+  target_description: string;
+  candidate_elements: Array<{
+    visual_element_id: string;
+    label: string;
+    bounds: { left: number; top: number; right: number; bottom: number };
+    score: number;
+    source: string;
+  }>;
+  selected_element?: VisualElement | null;
+  selected_bounds?: { left: number; top: number; right: number; bottom: number } | null;
+  confidence: number;
+  confidence_band: string;
+  reason_summary_safe: string;
+  accessibility_match: boolean;
+  requires_coordinate_fallback: boolean;
+  status: string;
+  clarification_prompt?: string | null;
+}
+
+export interface VisionStatus {
+  desktop_visual_layer?: string;
+  vision_provider?: {
+    provider: string;
+    model: string;
+    supports_image_input: boolean;
+    external_processing: boolean;
+    consent_acknowledged: boolean;
+    multimodal_status: string;
+    text_model: { provider: string; model: string; real: boolean };
+  };
+  settings?: {
+    route_provider?: string | null;
+    route_model?: string | null;
+    allow_external_processing: boolean;
+    consent_acknowledged: boolean;
+    auto_refresh: boolean;
+    max_refresh_fps: number;
+  };
+  active_captures?: number;
+  recent_observations?: Array<Record<string, unknown>>;
+  recent_groundings?: Array<Record<string, unknown>>;
+  recent_actions?: Array<Record<string, unknown>>;
 }

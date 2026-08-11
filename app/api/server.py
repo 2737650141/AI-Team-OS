@@ -1015,6 +1015,39 @@ class ComputerTaskBody(BaseModel):
     goal: str = Field(min_length=1, max_length=4000)
 
 
+class VisualObserveBody(BaseModel):
+    scope: Literal["full_screen", "monitor", "active_window", "window", "region"] = (
+        "active_window"
+    )
+    monitor_id: str | None = None
+    window_id: str | None = None
+    region: dict[str, int] | None = None
+    external: bool = False
+
+
+class VisualGroundBody(BaseModel):
+    observation_id: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=500)
+
+
+class ScreenQuestionBody(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    observation_id: str | None = Field(default=None, max_length=100)
+
+
+class VisualActionBody(BaseModel):
+    grounding_id: str = Field(min_length=1, max_length=100)
+    approved: bool = False
+
+
+class VisionSettingsBody(BaseModel):
+    provider: str | None = Field(default=None, max_length=100)
+    model: str | None = Field(default=None, max_length=200)
+    allow_external_processing: bool = False
+    consent_acknowledged: bool = False
+    auto_refresh: bool = False
+
+
 @app.get("/computer")
 def computer_status() -> dict[str, Any]:
     return _computer_service().snapshot().model_dump(mode="json")
@@ -1081,6 +1114,83 @@ def computer_window_accessibility(window_id: str) -> dict[str, Any]:
     try:
         elements = _computer_service().accessibility_tree(window_id)
         return {"elements": [item.model_dump(mode="json") for item in elements]}
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.get("/computer/vision")
+def computer_vision_status() -> dict[str, Any]:
+    return _computer_service().visual.status()
+
+
+@app.put("/computer/vision/settings")
+def computer_vision_settings(body: VisionSettingsBody) -> dict[str, Any]:
+    try:
+        registry = _computer_service().visual.capabilities
+        registry.configure_route(body.provider, body.model)
+        registry.set_external_processing(
+            body.allow_external_processing,
+            consent_acknowledged=body.consent_acknowledged,
+        )
+        registry.settings.auto_refresh = body.auto_refresh
+        return _computer_service().visual.status()
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/vision/observe")
+def computer_visual_observe(body: VisualObserveBody) -> dict[str, Any]:
+    from app.desktop_vision.models import CaptureScope
+    from app.windows_control.models import Bounds
+
+    try:
+        region = Bounds(**body.region) if body.region else None
+        observation = _computer_service().visual_observe(
+            scope=CaptureScope(body.scope),
+            monitor_id=body.monitor_id,
+            window_id=body.window_id,
+            region=region,
+            external=body.external,
+        )
+        return observation.model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.get("/computer/vision/observations/{observation_id}/preview")
+def computer_visual_preview(observation_id: str) -> dict[str, Any]:
+    try:
+        return _computer_service().visual.preview(observation_id)
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/vision/ground")
+def computer_visual_ground(body: VisualGroundBody) -> dict[str, Any]:
+    try:
+        return _computer_service().visual_ground(
+            body.observation_id, body.target
+        ).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/vision/ask")
+def computer_visual_ask(body: ScreenQuestionBody) -> dict[str, Any]:
+    try:
+        return _computer_service().visual_ask(
+            body.question, body.observation_id
+        ).model_dump(mode="json")
+    except Exception as exc:
+        raise _computer_error(exc) from exc
+
+
+@app.post("/computer/vision/actions")
+def computer_visual_action(body: VisualActionBody) -> dict[str, Any]:
+    try:
+        return _computer_service().visual_act(
+            body.grounding_id, approved=body.approved
+        ).model_dump(mode="json")
     except Exception as exc:
         raise _computer_error(exc) from exc
 

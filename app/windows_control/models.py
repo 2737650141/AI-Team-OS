@@ -171,3 +171,4 @@ class ComputerSnapshot(BaseModel):
     pending_actions: list[PendingAction] = Field(default_factory=list)
     recent_actions: list[ActionRecord] = Field(default_factory=list)
     safety_status: dict[str, Any] = Field(default_factory=dict)
+    vision_status: dict[str, Any] = Field(default_factory=dict)

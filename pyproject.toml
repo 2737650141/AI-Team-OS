@@ -16,6 +16,9 @@ dependencies = [
     "pydantic-settings>=2.3,<3.0",
     "pypdf>=4.0,<6.0",  # PDF 只读文本提取（007 3.1：许可证 BSD-3-Clause，纯 Python，不执行 PDF 脚本）
     "pywinauto==0.6.9; sys_platform == 'win32'",  # M5-A：Windows UI Automation / Accessibility
+    "Pillow>=11.0,<13.0",  # M5-B：显式图像处理依赖（HPND/Pillow）
+    "mss>=10.0,<11.0; sys_platform == 'win32'",  # M5-B：Windows 多显示器截图（MIT）
+    "opencv-python-headless>=4.10,<5.0",  # M5-B：本地确定性 CV（Apache-2.0 / wheel MIT）
 ]
 
 [project.optional-dependencies]

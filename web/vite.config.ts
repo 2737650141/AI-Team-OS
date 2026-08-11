@@ -1,5 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // 本地控制台：仅 127.0.0.1；/api 代理到 FastAPI（010 四十六）
 export default defineConfig({

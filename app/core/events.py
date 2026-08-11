@@ -54,6 +54,14 @@ _EVENT_TYPES = {
     "memory_superseded",
     "memory_forgotten",
     "memory_expired",
+    "screen_observed",
+    "vision_analysis_started",
+    "vision_analysis_completed",
+    "grounding_created",
+    "grounding_rejected",
+    "visual_action_started",
+    "visual_action_verified",
+    "visual_action_failed",
 }
 
 

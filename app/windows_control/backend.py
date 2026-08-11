@@ -112,6 +112,27 @@ class WindowsAutomationBackend:
             image_base64=base64.b64encode(raw).decode("ascii"),
         )
 
+    @staticmethod
+    def frame_region_hash(frame: ScreenFrame, region: Bounds) -> str:
+        """Hash a bounded physical-screen ROI without persisting or exposing its pixels."""
+        if not (
+            frame.bounds.left <= region.left < region.right <= frame.bounds.right
+            and frame.bounds.top <= region.top < region.bottom <= frame.bounds.bottom
+        ):
+            raise AutomationError("coordinate_out_of_bounds", "Target region is outside the screen")
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(base64.b64decode(frame.image_base64))).convert("RGB")
+        crop = image.crop(
+            (
+                region.left - frame.bounds.left,
+                region.top - frame.bounds.top,
+                region.right - frame.bounds.left,
+                region.bottom - frame.bounds.top,
+            )
+        )
+        return hashlib.sha256(crop.tobytes()).hexdigest()
+
     def accessibility_tree(self, window_id: str) -> list[AccessibilityElement]:
         hwnd = self._parse_window_id(window_id)
         _, _, _, _, Desktop, _ = self._imports()

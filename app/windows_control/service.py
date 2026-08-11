@@ -10,6 +10,8 @@ from typing import Any
 from app.core.budget import BudgetController
 from app.core.config import AppSettings, load_settings
 from app.core.events import init as events_init
+from app.desktop_vision.models import CaptureScope
+from app.desktop_vision.service import VisualDesktopService
 from app.gateway.audit import AuditLog
 from app.gateway.contracts import ModelRequest, ProviderError, ProviderErrorCode
 from app.gateway.model_gateway import ModelGateway
@@ -30,6 +32,7 @@ from app.windows_control.models import (
     ActionRecord,
     ActionRisk,
     ActionStep,
+    Bounds,
     ComputerSnapshot,
     JarvisStatus,
     PendingAction,
@@ -90,6 +93,7 @@ class WindowsComputerService:
         self.backend = backend or WindowsAutomationBackend()
         self.registry = ApplicationRegistry(project_root)
         self.gateway = WindowsActionGateway(self.sessions, self.backend, self.registry)
+        self.visual = VisualDesktopService(data_dir, self.sessions, self.backend, self.gateway)
         self._lock = threading.RLock()
         self._jarvis_status = JarvisStatus.IDLE
         self._current_task: WindowsTask | None = None
@@ -145,6 +149,7 @@ class WindowsComputerService:
                     if step.status in {"queued", "waiting_approval"}:
                         step.status = "cancelled"
             self._last_frame = None
+            self.visual.stop()
             self._jarvis_status = JarvisStatus.STOPPED
             return session
 
@@ -192,7 +197,54 @@ class WindowsComputerService:
                     "max_supervisor_replans": 1,
                     "application_registry": self.registry.catalog(),
                 },
+                vision_status=self.visual.status(),
             )
+
+    def visual_observe(
+        self,
+        *,
+        scope: CaptureScope = CaptureScope.ACTIVE_WINDOW,
+        monitor_id: str | None = None,
+        window_id: str | None = None,
+        region: Bounds | None = None,
+        external: bool = False,
+    ):
+        with self._lock:
+            self._jarvis_status = JarvisStatus.OBSERVING
+            try:
+                return self.visual.observe(
+                    scope=scope,
+                    monitor_id=monitor_id,
+                    window_id=window_id,
+                    region=region,
+                    external=external,
+                )
+            finally:
+                self._jarvis_status = JarvisStatus.IDLE
+
+    def visual_ground(self, observation_id: str, target: str):
+        with self._lock:
+            self._jarvis_status = JarvisStatus.PLANNING
+            try:
+                return self.visual.ground(observation_id, target)
+            finally:
+                self._jarvis_status = JarvisStatus.IDLE
+
+    def visual_ask(self, question: str, observation_id: str | None = None):
+        with self._lock:
+            self._jarvis_status = JarvisStatus.OBSERVING
+            try:
+                return self.visual.ask(question, observation_id=observation_id)
+            finally:
+                self._jarvis_status = JarvisStatus.IDLE
+
+    def visual_act(self, grounding_id: str, *, approved: bool = False):
+        with self._lock:
+            self._jarvis_status = JarvisStatus.ACTING
+            try:
+                return self.visual.act(grounding_id, approved=approved)
+            finally:
+                self._jarvis_status = JarvisStatus.IDLE
 
     def capture_screen(self) -> ScreenFrame:
         with self._lock:

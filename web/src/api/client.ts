@@ -159,6 +159,52 @@ export const api = {
     request<import("./types").ComputerScreen>(
       `/computer/windows/${encodeURIComponent(windowId)}/screen`,
     ),
+  computerVision: () => request<import("./types").VisionStatus>("/computer/vision"),
+  updateComputerVision: (body: Record<string, unknown>) =>
+    request<import("./types").VisionStatus>("/computer/vision/settings", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  observeComputerVision: (body: Record<string, unknown> = {}) =>
+    request<import("./types").DesktopObservation>("/computer/vision/observe", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  computerVisionPreview: (observationId: string) =>
+    request<{
+      capture_id: string;
+      image_base64: string;
+      mime_type: string;
+      expires_at: string;
+      bounds: { left: number; top: number; right: number; bottom: number };
+    }>(`/computer/vision/observations/${encodeURIComponent(observationId)}/preview`),
+  groundComputerVision: (observationId: string, target: string) =>
+    request<import("./types").VisualGrounding>("/computer/vision/ground", {
+      method: "POST",
+      body: JSON.stringify({ observation_id: observationId, target }),
+    }),
+  askComputerScreen: (question: string, observationId?: string) =>
+    request<{
+      observation_id: string;
+      intent: string;
+      answer: string;
+      vision_mode: string;
+      action_count: number;
+    }>("/computer/vision/ask", {
+      method: "POST",
+      body: JSON.stringify({ question, observation_id: observationId || null }),
+    }),
+  actComputerVision: (groundingId: string, approved = false) =>
+    request<{
+      action_id: string;
+      status: string;
+      attempts: number;
+      verification: string;
+      change_score: number;
+    }>("/computer/vision/actions", {
+      method: "POST",
+      body: JSON.stringify({ grounding_id: groundingId, approved }),
+    }),
   planComputerTask: (goal: string) => request<import("./types").ComputerTask>("/computer/tasks/plan", {
     method: "POST",
     body: JSON.stringify({ goal }),

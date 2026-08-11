@@ -121,7 +121,9 @@ export function Settings() {
         </SettingsCard>
       </div>
 
-      <CustomProvidersPanel providers={custom.data?.providers ?? []} />
+      <VisionConnectionPanel />
+
+      <div id="custom-providers"><CustomProvidersPanel providers={custom.data?.providers ?? []} /></div>
 
       <details className="card advanced-raw">
         <summary>{t("settings.advancedConfig")}</summary>
@@ -133,6 +135,41 @@ export function Settings() {
       </p>
     </div>
   );
+}
+
+function VisionConnectionPanel() {
+  const { lang } = useI18n();
+  const zh = lang === "zh";
+  const qc = useQueryClient();
+  const status = useQuery({ queryKey: ["computer-vision"], queryFn: api.computerVision });
+  const [pendingConsent, setPendingConsent] = useState(false);
+  const [message, setMessage] = useState("");
+  const provider = status.data?.vision_provider;
+  const settings = status.data?.settings;
+  const mutation = useMutation({
+    mutationFn: (allow: boolean) => api.updateComputerVision({
+      provider: settings?.route_provider || null,
+      model: settings?.route_model || null,
+      allow_external_processing: allow,
+      consent_acknowledged: allow,
+      auto_refresh: false,
+    }),
+    onSuccess: (data) => {
+      qc.setQueryData(["computer-vision"], data);
+      setPendingConsent(false);
+      setMessage(zh ? "视觉隐私设置已更新。" : "Vision privacy settings updated.");
+    },
+    onError: (error: Error) => setMessage(error.message),
+  });
+
+  return <section className="card vision-connection-panel">
+    <div className="section-heading"><div><span className="eyebrow">Vision capability · separate route</span><h2>{zh ? "视觉模型与屏幕隐私" : "Vision Model & Screen Privacy"}</h2><p className="muted">{zh ? "视觉模型与主 Agent 模型独立。未配置时继续使用 Accessibility 与本地确定性视觉。" : "Vision is routed separately from the main agent. Accessibility and local deterministic vision remain available without it."}</p></div><span className={`mode-badge ${provider?.multimodal_status === "VALIDATED" ? "real" : "fake"}`}>{provider?.multimodal_status ?? "NOT_CONFIGURED"}</span></div>
+    <div className="vision-settings-grid"><label className="field">{zh ? "Vision Provider" : "Vision Provider"}<select value={settings?.route_provider ?? ""} disabled><option value="">{zh ? "未发现已验证图片能力的 Provider" : "No verified image-capable provider"}</option></select></label><label className="field">{zh ? "视觉模型" : "Vision model"}<select value={settings?.route_model ?? ""} disabled><option value="">NOT_CONFIGURED</option></select></label><div className="vision-route-state"><small>{zh ? "文本模型" : "Text model"}</small><strong>{provider?.text_model?.provider ?? "DeepSeek Official"} · {provider?.text_model?.model ?? "deepseek-v4-flash"}</strong><span>TEXT_MODEL = REAL · VISION_MODEL = {provider?.multimodal_status ?? "NOT_CONFIGURED"}</span></div></div>
+    <div className="external-vision-gate"><div><strong>{zh ? "外部视觉处理" : "External Vision Processing"}</strong><p>{zh ? "允许截图由已配置的第三方视觉模型处理" : "Allow screenshots to be processed by the configured third-party vision model"}</p></div><label className="switch-row"><input type="checkbox" checked={Boolean(settings?.allow_external_processing || pendingConsent)} onChange={(event) => event.target.checked ? setPendingConsent(true) : mutation.mutate(false)} /><span>{settings?.allow_external_processing ? "ON" : "OFF"}</span></label></div>
+    {pendingConsent && !settings?.allow_external_processing && <div className="vision-consent" role="alert"><strong>{zh ? "发送屏幕内容前请确认" : "Confirm before screen content can leave this computer"}</strong><p>{zh ? "截图内容可能发送到你配置的第三方模型服务。敏感输入区域会尽可能遮挡，但不要在包含敏感信息的屏幕开启此功能。" : "Screenshots may be sent to your configured third-party model service. Sensitive input regions are redacted where detectable, but do not enable this on screens containing sensitive information."}</p><div className="button-row"><button onClick={() => setPendingConsent(false)}>{zh ? "取消" : "Cancel"}</button><button className="danger" disabled={mutation.isPending || !settings?.route_provider} onClick={() => mutation.mutate(true)}>{zh ? "我了解并开启" : "I understand, enable"}</button></div>{!settings?.route_provider && <small>{zh ? "必须先配置已验证支持图片的视觉模型。" : "Configure a verified image-capable vision model first."}</small>}</div>}
+    <div className="provider-actions"><a className="btn" href="#custom-providers">+ {zh ? "添加 Vision Provider" : "Add Vision Provider"}</a><span className="muted">Visual Mode: {settings?.allow_external_processing ? "External Multimodal" : "Local only"}</span></div>
+    {message && <p className="muted">{message}</p>}
+  </section>;
 }
 
 function CustomProvidersPanel({ providers }: { providers: CustomProvider[] }) {

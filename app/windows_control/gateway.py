@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 from app.windows_control.backend import AutomationError, WindowsAutomationBackend
-from app.windows_control.models import ActionRecord, ActionRisk, ActionStep, PendingAction
+from app.windows_control.models import ActionRecord, ActionRisk, ActionStep, Bounds, PendingAction
 from app.windows_control.registry import ApplicationRegistry, RegistryError
 from app.windows_control.session import DeviceSessionManager, SessionError
 
@@ -218,9 +218,37 @@ class WindowsActionGateway:
                 raise ActionError("window_not_active", "Target window is not active")
             if current.window_hash != str(args.get("window_hash", "")):
                 raise ActionError("coordinate_stale", "Target window changed after screenshot")
+            region_payload = args.get("target_bounds") or {}
+            expected_region_hash = str(args.get("target_region_hash", ""))
+            if not expected_region_hash or not region_payload:
+                raise ActionError(
+                    "coordinate_stale", "Coordinate target is missing its freshness proof"
+                )
+            try:
+                target_bounds = Bounds(**region_payload)
+            except (TypeError, ValueError) as exc:
+                raise ActionError("coordinate_stale", "Coordinate target is invalid") from exc
+            if not (
+                current.bounds.left
+                <= target_bounds.left
+                < target_bounds.right
+                <= current.bounds.right
+                and current.bounds.top
+                <= target_bounds.top
+                < target_bounds.bottom
+                <= current.bounds.bottom
+            ):
+                raise ActionError(
+                    "coordinate_out_of_bounds", "Target region is outside the active window"
+                )
             frame = self.backend.capture_screen()
             if frame.screenshot_hash != str(args.get("screenshot_hash", "")):
-                raise ActionError("coordinate_stale", "Screen changed after coordinate was planned")
+                try:
+                    current_region_hash = self.backend.frame_region_hash(frame, target_bounds)
+                except (AutomationError, TypeError, ValueError) as exc:
+                    raise ActionError("coordinate_stale", "Target region changed") from exc
+                if current_region_hash != expected_region_hash:
+                    raise ActionError("coordinate_stale", "Target region changed")
             expected_bounds = args.get("screen_bounds") or {}
             if expected_bounds != frame.bounds.model_dump():
                 raise ActionError("coordinate_stale", "Screen dimensions changed")
@@ -230,6 +258,11 @@ class WindowsActionGateway:
                 and frame.bounds.top <= y < frame.bounds.bottom
             ):
                 raise ActionError("coordinate_out_of_bounds", "Coordinate is outside the screen")
+            if not (
+                target_bounds.left <= x < target_bounds.right
+                and target_bounds.top <= y < target_bounds.bottom
+            ):
+                raise ActionError("coordinate_out_of_bounds", "Coordinate is outside target region")
             self.backend.click_coordinate(x, y)
             self.backend.get_window_info(window_id)
             return {"clicked": True}, window_id, "target window re-observed"

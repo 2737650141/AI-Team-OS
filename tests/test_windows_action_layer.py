@@ -113,6 +113,9 @@ class FakeBackend:
     def click_coordinate(self, _x: int, _y: int):
         self.clicked += 1
 
+    def frame_region_hash(self, _frame: ScreenFrame, _region: Bounds) -> str:
+        return "region-a"
+
 
 @pytest.fixture
 def gateway(tmp_path: Path):
@@ -246,6 +249,33 @@ def test_stale_coordinate_is_rejected(gateway) -> None:
     with pytest.raises(ActionError) as exc:
         action_gateway.execute(step, task_id="task", approved=True)
     assert exc.value.code == "coordinate_stale"
+    assert backend.clicked == 0
+
+
+def test_coordinate_click_must_remain_inside_fresh_target_region(gateway) -> None:
+    action_gateway, sessions, backend = gateway
+    sessions.start(user_id="u", capability=SessionCapability.LOW_RISK_CONTROL)
+    step = ActionStep(
+        step_id="s1",
+        tool="windows_click_coordinate",
+        risk=ActionRisk.HIGH,
+        arguments={
+            "window_id": backend.active.window_id,
+            "accessibility_unavailable": True,
+            "window_hash": backend.active.window_hash,
+            "screenshot_hash": backend.frame.screenshot_hash,
+            "screen_bounds": backend.frame.bounds.model_dump(),
+            "target_bounds": Bounds(left=10, top=10, right=60, bottom=60).model_dump(),
+            "target_region_hash": "region-a",
+            "x": 700,
+            "y": 500,
+        },
+    )
+
+    with pytest.raises(ActionError) as exc:
+        action_gateway.execute(step, task_id="task", approved=True)
+
+    assert exc.value.code == "coordinate_out_of_bounds"
     assert backend.clicked == 0
 
 
