@@ -62,6 +62,7 @@ fn main() {
                 "--port".to_string(), "0".to_string(),
                 "--data-dir".to_string(), data_dir.to_string_lossy().to_string(),
                 "--ready-file".to_string(), ready.to_string_lossy().to_string(),
+                "--parent-pid".to_string(), std::process::id().to_string(),
             ];
             let (_events, child) = app
                 .shell()

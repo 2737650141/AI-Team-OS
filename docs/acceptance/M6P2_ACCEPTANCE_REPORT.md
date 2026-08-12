@@ -41,6 +41,8 @@ as passed.
 1. WebView2 private-network preflight lacked `Access-Control-Allow-Private-Network`.
 2. The Tauri capability was not explicitly attached to the `main` window.
 3. PyInstaller omitted `app/tools/fixtures`, causing installed task creation to return HTTP 500.
+4. PyInstaller's two-process one-file bootstrap could leave the worker behind if the desktop shell
+   was terminated; the sidecar now watches the shell PID and exits with it.
 
 All three have regression guards and were rebuilt into the final installer.
 

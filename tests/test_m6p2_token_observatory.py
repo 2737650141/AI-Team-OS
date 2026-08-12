@@ -270,3 +270,14 @@ def test_desktop_bundle_includes_runtime_fixtures():
         Path(__file__).resolve().parents[1] / "scripts" / "build_desktop_release.ps1"
     ).read_text(encoding="utf-8")
     assert '--add-data "app\\tools\\fixtures;app\\tools\\fixtures"' in script
+
+
+def test_desktop_sidecar_watches_shell_parent():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sidecar = (root / "app" / "desktop_sidecar.py").read_text(encoding="utf-8")
+    rust = (root / "src-tauri" / "src" / "main.rs").read_text(encoding="utf-8")
+    assert 'parser.add_argument("--parent-pid"' in sidecar
+    assert "WaitForSingleObject" in sidecar
+    assert '"--parent-pid".to_string()' in rust

@@ -11,7 +11,8 @@ Reviewed 2026-08-12 after the final installed-app fixes.
 - Blocking: 0 in the implementation. Clean-machine validation is an acceptance blocker, not an
   identified code defect.
 - High: 0 open. The desktop session token originally appeared in child-process command arguments;
-  it was moved to the child environment and is no longer visible in the command line.
+  it was moved to the child environment and is no longer visible in the command line. A frozen
+  worker orphan found during final lifecycle acceptance now watches the shell PID and self-exits.
 - Medium: 0 open. Installed acceptance found and fixed private-network preflight, explicit Tauri
   window capability binding, and missing PyInstaller fixture data.
 - Low: 1 known limitation. A deliberately underspecified “reply exactly OK” task completes the
