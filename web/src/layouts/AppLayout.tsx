@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Wrench,
+  BarChart3,
 } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -24,10 +25,12 @@ import type { Lang } from "../i18n";
 export function AppLayout() {
   const { lang, setLang, t } = useI18n();
   const permission = useQuery({ queryKey: ["permission-mode"], queryFn: api.permissionMode, refetchInterval: 5000 });
+  const activeContext = useQuery({ queryKey: ["active-context"], queryFn: api.activeContext, refetchInterval: 4000 });
   const NAV = [
     { to: "/", label: t("nav.dashboard"), icon: Gauge },
     { to: "/tasks", label: t("nav.tasks"), icon: ListTodo },
     { to: "/computer", label: t("nav.computer"), icon: MonitorCog },
+    { to: "/usage", label: lang === "zh" ? "用量与上下文" : "Usage & Context", icon: BarChart3 },
     { to: "/voice", label: lang === "zh" ? "语音交互" : "Voice", icon: Mic },
     { to: "/agents", label: t("nav.agents"), icon: Bot },
     { to: "/approvals", label: t("nav.approvals"), icon: ShieldCheck },
@@ -67,6 +70,7 @@ export function AppLayout() {
         </div>
       </aside>
       <main className="main">
+        {activeContext.data?.active && activeContext.data.context?.percentage !== null && <Link className="active-context-badge" to={`/usage?run=${activeContext.data.run_id}`}><span>Context</span><strong>{Math.round((activeContext.data.context?.percentage ?? 0) * 100)}%</strong>{(activeContext.data.context?.percentage ?? 0) >= .8 && <em>· Compacting</em>}</Link>}
         <Link className={`global-permission-badge ${permission.data?.mode ?? "standard"}`} to="/settings#security-permissions">{lang === "zh" ? `权限：${permission.data?.mode === "maximum" ? "最高" : permission.data?.mode === "safe" ? "安全" : "标准"}` : `Permissions: ${permission.data?.mode ?? "standard"}`}</Link>
         {/* 右上角语言切换（010-B 九）：简体中文 / English */}
         <div className="lang-switch" title={t("lang.label")}>

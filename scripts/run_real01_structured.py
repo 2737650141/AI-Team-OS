@@ -22,6 +22,7 @@ from app.gateway.structured_gen import generate_structured
 from app.memory.models import MemoryProposal
 from app.memory.policy import MemoryPolicy
 from app.runner import build_provider
+from app.usage.store import UsageStore
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -104,7 +105,14 @@ def main() -> int:
     events_init(DATA)
     provider = build_provider(load_settings(), DATA)
     budget = BudgetController(30_000, 0.50, max_calls=12)
-    gateway = ModelGateway(provider, budget, AuditLog(DATA / "audit.jsonl"), "real01-structured")
+    gateway = ModelGateway(
+        provider,
+        budget,
+        AuditLog(DATA / "audit.jsonl"),
+        "real01-structured",
+        run_id="real01-structured",
+        usage_store=UsageStore(DATA),
+    )
     results: dict[str, Any] = {}
     first_pass = 0
     total_repairs = 0

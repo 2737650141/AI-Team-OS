@@ -9,10 +9,12 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import AppSettings, load_settings
@@ -46,9 +48,41 @@ from app.security.permissions import (
     PermissionStore,
     RiskClass,
 )
+from app.usage.context import ContextPolicy
+from app.usage.store import UsageStore
 from app.voice.models import VoiceSettings
 
 app = FastAPI(title="AI Team OS", version="0.3.0")
+
+
+@app.middleware("http")
+async def desktop_session_auth(request: Request, call_next):
+    """Bind packaged API access to the current Tauri process, never to a static secret."""
+    expected = os.environ.get("AI_TEAM_OS_DESKTOP_SESSION_TOKEN")
+    origin = request.headers.get("origin", "")
+    allowed_origins = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
+    if expected and request.method == "OPTIONS" and origin in allowed_origins:
+        return JSONResponse(
+            status_code=204,
+            content=None,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Headers": "content-type,x-desktop-session",
+                "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+                "Access-Control-Allow-Private-Network": "true",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            },
+        )
+    presented = request.headers.get("x-desktop-session", "")
+    if expected and not secrets.compare_digest(presented, expected):
+        return JSONResponse(status_code=401, content={"detail": "desktop session required"})
+    response = await call_next(request)
+    if expected:
+        if origin in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = "Origin"
+    return response
 
 # 本地单用户开发模式：不实现用户认证，文档注明不可暴露公网（005 十七/二十）
 _settings_cache: AppSettings | None = None
@@ -69,6 +103,36 @@ def _settings() -> AppSettings:
 
 def _permission_store() -> PermissionStore:
     return PermissionStore(_data_dir())
+
+
+def _usage_store() -> UsageStore:
+    return UsageStore(_data_dir())
+
+
+def _usage_view(*, run_id: str | None = None, task_id: str | None = None, days: int | None = 30):
+    summary = _usage_store().summary(run_id=run_id, task_id=task_id, days=days)
+    current = summary.get("current_context")
+    current_tokens = current.get("context_tokens_after") if current else None
+    limit = current.get("context_limit") if current else None
+    role = current.get("role", "") if current else ""
+    policy = ContextPolicy()
+    threshold = policy.threshold_for(role)
+    threshold_tokens = int(limit * threshold) if limit else None
+    summary["context"] = {
+        "current_tokens": current_tokens,
+        "limit": limit,
+        "percentage": (current_tokens / limit) if current_tokens is not None and limit else None,
+        "status": policy.status(current_tokens, limit, role).value,
+        "compression_threshold": threshold,
+        "compression_threshold_tokens": threshold_tokens,
+        "until_compression": max(0, threshold_tokens - current_tokens)
+        if threshold_tokens is not None and current_tokens is not None
+        else None,
+        "source": current.get("usage_source") if current else "UNAVAILABLE",
+        "role": role or None,
+        "model": current.get("model_id") if current else None,
+    }
+    return summary
 
 
 def _computer_service():
@@ -193,14 +257,19 @@ def _voice_service():
 
 def _computer_error(exc: Exception) -> HTTPException:
     code = str(getattr(exc, "code", "computer_error"))
-    status = 409 if code in {
-        "inactive_session",
-        "expired_session",
-        "paused_session",
-        "action_after_stop",
-        "approval_required",
-        "invalid_task_state",
-    } else 400
+    status = (
+        409
+        if code
+        in {
+            "inactive_session",
+            "expired_session",
+            "paused_session",
+            "action_after_stop",
+            "approval_required",
+            "invalid_task_state",
+        }
+        else 400
+    )
     if code in {"task_not_found", "approval_not_found"}:
         status = 404
     return HTTPException(status_code=status, detail={"code": code, "message": str(exc)})
@@ -519,15 +588,11 @@ def personalization_signal(body: PersonalizationSignalBody) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
-        "proposal": proposal.model_dump(mode="json") if proposal is not None else None
-    }
+    return {"proposal": proposal.model_dump(mode="json") if proposal is not None else None}
 
 
 @app.post("/personalization/proposals/{proposal_id}/decision")
-def personalization_decision(
-    proposal_id: str, body: PersonalizationDecisionBody
-) -> dict[str, Any]:
+def personalization_decision(proposal_id: str, body: PersonalizationDecisionBody) -> dict[str, Any]:
     service = _adaptive()
     proposal = service.memory.store.get_proposal(proposal_id)
     if proposal is None:
@@ -655,22 +720,22 @@ def put_permission_mode(body: PermissionModeBody) -> dict[str, Any]:
 
 @app.post("/security/policy/explain")
 def explain_permission_policy(body: PolicyExplainBody) -> dict[str, Any]:
-    return _permission_store().explain(
-        action=body.action,
-        risk=body.risk,
-        read_only=body.read_only,
-        target=body.target,
-        task_explicit=body.task_explicit,
-    ).model_dump(mode="json")
+    return (
+        _permission_store()
+        .explain(
+            action=body.action,
+            risk=body.risk,
+            read_only=body.read_only,
+            target=body.target,
+            task_explicit=body.task_explicit,
+        )
+        .model_dump(mode="json")
+    )
 
 
 @app.get("/security/permission-history")
 def permission_history(limit: int = 50) -> dict[str, Any]:
-    return {
-        "actions": [
-            item.model_dump(mode="json") for item in _permission_store().recent(limit)
-        ]
-    }
+    return {"actions": [item.model_dump(mode="json") for item in _permission_store().recent(limit)]}
 
 
 @app.get("/tasks/{run_id}/evidence")
@@ -1008,6 +1073,54 @@ def tasks_list() -> list[dict[str, Any]]:
     return list_tasks(data_dir=_data_dir())
 
 
+class UsageRetentionBody(BaseModel):
+    retention: Literal["7", "30", "90", "forever"]
+
+
+@app.get("/usage")
+def usage(days: int = 30, task_id: str | None = None, run_id: str | None = None):
+    if days not in {1, 7, 30, 90}:
+        raise HTTPException(status_code=400, detail="days must be 1, 7, 30, or 90")
+    return _usage_view(run_id=run_id, task_id=task_id, days=days)
+
+
+@app.get("/tasks/{run_id}/usage")
+def task_usage(run_id: str):
+    return _usage_view(run_id=run_id, days=None)
+
+
+@app.get("/usage/active-context")
+def active_context():
+    active = next(
+        (
+            task
+            for task in list_tasks(_data_dir())
+            if task.get("status") not in {"completed", "failed", "cancelled"}
+        ),
+        None,
+    )
+    if not active:
+        return {"active": False, "context": None}
+    return {
+        "active": True,
+        "run_id": active["run_id"],
+        "context": _usage_view(run_id=active["run_id"], days=None)["context"],
+    }
+
+
+@app.get("/settings/usage")
+def usage_settings():
+    days = _usage_store().retention_days()
+    return {"retention": "forever" if days is None else str(days)}
+
+
+@app.put("/settings/usage")
+def update_usage_settings(body: UsageRetentionBody):
+    value = None if body.retention == "forever" else int(body.retention)
+    _usage_store().set_retention(value)
+    return {"retention": body.retention}
+
+
 @app.get("/agents")
 def agents() -> list[dict[str, Any]]:
     """Agent 目录（010 第二十二部分，本阶段只读）。"""
@@ -1173,9 +1286,7 @@ def task_events(run_id: str, after: int = 0) -> Any:
             # Older role calls that omitted request.run_id were safely stored
             # under task_id. Merge them for complete per-role UI telemetry.
             if task_report.task_id != run_id:
-                events.extend(
-                    store.list_events(run_id=task_report.task_id, after_sequence=last)
-                )
+                events.extend(store.list_events(run_id=task_report.task_id, after_sequence=last))
                 events.sort(key=lambda event: event.sequence)
             for ev in events:
                 yield _format_sse_frame(ev.sequence, ev.model_dump())
@@ -1217,9 +1328,7 @@ def task_events(run_id: str, after: int = 0) -> Any:
 
 
 class ComputerStartBody(BaseModel):
-    capability: Literal["observe_only", "low_risk_control", "ask_every_action"] = (
-        "observe_only"
-    )
+    capability: Literal["observe_only", "low_risk_control", "ask_every_action"] = "observe_only"
     ttl_minutes: int = Field(default=15, ge=1, le=60)
 
 
@@ -1228,9 +1337,7 @@ class ComputerTaskBody(BaseModel):
 
 
 class VisualObserveBody(BaseModel):
-    scope: Literal["full_screen", "monitor", "active_window", "window", "region"] = (
-        "active_window"
-    )
+    scope: Literal["full_screen", "monitor", "active_window", "window", "region"] = "active_window"
     monitor_id: str | None = None
     window_id: str | None = None
     region: dict[str, int] | None = None
@@ -1380,9 +1487,11 @@ def computer_visual_preview(observation_id: str) -> dict[str, Any]:
 @app.post("/computer/vision/ground")
 def computer_visual_ground(body: VisualGroundBody) -> dict[str, Any]:
     try:
-        return _computer_service().visual_ground(
-            body.observation_id, body.target
-        ).model_dump(mode="json")
+        return (
+            _computer_service()
+            .visual_ground(body.observation_id, body.target)
+            .model_dump(mode="json")
+        )
     except Exception as exc:
         raise _computer_error(exc) from exc
 
@@ -1390,9 +1499,11 @@ def computer_visual_ground(body: VisualGroundBody) -> dict[str, Any]:
 @app.post("/computer/vision/ask")
 def computer_visual_ask(body: ScreenQuestionBody) -> dict[str, Any]:
     try:
-        return _computer_service().visual_ask(
-            body.question, body.observation_id
-        ).model_dump(mode="json")
+        return (
+            _computer_service()
+            .visual_ask(body.question, body.observation_id)
+            .model_dump(mode="json")
+        )
     except Exception as exc:
         raise _computer_error(exc) from exc
 
@@ -1400,9 +1511,11 @@ def computer_visual_ask(body: ScreenQuestionBody) -> dict[str, Any]:
 @app.post("/computer/vision/actions")
 def computer_visual_action(body: VisualActionBody) -> dict[str, Any]:
     try:
-        return _computer_service().visual_act(
-            body.grounding_id, approved=body.approved
-        ).model_dump(mode="json")
+        return (
+            _computer_service()
+            .visual_act(body.grounding_id, approved=body.approved)
+            .model_dump(mode="json")
+        )
     except Exception as exc:
         raise _computer_error(exc) from exc
 
@@ -1478,6 +1591,7 @@ class CustomProviderBody(BaseModel):
     is_default: bool = False
     local_provider: bool = False
     test_provider: bool = False
+    context_window: int | None = Field(default=None, gt=0, le=10_000_000)
 
 
 class CustomCredentialBody(BaseModel):
@@ -1514,6 +1628,19 @@ def _custom_provider_info(provider) -> dict[str, Any]:
     payload["storage"] = _secret_resolver().store_mode(secret_key)
     payload["model_discovery_status"] = payload.pop("discovery_status")
     payload["model_count"] = len(provider.discovered_models)
+    payload["context_window_source"] = "USER_CONFIGURED" if provider.context_window else None
+    if provider.context_window and provider.default_model:
+        from app.usage.models import CapabilitySource, ModelCapability
+
+        _usage_store().set_capability(
+            ModelCapability(
+                provider_id=provider.provider_id,
+                model_id=provider.default_model,
+                context_window=provider.context_window,
+                usage_reporting=True,
+                source=CapabilitySource.USER_CONFIGURED,
+            )
+        )
     return payload
 
 
@@ -1863,6 +1990,8 @@ def test_custom_model(provider_id: str, body: CustomModelTestBody | None = None)
         budget=BudgetController(512, 0.05, max_calls=3),
         audit=AuditLog(_data_dir() / "audit.jsonl"),
         task_id="real01-model-test",
+        run_id="real01-model-test",
+        usage_store=_usage_store(),
     )
     request = ModelRequest(
         request_id=uuid.uuid4().hex[:16],
@@ -1881,7 +2010,7 @@ def test_custom_model(provider_id: str, body: CustomModelTestBody | None = None)
         response_schema={"status": {"type": "str"}, "number": {"type": "int"}},
         max_output_tokens=64,
         timeout_seconds=30,
-        metadata={"acceptance": "REAL-01-A"},
+        metadata={"acceptance": "REAL-01-A", "provider_id": provider_id},
     )
     telemetry: dict[str, Any] = {}
     try:

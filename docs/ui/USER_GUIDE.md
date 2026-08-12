@@ -80,3 +80,9 @@ scripts\start_ai_team_os.ps1
 | 页面打不开 | 确认后端 8000 与前端 5173 已启动（见第 1 步） |
 | 任务报错 | 页面显示错误 ID/原因；详细日志见后端终端输出 |
 | 想换 Key | Settings → Connections → 输入新 Key → Save（旧 Key 从本机移除，但**不会**在 Provider 后台吊销） |
+# Usage & Context
+
+Open **Usage** from the main navigation to see context-window pressure, provider-reported or
+estimated tokens, cache/reasoning breakdowns, model/agent/provider totals, cost availability, and
+the call timeline. `≈` means estimated; `Unavailable` means the system deliberately did not invent
+a value. Set data retention under **Settings → Usage history**.

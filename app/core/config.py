@@ -60,6 +60,13 @@ PRICING: list[ModelPrice] = [
         output_price_per_million=2.0,
         effective_from="2026-01-01",
     ),
+    ModelPrice(
+        provider="DeepSeek Official",
+        model="deepseek-v4-flash",
+        input_price_per_million=0.14,
+        output_price_per_million=0.28,
+        effective_from="2026-04-24",
+    ),
 ]
 
 

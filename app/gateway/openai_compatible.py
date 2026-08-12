@@ -330,6 +330,8 @@ class OpenAICompatibleProvider:
                 )
 
     def _parse_success(self, request: ModelRequest, resp: httpx.Response) -> ModelResponse:
+        from app.usage.reconciler import UsageReconciler
+
         try:
             data = resp.json()
         except (json.JSONDecodeError, ValueError):
@@ -347,22 +349,27 @@ class OpenAICompatibleProvider:
             finish_reason = choices[0].get("finish_reason")
             usage = data.get("usage")
             if usage:
-                input_tokens = int(usage.get("prompt_tokens", 0))
-                output_tokens = int(usage.get("completion_tokens", 0))
-                total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens))
-                cached_tokens = usage.get("prompt_cache_hit_tokens")
-                if cached_tokens is None:
-                    details = usage.get("prompt_tokens_details") or {}
-                    cached_tokens = details.get("cached_tokens")
-                cached_tokens = int(cached_tokens) if cached_tokens is not None else None
+                normalized = (
+                    UsageReconciler.deepseek_usage(usage)
+                    if self.provider_name.lower() == "deepseek"
+                    else UsageReconciler.openai_usage(usage)
+                )
+                input_tokens = normalized["input_tokens"]
+                output_tokens = normalized["output_tokens"]
+                total_tokens = normalized["total_tokens"]
+                cached_tokens = normalized["cached_input_tokens"]
+                reasoning_tokens = normalized["reasoning_tokens"]
                 usage_available = True
+                usage_source = "REPORTED"
             else:
                 # usage 缺失：按估算记账（10.2），防止预算绕过；不伪造价格
                 input_tokens = max(1, sum(len(m.get("content", "")) for m in request.messages) // 4)
                 output_tokens = request.max_output_tokens or 0
                 total_tokens = input_tokens + output_tokens
                 cached_tokens = None
+                reasoning_tokens = None
                 usage_available = False
+                usage_source = "ESTIMATED"
         except (KeyError, TypeError, ValueError) as exc:
             raise ProviderError(
                 ProviderErrorCode.MALFORMED_RESPONSE,
@@ -379,6 +386,9 @@ class OpenAICompatibleProvider:
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             cached_tokens=cached_tokens,
+            cached_input_tokens=cached_tokens,
+            reasoning_tokens=reasoning_tokens,
+            usage_source=usage_source,
             usage_available=usage_available,
             estimated_cost=None,  # 价格由价格表计算（10.3）
             latency_ms=0,

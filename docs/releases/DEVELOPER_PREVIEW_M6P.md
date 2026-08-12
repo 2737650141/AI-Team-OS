@@ -8,3 +8,12 @@
 - Password/secret extraction, UAC bypass, safety-kernel changes and STOP bypass remain blocked.
 - Task details retain the start-mode snapshot while live enforcement follows a newer user change.
 - Automatic action history records decision evidence without storing sensitive data.
+# M6-P2 Desktop Release Completion and Usage Observatory
+
+- Added Tauri 2 Windows shell, PyInstaller sidecar, current-user NSIS installer, single instance,
+  tray lifecycle, ephemeral loopback port, and per-launch desktop authentication.
+- Added provider-reported/estimated/unavailable token accounting, context window policy,
+  structured compaction checkpoints, usage retention, breakdowns, timeline, and `/usage` UI.
+- Verified live DeepSeek V4 Flash usage in the packaged application.
+- Final installer: `artifacts/release/AI-Team-OS-x64-Setup.exe`.
+- Clean-machine validation remains required before declaring M6-P complete.

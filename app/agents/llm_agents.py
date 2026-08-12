@@ -88,6 +88,7 @@ def _new_request(
     messages: list[dict[str, str]],
     schema: dict[str, Any],
     settings: AppSettings,
+    critical_context: dict[str, Any] | None = None,
 ) -> ModelRequest:
     return ModelRequest(
         request_id=uuid.uuid4().hex[:16],
@@ -101,8 +102,38 @@ def _new_request(
         temperature=settings.model.temperature,
         max_output_tokens=settings.model.max_output_tokens,
         timeout_seconds=settings.model.timeout_seconds,
-        metadata={"prompt_id": "", "prompt_version": ""},
+        metadata={
+            "prompt_id": "",
+            "prompt_version": "",
+            "critical_context": critical_context or {},
+        },
     )
+
+
+def _critical_context(state: TaskState, current_task: str) -> dict[str, Any]:
+    return {
+        "user_goal": state.clarified_goal or state.user_goal,
+        "constraints": [
+            f"token_budget={state.token_budget}",
+            f"cost_budget={state.cost_budget}",
+        ],
+        "decisions": [f"permission_mode={state.permission_mode}"],
+        "current_task": current_task,
+        "open_issues": [
+            issue.message for review in state.review_history[-2:] for issue in review.issues
+        ],
+        "important_ids": [state.task_id, state.run_id or ""],
+        "relevant_memory_refs": [str(item.get("memory_id", "")) for item in state.memory_refs],
+        "test_failures": [
+            str(subtask.execution_result.metadata.get("test_failure"))
+            for subtask in state.subtasks
+            if subtask.execution_result and subtask.execution_result.metadata.get("test_failure")
+        ],
+        "reviewer_requirements": [
+            target for review in state.review_history[-2:] for target in review.rework_targets
+        ],
+        "approval_state": "pending" if state.pending_approval_id else "none",
+    }
 
 
 class LLMPlanner:
@@ -221,6 +252,7 @@ class LLMPlanner:
             ],
             schema=PLAN_SCHEMA,
             settings=self._settings,
+            critical_context=_critical_context(state, "create plan"),
         )
         try:
             data = generate_structured(
@@ -434,6 +466,11 @@ class LLMResearcher:
             ],
             schema=RESEARCH_SCHEMA,
             settings=self._settings,
+            critical_context={
+                "user_goal": subtask.objective,
+                "current_task": subtask.title,
+                "constraints": list(subtask.acceptance_criteria),
+            },
         )
         data = generate_structured(
             self._gw,
@@ -514,6 +551,11 @@ class LLMResearcher:
             ],
             schema=TOOL_PLAN_SCHEMA,
             settings=self._settings,
+            critical_context={
+                "user_goal": subtask.objective,
+                "current_task": "research tools",
+                "constraints": list(subtask.acceptance_criteria),
+            },
         )
         data = generate_structured(self._gw, request, TOOL_PLAN_SCHEMA, self._settings)
         if not isinstance(data, dict):
@@ -652,6 +694,14 @@ class LLMExecutor(DeterministicFakeExecutor):
             ],
             schema=PATCH_SCHEMA,
             settings=self._settings,
+            critical_context={
+                "user_goal": subtask.objective,
+                "current_task": "create patch",
+                "constraints": list(subtask.acceptance_criteria),
+                "files_being_edited": [
+                    str(item["path"]) for item in evidence if item.get("path")
+                ],
+            },
         )
 
         def validate_patch(data: dict[str, Any]) -> PatchProposal:
@@ -795,6 +845,7 @@ class LLMReviewer:
             ],
             schema=REVIEW_SCHEMA,
             settings=self._settings,
+            critical_context=_critical_context(state, f"review {subtask.title}"),
         )
         data = generate_structured(
             self._gw,
@@ -836,9 +887,7 @@ class LLMReviewer:
                 retained = [
                     issue
                     for issue in result.issues
-                    if not any(
-                        marker in issue.message.lower() for marker in prompt_window_markers
-                    )
+                    if not any(marker in issue.message.lower() for marker in prompt_window_markers)
                 ]
                 if not retained:
                     return ReviewResult(
@@ -884,6 +933,7 @@ class LLMSupervisorDecision:
                 ],
                 schema=SUPERVISOR_SCHEMA,
                 settings=self._settings,
+                critical_context=_critical_context(state, "compose final summary"),
             )
             return generate_structured(self._gw, request, SUPERVISOR_SCHEMA, self._settings)
         except ProviderError:

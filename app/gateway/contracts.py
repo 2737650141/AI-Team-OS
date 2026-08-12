@@ -35,10 +35,15 @@ class ModelResponse(BaseModel):
     model: str
     raw_text: str | None = None  # 仅受控调试模式短期保留
     structured_output: dict[str, Any] | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
     cached_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    other_tokens: int | None = None
+    usage_source: str = "UNAVAILABLE"
     usage_available: bool = True
     estimated_cost: float | None = None
     latency_ms: int = 0

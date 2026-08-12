@@ -43,6 +43,8 @@ body {
 .global-permission-badge.maximum, .permission-badge.maximum { border-color: #8b5cf6; color: #8b5cf6; }
 .global-permission-badge.standard, .permission-badge.standard { border-color: #2dd4bf; color: #0f766e; }
 .global-permission-badge.safe, .permission-badge.safe { border-color: #60a5fa; color: #2563eb; }
+.active-context-badge { position: fixed; right: 360px; top: 13px; z-index: 20; display: flex; gap: 6px; align-items: center; padding: 7px 12px; border: 1px solid #334155; border-radius: 999px; background: var(--panel); color: var(--text); text-decoration: none; font-size: .78rem; }
+.active-context-badge em { color: var(--yellow); font-style: normal; }
 .permission-settings-panel { margin-top: 24px; }
 .permission-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
 .permission-card { display: flex; flex-direction: column; gap: 11px; padding: 18px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg2); }
@@ -582,6 +584,61 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
   .global-permission-badge { right: 16px; top: 54px; }
   .permission-history-list > div { grid-template-columns: 80px 80px 1fr; }
   .permission-history-list small { grid-column: 1 / -1; }
+}
+
+/* M6-P2 Token & Context Observatory */
+.usage-page { max-width: 1240px; }
+.usage-header { display: flex; justify-content: space-between; gap: 24px; align-items: end; padding: 8px 2px; }
+.usage-header h1 { font-size: 28px; letter-spacing: -.03em; }
+.usage-header p { color: var(--muted); margin: 5px 0 0; }
+.usage-range { display: flex; gap: 5px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); }
+.usage-range button { border: 0; border-radius: 7px; padding: 7px 10px; background: transparent; color: var(--muted); cursor: pointer; }
+.usage-range button.on { color: #dbeafe; background: #1d4ed8; }
+.usage-empty { min-height: 430px; align-items: center; justify-content: center; text-align: center; background: radial-gradient(circle at 50% 35%, rgb(37 99 235 / .13), transparent 38%), var(--panel); }
+.usage-empty p { color: var(--muted); max-width: 420px; }
+.usage-orb { width: 52px; height: 52px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #93c5fd, #2563eb 55%, #172554); box-shadow: 0 0 36px rgb(59 130 246 / .4); }
+.usage-top-grid { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; }
+.context-card { min-height: 230px; background: linear-gradient(150deg, rgb(37 99 235 / .08), transparent 55%), var(--panel); }
+.context-title, .context-status, .context-foot { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.context-title > strong { font-size: 18px; }
+.context-status { margin-top: 28px; color: var(--muted); }
+.context-status b { color: var(--text); font-size: 20px; }
+.context-track { position: relative; height: 10px; overflow: visible; border-radius: 999px; background: #0f172a; }
+.context-track i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #2563eb, #38bdf8); box-shadow: 0 0 18px rgb(56 189 248 / .3); }
+.context-track em { position: absolute; top: -4px; width: 2px; height: 18px; background: var(--yellow); }
+.context-foot { margin-top: 8px; color: var(--muted); font-size: 12px; }
+.context-card > small { margin-top: auto; color: #64748b; letter-spacing: .04em; }
+.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.metric-grid > div { padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: rgb(15 23 42 / .46); }
+.metric-grid span { display: block; color: var(--muted); font-size: 11px; }
+.metric-grid strong { display: block; margin-top: 5px; font-size: 17px; }
+.composition-bar { display: flex; height: 14px; overflow: hidden; border-radius: 999px; background: #0f172a; }
+.composition-bar i { min-width: 1px; }
+.part-input { background: #3b82f6; }.part-output { background: #22c55e; }.part-reasoning { background: #a855f7; }.part-cached { background: #06b6d4; }.part-other { background: #f59e0b; }
+.composition-details { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.composition-details > div { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.composition-details strong { grid-column: 2; color: var(--text); font-size: 15px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; }
+.usage-breakdowns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.usage-breakdown > div { display: grid; grid-template-columns: 90px minmax(50px, 1fr) 54px 42px; gap: 8px; align-items: center; font-size: 11px; }
+.usage-breakdown > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-breakdown i { height: 5px; border-radius: 999px; background: #0f172a; overflow: hidden; }
+.usage-breakdown em { display: block; height: 100%; background: #3b82f6; }
+.usage-breakdown small { color: var(--muted); }
+.usage-timeline > div { display: grid; grid-template-columns: 90px 110px 1fr 70px 80px; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.usage-timeline time, .usage-timeline span, .usage-timeline small { color: var(--muted); }
+.task-usage-link { flex-direction: row; justify-content: space-between; align-items: center; text-decoration: none; color: var(--text); border-color: #1d4ed8; }
+.task-usage-link > div:last-child { display: flex; gap: 16px; align-items: center; color: var(--muted); }
+.task-usage-link > div:last-child strong { color: #93c5fd; }
+
+@media (max-width: 900px) {
+  .usage-top-grid, .usage-breakdowns { grid-template-columns: 1fr; }
+  .composition-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .usage-timeline > div { grid-template-columns: 70px 90px 1fr; }
+  .usage-timeline b, .usage-timeline small { grid-column: auto; }
+  .active-context-badge { display: none; }
+  .task-usage-link { align-items: flex-start; }
+  .task-usage-link > div:last-child { align-items: flex-end; flex-direction: column; gap: 2px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

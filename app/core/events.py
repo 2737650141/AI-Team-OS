@@ -63,6 +63,8 @@ _EVENT_TYPES = {
     "visual_action_verified",
     "visual_action_failed",
     "permission_mode_changed",
+    "context_compaction_started",
+    "context_compaction_completed",
 }
 
 

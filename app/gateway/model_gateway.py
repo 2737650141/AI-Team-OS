@@ -81,12 +81,14 @@ class ModelGateway:
         audit: AuditLog,
         task_id: str,
         run_id: str | None = None,
+        usage_store: object | None = None,
     ) -> None:
         self._provider: Any = provider
         self._budget = budget
         self._audit = audit
         self._task_id = task_id
         self._run_id = run_id
+        self._usage_store = usage_store
 
     @property
     def budget(self) -> BudgetSnapshot:
@@ -172,6 +174,86 @@ class ModelGateway:
         attempt = 0
         from app.core.events import emit as event_emit
 
+        compression: dict[str, Any] = {}
+        capability = None
+        if self._usage_store is not None:
+            capability = self._usage_store.capability(
+                str(request.metadata.get("provider_id") or provider_name), request.model
+            )
+            if capability is None:
+                from app.usage.models import verified_model_profile
+
+                capability = verified_model_profile(provider_name, request.model)
+        critical = request.metadata.get("critical_context")
+        if capability and capability.context_window and critical:
+            from app.usage.context import ContextCompactor, ContextPolicy
+
+            policy = ContextPolicy()
+            if est.estimated_input_tokens >= int(
+                capability.context_window * policy.threshold_for(request.role_type)
+            ):
+                event_emit(
+                    task_id=self._task_id,
+                    run_id=request.run_id or self._run_id,
+                    event_type="context_compaction_started",
+                    actor_type=request.role_type,
+                    actor_id=request.agent_id,
+                    summary="Context compaction started",
+                    payload_safe={
+                        "before_tokens": est.estimated_input_tokens,
+                        "role": request.role_type,
+                        "model": request.model,
+                    },
+                )
+                checkpoint, compression = ContextCompactor(policy).compact(
+                    task_id=request.task_id,
+                    run_id=request.run_id,
+                    role=request.role_type,
+                    model=request.model,
+                    current_tokens=est.estimated_input_tokens,
+                    context_limit=capability.context_window,
+                    critical=critical,
+                )
+                self._usage_store.record_checkpoint(
+                    checkpoint, compression, role=request.role_type, model=request.model
+                )
+                compact_payload = checkpoint.model_dump(
+                    mode="json", exclude={"checkpoint_id", "created_at"}
+                )
+                request = request.model_copy(
+                    update={
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Continue from this governed structured checkpoint. "
+                                    "Do not invent omitted history."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": json.dumps(compact_payload, ensure_ascii=False),
+                            },
+                        ]
+                    }
+                )
+                event_emit(
+                    task_id=self._task_id,
+                    run_id=request.run_id or self._run_id,
+                    event_type="context_compaction_completed",
+                    actor_type=request.role_type,
+                    actor_id=request.agent_id,
+                    summary="Context compacted",
+                    payload_safe={
+                        "before_tokens": compression["before"],
+                        "after_tokens": compression["after"],
+                        "freed_tokens": compression["freed"],
+                        "role": compression["role"],
+                        "model": compression["model"],
+                        "duration_ms": compression["duration_ms"],
+                    },
+                )
+
         event_emit(
             task_id=self._task_id,
             run_id=request.run_id or self._run_id,
@@ -228,14 +310,17 @@ class ModelGateway:
         # 实际结算（10.2）：按 Provider 返回的 Usage 记账，未使用预留自然释放；
         # 价格未知（estimated_cost=None）时按价格表计算，仍未知则记 0 不伪造费用
         cost = resp.estimated_cost
+        cost_source = "PROVIDER_REPORTED" if cost is not None else "UNAVAILABLE"
+        cost_input = None
+        cost_output = None
         if cost is None:
             price = lookup_price(resp.provider, resp.model)
             if price is not None:
-                cost = (
-                    resp.input_tokens / 1e6 * price.input_price_per_million
-                    + resp.output_tokens / 1e6 * price.output_price_per_million
-                )
-        self._budget.record(resp.input_tokens, resp.output_tokens, cost or 0.0)
+                cost_input = (resp.input_tokens or 0) / 1e6 * price.input_price_per_million
+                cost_output = (resp.output_tokens or 0) / 1e6 * price.output_price_per_million
+                cost = cost_input + cost_output
+                cost_source = "PRICE_TABLE"
+        self._budget.record(resp.input_tokens or 0, resp.output_tokens or 0, cost or 0.0)
         prompt_hash = hashlib.sha256(
             json.dumps(request.messages, ensure_ascii=False, default=str).encode()
         ).hexdigest()[:16]
@@ -281,6 +366,31 @@ class ModelGateway:
                 "real_call": resp.provider not in {"fake", "legacy", "fake_model"},
             },
         )
+        if self._usage_store is not None:
+            from app.usage.models import CostSource
+            from app.usage.reconciler import UsageReconciler
+
+            capability = self._usage_store.capability(
+                str(request.metadata.get("provider_id") or resp.provider), resp.model
+            )
+            if capability is None:
+                from app.usage.models import verified_model_profile
+
+                capability = verified_model_profile(resp.provider, resp.model)
+                if capability is not None:
+                    self._usage_store.set_capability(capability)
+            normalized = UsageReconciler.response(
+                request,
+                resp,
+                est,
+                cost_total=cost,
+                cost_input=cost_input,
+                cost_output=cost_output,
+                cost_source=CostSource(cost_source),
+                context_limit=capability.context_window if capability else None,
+                compression=compression,
+            )
+            self._usage_store.record(normalized)
         return resp
 
     def _call_provider(self, request: ModelRequest, attempt: int) -> ModelResponse:
@@ -299,6 +409,8 @@ class ModelGateway:
                     raw_text=getattr(r, "text", getattr(r, "raw_text", "")),
                     input_tokens=getattr(r, "input_tokens", 0),
                     output_tokens=getattr(r, "output_tokens", 0),
+                    total_tokens=getattr(r, "input_tokens", 0) + getattr(r, "output_tokens", 0),
+                    usage_source="ESTIMATED",
                     estimated_cost=getattr(r, "cost", getattr(r, "estimated_cost", None)),
                     retry_count=attempt,
                 )

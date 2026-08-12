@@ -37,6 +37,7 @@ export function TaskDetail() {
   });
   const diff = useQuery({ queryKey: ["diff", runId, refresh], queryFn: () => api.diff(runId) });
   const memory = useQuery({ queryKey: ["task-memory", runId], queryFn: () => api.taskMemory(runId) });
+  const usage = useQuery({ queryKey: ["task-usage", runId], queryFn: () => api.taskUsage(runId), refetchInterval: 4000 });
 
   if (task.isLoading) return <div className="page">{t("task.loading")}</div>;
   if (task.isError) return <div className="page"><div className="card"><p className="error">{t("task.taskFailed")} · {(task.error as Error).message}</p><Link to="/tasks">{t("task.backToTasks")}</Link></div></div>;
@@ -64,6 +65,8 @@ export function TaskDetail() {
           {connected && <span className="live">● {t("task.live")}</span>}
         </div>
       </div>
+
+      <Link className="card task-usage-link" to={`/usage?run=${runId}`}><div><span className="eyebrow">Usage</span><h2>{lang === "zh" ? "用量与上下文" : "Usage & Context"}</h2></div><div><strong>{usage.data?.total_tokens === null || usage.data?.total_tokens === undefined ? "–" : `${nfTask.format(usage.data.total_tokens)} tokens`}</strong><span>{usage.data?.requests ?? 0} requests</span><span>{usage.data?.cost_total === null || usage.data?.cost_total === undefined ? (lang === "zh" ? "费用不可用" : "Cost unavailable") : `$${usage.data.cost_total.toFixed(4)}`}</span></div></Link>
 
       <section className="card supervisor-presence">
         <div className="presence-head"><div><span className="eyebrow">{t("task.supervisor")}</span><h2>{t("task.supervisorPresence")}</h2></div><StatusBadge status={supervisorStatus} /></div>
@@ -128,6 +131,8 @@ export function TaskDetail() {
     </div>
   );
 }
+
+const nfTask = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 
 function productText(value: string | null | undefined, lang: "zh" | "en") {
   if (!value) return null;

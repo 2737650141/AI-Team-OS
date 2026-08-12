@@ -19,6 +19,7 @@ dependencies = [
     "mss>=10.0,<11.0; sys_platform == 'win32'",
     "opencv-python-headless>=4.10,<5.0",
     "sounddevice>=0.5.5,<0.6; sys_platform == 'win32'",
+    "tiktoken>=0.11,<1.0",
     "pywin32>=310; sys_platform == 'win32'",
     "pypdf>=4.0,<6.0",  # PDF 只读文本提取（007 3.1：许可证 BSD-3-Clause，纯 Python，不执行 PDF 脚本）
     "pywinauto==0.6.9; sys_platform == 'win32'",  # M5-A：Windows UI Automation / Accessibility
@@ -40,6 +41,9 @@ dev = [
 voice-local = [
     "onnxruntime>=1.22,<2.0; sys_platform == 'win32'",
     "openwakeword==0.6.0; sys_platform == 'win32'",
+]
+desktop-build = [
+    "pyinstaller>=6.15,<7.0",
 ]
 
 [project.scripts]

@@ -257,6 +257,9 @@ def test_app_has_no_network_imports() -> None:
         root / "core" / "ssrf.py",
         root / "tools" / "web_fetch.py",
         root / "tools" / "github_client.py",
+        # Packaged desktop sidecar binds an ephemeral loopback-only port. It is never
+        # imported by the default runtime path and cannot bind a public interface.
+        root / "desktop_sidecar.py",
     }
     banned = re.compile(
         r"^\s*(import|from)\s+(requests|urllib|http\.client|socket|aiohttp)\b", re.M

@@ -126,6 +126,8 @@ export function Settings() {
 
       <PermissionSettingsPanel />
 
+      <UsageHistoryPanel />
+
       <ModelRoutingPanel />
 
       <VoiceSettingsPanel />
@@ -144,6 +146,22 @@ export function Settings() {
       </p>
     </div>
   );
+}
+
+function UsageHistoryPanel() {
+  const { lang } = useI18n();
+  const zh = lang === "zh";
+  const qc = useQueryClient();
+  const query = useQuery({ queryKey: ["usage-settings"], queryFn: api.usageSettings });
+  const mutation = useMutation({
+    mutationFn: api.saveUsageSettings,
+    onSuccess: (data) => qc.setQueryData(["usage-settings"], data),
+  });
+  const retention = query.data?.retention ?? "30";
+  return <section className="card settings-section">
+    <div className="section-heading"><div><span className="eyebrow">Token & Context Observatory</span><h2>{zh ? "用量历史" : "Usage history"}</h2><p className="muted">{zh ? "仅保存数字遥测，不保存提示词、回复、密钥或隐藏推理。" : "Stores numeric telemetry only—never prompts, responses, secrets, or hidden reasoning."}</p></div><Link className="btn" to="/usage">{zh ? "查看用量" : "Open Usage"}</Link></div>
+    <label className="field">{zh ? "保留期限" : "Retention"}<select value={retention} disabled={mutation.isPending} onChange={(event) => mutation.mutate(event.target.value as "7" | "30" | "90" | "forever")}><option value="7">7 {zh ? "天" : "days"}</option><option value="30">30 {zh ? "天" : "days"}</option><option value="90">90 {zh ? "天" : "days"}</option><option value="forever">{zh ? "永久" : "Forever"}</option></select></label>
+  </section>;
 }
 
 function VisionConnectionPanel() {
@@ -192,6 +210,7 @@ function CustomProvidersPanel({ providers }: { providers: CustomProvider[] }) {
   const [storage, setStorage] = useState("session");
   const [modelsEndpoint, setModelsEndpoint] = useState("/models");
   const [defaultModel, setDefaultModel] = useState("");
+  const [contextWindow, setContextWindow] = useState("");
   const [testProvider, setTestProvider] = useState(false);
   const [msg, setMsg] = useState("");
   const invalidate = () => qc.invalidateQueries({ queryKey: ["custom-providers"] });
@@ -203,6 +222,7 @@ function CustomProvidersPanel({ providers }: { providers: CustomProvider[] }) {
         models_endpoint: modelsEndpoint,
         chat_endpoint: "/chat/completions",
         default_model: defaultModel,
+        context_window: contextWindow ? Number(contextWindow) : null,
         role_models: {},
         is_default: providers.length === 0,
         test_provider: testProvider,
@@ -216,7 +236,7 @@ function CustomProvidersPanel({ providers }: { providers: CustomProvider[] }) {
     onError: (error) => setMsg(error instanceof Error ? error.message : String(error)),
   });
   return <section className="card custom-providers-section"><div className="section-heading"><div><span className="eyebrow">OpenAI Compatible · 0..N</span><h2>{zh ? "自定义 API Provider" : "Custom API Providers"}</h2><p className="muted">{zh ? "添加第三方中转或兼容网关，自动发现模型并为不同角色分配路由。" : "Add compatible gateways, discover models, and route roles independently."}</p></div><button className="btn btn-primary" onClick={() => setAdding((value) => !value)}>+ {zh ? "添加 Provider" : "Add Provider"}</button></div>
-    {adding && <div className="custom-provider-form"><label className="field">{zh ? "Provider 名称" : "Provider name"}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">Base URL<input value={baseUrl} disabled={testProvider} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://gateway.example.com/v1" /></label><label className="field">API Key<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label><label className="field">Models endpoint<input value={modelsEndpoint} onChange={(event) => setModelsEndpoint(event.target.value)} /></label><label className="field">{zh ? "默认模型（可稍后发现）" : "Default model (discover later)"}<input value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} /></label><label className="field">{zh ? "凭据存储" : "Credential storage"}<select value={storage} onChange={(event) => setStorage(event.target.value)}><option value="session">{zh ? "仅本次会话" : "Session only"}</option><option value="secure">{zh ? "保存到此电脑" : "Save on this PC"}</option></select></label><label className="check-row"><input type="checkbox" checked={testProvider} onChange={(event) => setTestProvider(event.target.checked)} />{zh ? "隔离测试 Provider（不触网）" : "Isolated test provider (no network)"}</label><div className="provider-actions"><button className="btn btn-primary" disabled={create.isPending || !name || (!baseUrl && !testProvider)} onClick={() => create.mutate()}>{zh ? "保存" : "Save"}</button><button className="btn" onClick={() => setAdding(false)}>{zh ? "取消" : "Cancel"}</button></div></div>}
+    {adding && <div className="custom-provider-form"><label className="field">{zh ? "Provider 名称" : "Provider name"}<input value={name} onChange={(event) => setName(event.target.value)} /></label><label className="field">Base URL<input value={baseUrl} disabled={testProvider} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://gateway.example.com/v1" /></label><label className="field">API Key<input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></label><label className="field">Models endpoint<input value={modelsEndpoint} onChange={(event) => setModelsEndpoint(event.target.value)} /></label><label className="field">{zh ? "默认模型（可稍后发现）" : "Default model (discover later)"}<input value={defaultModel} onChange={(event) => setDefaultModel(event.target.value)} /></label><label className="field">{zh ? "上下文窗口（高级）" : "Context Window (Advanced)"}<input type="number" min="1" value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="128000" /><small>{zh ? "手动值标记为 User Configured" : "Manual values are labeled User Configured"}</small></label><label className="field">{zh ? "凭据存储" : "Credential storage"}<select value={storage} onChange={(event) => setStorage(event.target.value)}><option value="session">{zh ? "仅本次会话" : "Session only"}</option><option value="secure">{zh ? "保存到此电脑" : "Save on this PC"}</option></select></label><label className="check-row"><input type="checkbox" checked={testProvider} onChange={(event) => setTestProvider(event.target.checked)} />{zh ? "隔离测试 Provider（不触网）" : "Isolated test provider (no network)"}</label><div className="provider-actions"><button className="btn btn-primary" disabled={create.isPending || !name || (!baseUrl && !testProvider)} onClick={() => create.mutate()}>{zh ? "保存" : "Save"}</button><button className="btn" onClick={() => setAdding(false)}>{zh ? "取消" : "Cancel"}</button></div></div>}
     {providers.length === 0 && !adding ? <p className="muted">{zh ? "还没有自定义 Provider。" : "No custom providers yet."}</p> : <div className="custom-provider-list">{providers.map((provider) => <CustomProviderCard key={provider.provider_id} provider={provider} zh={zh} onChanged={invalidate} />)}</div>}
     {msg && <p role="status" className="msg">{msg}</p>}
   </section>;
@@ -229,6 +249,7 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
   const [apiKey, setApiKey] = useState("");
   const [credentialStorage, setCredentialStorage] = useState("secure");
   const [defaultModel, setDefaultModel] = useState(provider.default_model);
+  const [contextWindow, setContextWindow] = useState(provider.context_window ? String(provider.context_window) : "");
   const [roles, setRoles] = useState(provider.role_models);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const action = useMutation({
@@ -240,7 +261,7 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
       if (kind === "credential") return api.saveCustomCredential(provider.provider_id, apiKey, credentialStorage);
       if (kind === "remove") return api.deleteCustomCredential(provider.provider_id);
       return api.updateCustomProvider(provider.provider_id, {
-        provider_name: provider.provider_name, base_url: provider.base_url, models_endpoint: provider.models_endpoint, chat_endpoint: provider.chat_endpoint, api_mode: "openai_compatible", default_model: defaultModel, role_models: roles, is_default: provider.is_default, local_provider: provider.local_provider, test_provider: provider.test_provider,
+        provider_name: provider.provider_name, base_url: provider.base_url, models_endpoint: provider.models_endpoint, chat_endpoint: provider.chat_endpoint, api_mode: "openai_compatible", default_model: defaultModel, role_models: roles, is_default: provider.is_default, local_provider: provider.local_provider, test_provider: provider.test_provider, context_window: contextWindow ? Number(contextWindow) : null,
       });
     },
     onSuccess: (result, kind) => { setApiKey(""); setMsg(kind === "discover" || kind === "refresh" ? `${(result as { count?: number }).count ?? 0} ${zh ? "个模型" : "models"}` : kind === "model" ? `${zh ? "真实推理通过" : "Real inference passed"} · ${(result as { total_tokens?: number }).total_tokens ?? "—"} tokens · ${(result as { latency_ms?: number }).latency_ms ?? "—"}ms` : (zh ? "操作成功" : "Done")); onChanged(); },
@@ -281,6 +302,7 @@ function CustomProviderCard({ provider, zh, onChanged }: { provider: CustomProvi
             {provider.configured && <button className="btn btn-danger" onClick={() => action.mutate("remove")}>{zh ? "移除凭据" : "Remove credential"}</button>}
           </div>
           <label className="field">{zh ? "搜索模型" : "Search models"}<input value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <label className="field">{zh ? "上下文窗口（高级）" : "Context Window (Advanced)"}<input type="number" min="1" value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="128000" /><small>{provider.context_window_source === "USER_CONFIGURED" ? "User Configured" : (zh ? "未知时留空" : "Leave blank when unknown")}</small></label>
           <label className="field">
             {zh ? "默认模型" : "Default model"}
             {modelIds.length ? (

@@ -214,6 +214,67 @@ export interface CustomProvider {
   is_default: boolean;
   local_provider: boolean;
   test_provider: boolean;
+  context_window?: number | null;
+  context_window_source?: "USER_CONFIGURED" | null;
+}
+
+export interface UsageGroup {
+  name: string;
+  requests: number;
+  tokens: number;
+  latency_ms: number;
+  cost: number;
+  cost_available: boolean;
+}
+
+export interface UsageSummary {
+  has_data: boolean;
+  requests: number;
+  total_tokens: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens: number | null;
+  cached_input_tokens: number | null;
+  cache_write_tokens: number | null;
+  other_tokens: number | null;
+  cost_total: number | null;
+  currency: string | null;
+  cache_hit_rate: number | null;
+  runtime_ms: number | null;
+    average_latency_ms: number | null;
+    usage_source: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";
+    last_compression: {
+      before_tokens: number | null;
+      after_tokens: number | null;
+      freed_tokens: number | null;
+      timestamp: string;
+    } | null;
+  context: {
+    current_tokens: number | null;
+    limit: number | null;
+    percentage: number | null;
+    status: "AMPLE" | "MODERATE" | "NEAR_COMPACTION" | "COMPACTION_REQUIRED" | "UNKNOWN";
+    compression_threshold: number;
+    compression_threshold_tokens: number | null;
+    until_compression: number | null;
+    source: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";
+    role: string | null;
+    model: string | null;
+  };
+  by_agent: UsageGroup[];
+  by_model: UsageGroup[];
+  by_provider: UsageGroup[];
+  by_task: UsageGroup[];
+    timeline: Array<{
+      timestamp: string;
+      agent: string;
+      model: string;
+      tokens: number | null;
+      source: string;
+      compression_triggered: boolean;
+      compression_tokens_before: number | null;
+      compression_tokens_after: number | null;
+    }>;
 }
 
 export type PermissionMode = "safe" | "standard" | "maximum";

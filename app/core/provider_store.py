@@ -35,6 +35,7 @@ class CustomProvider(BaseModel):
     is_default: bool = False
     local_provider: bool = False
     test_provider: bool = False
+    context_window: int | None = Field(default=None, gt=0)
     created_at: str
     updated_at: str
 
@@ -66,6 +67,7 @@ class ProviderStore:
                     is_default INTEGER NOT NULL,
                     local_provider INTEGER NOT NULL,
                     test_provider INTEGER NOT NULL,
+                    context_window INTEGER,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -81,6 +83,8 @@ class ProviderStore:
                 )
             if "last_invoked_at" not in columns:
                 conn.execute("ALTER TABLE custom_providers ADD COLUMN last_invoked_at TEXT")
+            if "context_window" not in columns:
+                conn.execute("ALTER TABLE custom_providers ADD COLUMN context_window INTEGER")
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -109,8 +113,8 @@ class ProviderStore:
                 api_mode, default_model, role_models_json, discovered_models_json,
                 health, discovery_status, invocation_status, last_checked_at,
                 last_model_sync_at, last_invoked_at, is_default, local_provider,
-                test_provider, created_at, updated_at) VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                test_provider, context_window, created_at, updated_at) VALUES
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 self._values(provider),
             )
             conn.commit()
@@ -137,6 +141,7 @@ class ProviderStore:
             "is_default",
             "local_provider",
             "test_provider",
+            "context_window",
             "discovered_models",
         }
         safe_updates = {key: value for key, value in updates.items() if key in allowed}
@@ -152,7 +157,7 @@ class ProviderStore:
                 chat_endpoint=?, api_mode=?, default_model=?, role_models_json=?,
                 discovered_models_json=?, health=?, discovery_status=?, invocation_status=?,
                 last_checked_at=?, last_model_sync_at=?, last_invoked_at=?,
-                is_default=?, local_provider=?, test_provider=?,
+                is_default=?, local_provider=?, test_provider=?, context_window=?,
                 updated_at=? WHERE provider_id=?""",
                 (
                     provider.provider_name,
@@ -172,6 +177,7 @@ class ProviderStore:
                     int(provider.is_default),
                     int(provider.local_provider),
                     int(provider.test_provider),
+                    provider.context_window,
                     provider.updated_at,
                     provider_id,
                 ),
@@ -238,6 +244,7 @@ class ProviderStore:
             int(provider.is_default),
             int(provider.local_provider),
             int(provider.test_provider),
+            provider.context_window,
             provider.created_at,
             provider.updated_at,
         )

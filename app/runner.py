@@ -48,6 +48,7 @@ from app.tools.github_client import GitHubClient
 from app.tools.github_tools import build_github_tools
 from app.tools.local_file import LocalPathPolicy, build_local_tools
 from app.tools.web_fetch import WebFetchTool
+from app.usage.store import UsageStore
 
 DEFAULT_REPO_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "repos.json"
 DEFAULT_SOURCE_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "sources.json"
@@ -326,6 +327,7 @@ def _build_context(
         audit=audit,
         task_id=state.task_id,
         run_id=state.run_id,
+        usage_store=UsageStore(data_dir),
     )
     tool_gateway = ToolGateway(
         audit=audit,
@@ -551,9 +553,12 @@ def run_task(
     state.memory_refs = memory_service.refs_for_task(goal, project_id)
     from app.personalization.service import AdaptiveService
 
-    task_type = "code" if goal.startswith("sandbox_") or re.search(
-        r"\b(code|python|test|bug|patch)\b|代码|测试|修复", goal, re.I
-    ) else "general"
+    task_type = (
+        "code"
+        if goal.startswith("sandbox_")
+        or re.search(r"\b(code|python|test|bug|patch)\b|代码|测试|修复", goal, re.I)
+        else "general"
+    )
     adaptive_profile = AdaptiveService.from_data_dir(data_dir).derive(
         goal=goal,
         project_id=project_id,
@@ -1023,9 +1028,7 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
     return tasks
 
 
-def _model_cost_available(
-    data_dir: Path, model_mode: str, task_id: str, run_id: str
-) -> bool:
+def _model_cost_available(data_dir: Path, model_mode: str, task_id: str, run_id: str) -> bool:
     """Whether every real model call has an attributable monetary cost."""
     if model_mode != "real":
         return True
@@ -1195,9 +1198,7 @@ def _agent_team_status(tasks: list[dict[str, Any]], data_dir: Path) -> list[dict
                 events.extend(store.list_events(run_id=task_id, limit=5000))
             events.sort(key=lambda event: event.sequence)
             for event in events:
-                event_role = (
-                    event.actor_id if event.actor_id in roles else (event.actor_type or "")
-                )
+                event_role = event.actor_id if event.actor_id in roles else (event.actor_type or "")
                 if event_role not in roles:
                     continue
                 role_actions[event_role] = event.summary or event.event_type

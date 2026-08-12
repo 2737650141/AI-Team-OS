@@ -1,10 +1,30 @@
 // API 客户端：/api 前缀经 vite 代理到 FastAPI（010 四十六）
-const BASE = "/api";
+let desktopSession: Promise<{ base_url: string; token: string } | null> | null = null;
+
+async function endpoint(path: string) {
+  const tauri = "__TAURI_INTERNALS__" in window;
+  if (!tauri) return { url: `/api${path}`, token: "" };
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    desktopSession ??= import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<{ base_url: string; token: string }>("desktop_session"))
+      .catch(() => null);
+    const session = await desktopSession;
+    if (session?.base_url) return { url: `${session.base_url}${path}`, token: session.token };
+    desktopSession = null;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Desktop backend did not become ready.");
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
+  const target = await endpoint(path);
+  const resp = await fetch(target.url, {
     ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(target.token ? { "X-Desktop-Session": target.token } : {}),
+      ...(init?.headers || {}),
+    },
   });
   if (!resp.ok) {
     let detail = `${resp.status}`;
@@ -31,6 +51,23 @@ export const api = {
   dashboard: () => request<import("./types").DashboardData>("/dashboard"),
   tasks: () => request<import("./types").TaskSummary[]>("/tasks"),
   task: (runId: string) => request<import("./types").TaskDetail>(`/tasks/${runId}`),
+  usage: (days = 30, runId?: string, taskId?: string) =>
+    request<import("./types").UsageSummary>(
+      `/usage${queryString({ days: String(days), run_id: runId, task_id: taskId })}`,
+    ),
+  taskUsage: (runId: string) =>
+    request<import("./types").UsageSummary>(`/tasks/${runId}/usage`),
+  activeContext: () => request<{
+    active: boolean;
+    run_id?: string;
+    context: import("./types").UsageSummary["context"] | null;
+  }>("/usage/active-context"),
+  usageSettings: () => request<{ retention: "7" | "30" | "90" | "forever" }>("/settings/usage"),
+  saveUsageSettings: (retention: "7" | "30" | "90" | "forever") =>
+    request<{ retention: string }>("/settings/usage", {
+      method: "PUT",
+      body: JSON.stringify({ retention }),
+    }),
   trace: (runId: string) => request<Record<string, unknown>>(`/tasks/${runId}/trace`),
   evidence: async (runId: string) => {
     const r = await request<{ evidence: import("./types").EvidenceView[] }>(
@@ -265,7 +302,7 @@ export const api = {
     }),
 };
 
-// SSE：订阅 run 事件（Last-Event-ID 自动恢复）
+// Authenticated SSE parser for both browser development and packaged desktop.
 export function subscribeEvents(
   runId: string,
   onEvent: (ev: import("./types").RuntimeEvent) => void,
@@ -273,46 +310,57 @@ export function subscribeEvents(
 ): () => void {
   let lastId = 0;
   let closed = false;
-  const connect = () => {
+  let abort: AbortController | null = null;
+
+  const connect = async () => {
     if (closed) return;
-    const es = new EventSource(`${BASE}/tasks/${runId}/events${lastId ? `?after=${lastId}` : ""}`);
-    es.addEventListener("message", (msg) => {
-      try {
-        const ev = JSON.parse((msg as MessageEvent<string>).data) as import("./types").RuntimeEvent;
-        // 只有 completed/failed 才是终态；paused 的状态事件必须继续订阅返工/审批事件。
-        const terminalStatus =
-          (ev as import("./types").RuntimeEvent & { status?: string }).status ??
-          String(ev.payload_safe?.status ?? "");
-        if (
-          ev.event_type === "task_status_changed" &&
-          (terminalStatus === "completed" || terminalStatus === "failed")
-        ) {
-          es.close();
-          closed = true;
-          onDone?.();
-          return;
+    const suffix = lastId ? `?after=${lastId}` : "";
+    const target = await endpoint(`/tasks/${runId}/events${suffix}`);
+    abort = new AbortController();
+    try {
+      const response = await fetch(target.url, {
+        headers: target.token ? { "X-Desktop-Session": target.token } : {},
+        signal: abort.signal,
+      });
+      if (!response.ok || !response.body) throw new Error(`event stream ${response.status}`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (!closed) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() || "";
+        for (const frame of frames) {
+          const data = frame.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim();
+          if (!data) continue;
+          try {
+            const ev = JSON.parse(data) as import("./types").RuntimeEvent;
+            const status = String(ev.payload_safe?.status ?? "");
+            if (ev.event_type === "task_status_changed" && ["completed", "failed"].includes(status)) {
+              closed = true;
+              onDone?.();
+              return;
+            }
+            if (typeof ev.sequence !== "number" || typeof ev.event_type !== "string") continue;
+            lastId = Math.max(lastId, ev.sequence);
+            onEvent(ev);
+          } catch {
+            // Keep-alive and malformed frames do not belong in the activity feed.
+          }
         }
-        // 容忍/忽略非事件消息：缺 sequence 或 event_type（心跳等）不进 Activity Feed
-        if (typeof ev.sequence !== "number" || typeof ev.event_type !== "string") return;
-        if (ev.sequence > lastId) lastId = ev.sequence;
-        onEvent(ev);
-      } catch {
-        /* 忽略非 JSON（心跳） */
       }
-    });
-    es.onerror = () => {
-      es.close();
-      if (!closed) setTimeout(connect, 1500); // 断线重连
-    };
-    es.onopen = () => {
-      /* 已连接 */
-    };
-    return es;
+    } catch {
+      // Retry unless the caller explicitly closed the subscription.
+    }
+    if (!closed) setTimeout(() => void connect(), 1500);
   };
-  const es = connect();
+
+  void connect();
   return () => {
     closed = true;
-    es?.close();
+    abort?.abort();
     onDone?.();
   };
 }
