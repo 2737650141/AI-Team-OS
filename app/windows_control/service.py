@@ -19,6 +19,7 @@ from app.gateway.router import ModelRouter, build_router
 from app.gateway.structured_gen import generate_structured
 from app.memory.service import MemoryService
 from app.runner import _settings_with_custom_routes, build_provider
+from app.security.permissions import PermissionRuntime, PermissionStore
 from app.windows_control.backend import AutomationError, WindowsAutomationBackend
 from app.windows_control.gateway import (
     OBSERVE_TOOLS,
@@ -92,7 +93,13 @@ class WindowsComputerService:
         self.sessions = DeviceSessionManager()
         self.backend = backend or WindowsAutomationBackend()
         self.registry = ApplicationRegistry(project_root)
-        self.gateway = WindowsActionGateway(self.sessions, self.backend, self.registry)
+        self.permission_store = PermissionStore(data_dir)
+        self.gateway = WindowsActionGateway(
+            self.sessions,
+            self.backend,
+            self.registry,
+            PermissionRuntime(self.permission_store),
+        )
         self.visual = VisualDesktopService(data_dir, self.sessions, self.backend, self.gateway)
         self._lock = threading.RLock()
         self._jarvis_status = JarvisStatus.IDLE

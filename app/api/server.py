@@ -31,6 +31,7 @@ from app.runner import (
     dry_run,
     evidence_list,
     evidence_show,
+    list_tasks,
     provider_health,
     resume_task,
     rollback,
@@ -38,6 +39,12 @@ from app.runner import (
     status_task,
     tool_catalog,
     trace_task,
+)
+from app.security.permissions import (
+    PermissionChangeError,
+    PermissionMode,
+    PermissionStore,
+    RiskClass,
 )
 from app.voice.models import VoiceSettings
 
@@ -58,6 +65,10 @@ def _settings() -> AppSettings:
     if _settings_cache is None:
         _settings_cache = load_settings()
     return _settings_cache
+
+
+def _permission_store() -> PermissionStore:
+    return PermissionStore(_data_dir())
 
 
 def _computer_service():
@@ -129,7 +140,6 @@ def _voice_supervisor(text: str) -> dict[str, Any]:
             token_budget=20_000,
             cost_budget=1.0,
             model_mode="real",
-            permission_mode="standard",
             max_calls=20,
         )
     )
@@ -202,13 +212,28 @@ class TaskCreate(BaseModel):
     token_budget: int = Field(default=10000, gt=0, le=1_000_000)
     cost_budget: float = Field(default=1.0, gt=0, le=100.0)
     model_mode: str = Field(default="fake", pattern="^(fake|real)$")
-    permission_mode: str = Field(default="standard", pattern="^(standard|full_access)$")
     max_calls: int = Field(default=30, gt=0, le=100)
     model_overrides: dict[str, str] = Field(default_factory=dict)
     # 006 十五：工具画像 / 项目别名 / 允许域名（客户端不能传绝对路径或动态 MCP）
     tool_profile: str = Field(default="readonly", pattern="^[a-z_]+$")
     project_alias: str | None = Field(default=None, max_length=100)
     allowed_domains: list[str] = Field(default_factory=list, max_length=20)
+
+    model_config = {"extra": "forbid"}
+
+
+class PermissionModeBody(BaseModel):
+    mode: PermissionMode
+    confirmed: bool = False
+    user_explicit_action: bool
+
+
+class PolicyExplainBody(BaseModel):
+    action: str = Field(min_length=1, max_length=200)
+    risk: RiskClass | None = None
+    read_only: bool = False
+    target: str = Field(default="", max_length=1000)
+    task_explicit: bool = True
 
 
 class TaskResume(BaseModel):
@@ -577,6 +602,77 @@ def tool_info(name: str) -> dict[str, Any]:
     return entry
 
 
+@app.get("/settings/security/permission-mode")
+def get_permission_mode() -> dict[str, Any]:
+    setting = _permission_store().get()
+    return {
+        **setting.model_dump(mode="json"),
+        "first_upgrade_notice": not setting.changed_by_user,
+    }
+
+
+@app.put("/settings/security/permission-mode")
+def put_permission_mode(body: PermissionModeBody) -> dict[str, Any]:
+    try:
+        setting, old = _permission_store().set_mode(
+            body.mode,
+            changed_by_user=body.user_explicit_action,
+            confirmed=body.confirmed,
+        )
+    except PermissionChangeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    from app.core.events import emit as event_emit
+    from app.core.events import init as events_init
+
+    events_init(_data_dir())
+    event_emit(
+        task_id="settings",
+        run_id="settings",
+        event_type="permission_mode_changed",
+        actor_type="user",
+        actor_id="local-user",
+        summary=f"permission mode changed from {old.value} to {setting.mode.value}",
+        payload_safe={"old": old.value, "new": setting.mode.value, "timestamp": setting.changed_at},
+    )
+    for task in list_tasks(_data_dir()):
+        if task.get("status") not in {"running", "paused"}:
+            continue
+        event_emit(
+            task_id=str(task["task_id"]),
+            run_id=str(task["run_id"]),
+            event_type="permission_mode_changed",
+            actor_type="user",
+            actor_id="local-user",
+            summary=f"live permission changed from {old.value} to {setting.mode.value}",
+            payload_safe={
+                "old": old.value,
+                "new": setting.mode.value,
+                "timestamp": setting.changed_at,
+            },
+        )
+    return setting.model_dump(mode="json")
+
+
+@app.post("/security/policy/explain")
+def explain_permission_policy(body: PolicyExplainBody) -> dict[str, Any]:
+    return _permission_store().explain(
+        action=body.action,
+        risk=body.risk,
+        read_only=body.read_only,
+        target=body.target,
+        task_explicit=body.task_explicit,
+    ).model_dump(mode="json")
+
+
+@app.get("/security/permission-history")
+def permission_history(limit: int = 50) -> dict[str, Any]:
+    return {
+        "actions": [
+            item.model_dump(mode="json") for item in _permission_store().recent(limit)
+        ]
+    }
+
+
 @app.get("/tasks/{run_id}/evidence")
 def task_evidence(run_id: str) -> dict[str, Any]:
     """006 十五：任务 Evidence 摘要。"""
@@ -613,7 +709,6 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
             model_overrides=overrides or None,
             settings=_settings(),
             max_model_calls=body.max_calls,
-            permission_mode=body.permission_mode,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=exc.safe_message) from exc
@@ -625,6 +720,7 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
         "run_id": report.run_id,
         "status": report.status,
         "permission_mode": report.state.permission_mode,
+        "permission_mode_at_start": report.state.permission_mode_at_start,
         "final_result": report.state.final_result,
         "usage": report.usage,
         "call_count": report.call_count,
@@ -671,6 +767,8 @@ def get_task(run_id: str) -> dict[str, Any]:
         "failure_code": state.failure_code,
         "model_mode": state.model_mode,
         "permission_mode": state.permission_mode,
+        "permission_mode_at_start": state.permission_mode_at_start,
+        "permission_mode_current": _permission_store().mode().value,
         "goal": state.user_goal,
         "clarified_goal": state.clarified_goal,
         "pending_clarification_id": state.pending_clarification_id,

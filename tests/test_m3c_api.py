@@ -15,6 +15,10 @@ from app.core.artifacts import ArtifactWriter
 @pytest.fixture()
 def data_dir(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setenv("AI_TEAM_OS_DATA_DIR", str(tmp_path / "data"))
+    from app.security.permissions import PermissionStore
+
+    # These tests exercise the explicit approval lifecycle, so opt into Safe.
+    PermissionStore(tmp_path / "data").set_mode("safe", changed_by_user=True)
     return tmp_path / "data"
 
 

@@ -16,7 +16,6 @@ export function Dashboard() {
   const dash = useQuery({ queryKey: ["dashboard"], queryFn: api.dashboard, refetchInterval: 3000 });
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState("fake");
-  const [permissionMode, setPermissionMode] = useState<"standard" | "full_access">("standard");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [project, setProject] = useState("");
   const [memoryProject, setMemoryProject] = useState("default");
@@ -32,7 +31,7 @@ export function Dashboard() {
   });
 
   const create = useMutation({
-    mutationFn: (body: { goal: string; model_mode: string; permission_mode: "standard" | "full_access"; project_alias?: string; project_id?: string; token_budget: number; cost_budget: number; max_calls: number }) =>
+    mutationFn: (body: { goal: string; model_mode: string; project_alias?: string; project_id?: string; token_budget: number; cost_budget: number; max_calls: number }) =>
       api.createTask(body),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
@@ -58,6 +57,7 @@ export function Dashboard() {
           <Overview label={t("dash.activeAiTeam")} value={activeSummary ? t("st.active") : t("st.idle")} />
           <Overview label={t("dash.pendingApproval")} value={String(data?.metrics.pending_approvals ?? 0)} />
           <Overview label={t("dash.currentTask")} value={activeSummary ? displayLabel(activeSummary.goal, lang) : t("dash.none")} />
+          <Overview label={lang === "zh" ? "权限模式" : "Permission mode"} value={displayLabel(data?.permission_mode ?? "standard", lang)} />
         </div>
         {activeSummary && (
           <div className="working-context">
@@ -76,7 +76,7 @@ export function Dashboard() {
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && goal.trim()) {
-              create.mutate({ goal, model_mode: mode, permission_mode: permissionMode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls });
+              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls });
             }
           }}
         />
@@ -93,7 +93,7 @@ export function Dashboard() {
             className="btn btn-primary"
             disabled={!goal.trim() || create.isPending}
             onClick={() =>
-              create.mutate({ goal, model_mode: mode, permission_mode: permissionMode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls })
+              create.mutate({ goal, model_mode: mode, project_alias: project || undefined, project_id: memoryProject || "default", token_budget: tokenBudget, cost_budget: costBudget, max_calls: maxCalls })
             }
           >
             {t("dash.startTask")}
@@ -108,7 +108,6 @@ export function Dashboard() {
               create.mutate({
                 goal: "sandbox_code_fix",
                 model_mode: "fake",
-                permission_mode: permissionMode,
                 project_alias: project || "sample-python",
                 project_id: memoryProject || "default",
                 token_budget: tokenBudget,
@@ -143,24 +142,7 @@ export function Dashboard() {
             {lang === "zh" ? "最大模型调用次数" : "Maximum model calls"}
             <input type="number" min={1} max={100} value={maxCalls} onChange={(e) => setMaxCalls(Number(e.target.value))} />
           </label>
-          <div className="field permission-mode-field">
-            <span>{lang === "zh" ? "任务权限" : "Task permissions"}</span>
-            <div className="seg permission-seg">
-              <button type="button" className={permissionMode === "standard" ? "on" : ""} onClick={() => setPermissionMode("standard")}>
-                {lang === "zh" ? "标准权限" : "Standard"}
-              </button>
-              <button type="button" className={permissionMode === "full_access" ? "on danger" : ""} onClick={() => setPermissionMode("full_access")}>
-                {lang === "zh" ? "扩展任务权限" : "Expanded task capability"}
-              </button>
-            </div>
-            {permissionMode === "full_access" && (
-              <p className="permission-warning">
-                {lang === "zh"
-                  ? "代码修改和写入操作将在安全校验通过后直接执行；仅对本次新任务生效。"
-                  : "Code changes and writes execute immediately after safety validation; this applies only to the new task."}
-              </p>
-            )}
-          </div>
+          <p className="muted">{lang === "zh" ? "任务使用全局权限模式。可从顶部权限状态或设置中修改。" : "Tasks use the global permission mode. Change it from the header status or Settings."}</p>
         </details>
         {create.isError && <p className="error">{(create.error as Error).message}</p>}
       </div>

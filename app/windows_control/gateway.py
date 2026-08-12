@@ -3,6 +3,13 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from app.security.permissions import (
+    ActionDecision,
+    ActionRequest,
+    PermissionPolicy,
+    PermissionRuntime,
+    RiskClass,
+)
 from app.windows_control.backend import AutomationError, WindowsAutomationBackend
 from app.windows_control.models import ActionRecord, ActionRisk, ActionStep, Bounds, PendingAction
 from app.windows_control.registry import ApplicationRegistry, RegistryError
@@ -50,10 +57,12 @@ class WindowsActionGateway:
         sessions: DeviceSessionManager,
         backend: WindowsAutomationBackend,
         registry: ApplicationRegistry,
+        permission_runtime: PermissionRuntime | None = None,
     ) -> None:
         self.sessions = sessions
         self.backend = backend
         self.registry = registry
+        self.permission_runtime = permission_runtime
 
     def risk_for(self, tool: str) -> ActionRisk:
         risk = RISK_BY_TOOL.get(tool)
@@ -68,9 +77,45 @@ class WindowsActionGateway:
             return False
         if session.capability.value == "observe_only":
             raise ActionError("permission_denied", "Observe-only session blocks write actions")
+        decision = self._permission_decision(tool)
+        if decision is ActionDecision.BLOCK:
+            raise ActionError("hard_safety_block", "Hard Safety Kernel blocked this action")
         if session.capability.value == "ask_every_action":
             return True
-        return risk in {ActionRisk.MEDIUM, ActionRisk.HIGH}
+        return decision is ActionDecision.ASK
+
+    def _permission_decision(self, tool: str) -> ActionDecision:
+        risk = {
+            ActionRisk.OBSERVE: RiskClass.READ_ONLY,
+            ActionRisk.LOW: RiskClass.LOW,
+            ActionRisk.MEDIUM: RiskClass.NORMAL,
+            ActionRisk.HIGH: RiskClass.DESTRUCTIVE,
+            ActionRisk.FORBIDDEN: RiskClass.FORBIDDEN,
+        }[self.risk_for(tool)]
+        request = ActionRequest(
+            action=tool,
+            risk=risk,
+            source="windows_action_gateway",
+        )
+        if self.permission_runtime is not None:
+            return self.permission_runtime.decide(request).decision
+        return PermissionPolicy().decide("safe", request).decision
+
+    def explain(self, tool: str) -> dict[str, str]:
+        risk = {
+            ActionRisk.OBSERVE: RiskClass.READ_ONLY,
+            ActionRisk.LOW: RiskClass.LOW,
+            ActionRisk.MEDIUM: RiskClass.NORMAL,
+            ActionRisk.HIGH: RiskClass.DESTRUCTIVE,
+            ActionRisk.FORBIDDEN: RiskClass.FORBIDDEN,
+        }[self.risk_for(tool)]
+        request = ActionRequest(action=tool, risk=risk, source="windows_action_gateway")
+        decision = (
+            self.permission_runtime.decide(request, record=False)
+            if self.permission_runtime is not None
+            else PermissionPolicy().decide("safe", request)
+        )
+        return decision.model_dump(mode="json")
 
     def execute(
         self,

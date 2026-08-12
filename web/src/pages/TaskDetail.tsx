@@ -60,7 +60,7 @@ export function TaskDetail() {
       <div className="card task-hero">
         <div className="task-header"><div><span className="eyebrow">{t("task.task")}</span><h1>{displayLabel(taskData.goal, lang)}</h1></div><div className="real-identity"><span className={`mode-badge ${taskData.model_identity?.badge === "REAL" ? "real" : "demo"}`}>{taskData.model_identity?.badge ?? (taskData.model_mode === "real" ? "REAL" : "DEMO")}</span><strong>{taskData.model_identity?.provider}</strong><span>{taskData.model_identity?.default_model}</span><StatusBadge status={taskData.current_status} /></div></div>
         <div className="task-meta muted">
-          {t("task.runId")}: {taskData.run_id} · {t("task.mode")}: {taskData.model_mode === "fake" ? "Demo" : t("dash.real")} · {lang === "zh" ? "权限" : "Permissions"}: {taskData.permission_mode === "full_access" ? (lang === "zh" ? "扩展任务权限" : "Expanded task capability") : (lang === "zh" ? "标准权限" : "Standard")} · {t("task.budget")}: {taskData.token_budget} Token / ${taskData.cost_budget}
+          {t("task.runId")}: {taskData.run_id} · {t("task.mode")}: {taskData.model_mode === "fake" ? "Demo" : t("dash.real")} · {lang === "zh" ? "任务开始权限" : "Permission at start"}: {displayLabel(taskData.permission_mode_at_start ?? taskData.permission_mode ?? "standard", lang)} · {lang === "zh" ? "当前权限" : "Current"}: {displayLabel(taskData.permission_mode_current ?? taskData.permission_mode ?? "standard", lang)} · {t("task.budget")}: {taskData.token_budget} Token / ${taskData.cost_budget}
           {connected && <span className="live">● {t("task.live")}</span>}
         </div>
       </div>

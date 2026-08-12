@@ -22,6 +22,15 @@ from app.gateway.tool_policy import (
     ToolPolicy,
     ToolQuota,
 )
+from app.security.permissions import (
+    ActionDecision,
+    ActionRequest,
+    PermissionMode,
+    PermissionPolicy,
+    PermissionRuntime,
+    RiskClass,
+    RiskClassifier,
+)
 from app.tools.spec import RiskLevel, ToolResult, ToolSpec
 
 
@@ -70,7 +79,8 @@ class ToolGateway:
         evidence_writer: EvidenceWriter | None = None,
         approval_service: ApprovalService | None = None,
         run_id: str | None = None,
-        approval_bypass: bool = False,
+        permission_runtime: PermissionRuntime | None = None,
+        permission_mode: str = "safe",
     ) -> None:
         self._audit = audit
         self._task_id = task_id
@@ -87,7 +97,8 @@ class ToolGateway:
         self._quota = ToolQuota(self.policy)
         self.evidence_writer = evidence_writer
         self._approval_service = approval_service
-        self._approval_bypass = approval_bypass
+        self._permission_runtime = permission_runtime
+        self._permission_mode = PermissionMode.normalize(permission_mode)
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
 
@@ -316,17 +327,65 @@ class ToolGateway:
 
         # GT-10/M1：dangerous、requires_approval 或任何非只读工具必须确定性拦截，
         # handler 永不执行；M3-C 审批流：ctx.approval_id + 已批准才放行（007 5.4）
-        approved_pass = False
-        if tool.risk_level is RiskLevel.DANGEROUS or tool.requires_approval or not tool.read_only:
-            if self._approval_bypass:
-                approved_pass = True
-                self._audit.entry(
-                    "tool_approval_bypassed",
-                    task_id=self._task_id,
-                    tool=tool_name,
-                    permission_mode="full_access",
-                )
-            elif ctx and ctx.approval_id and self._approval_service is not None:
+        risk = (
+            RiskClass(tool.permission_risk)
+            if tool.permission_risk
+            else RiskClassifier.classify(
+                tool.name,
+                read_only=tool.read_only,
+                risk_hint=tool.risk_level.value,
+                target=str(args.get("path") or args.get("url") or ""),
+            )
+        )
+        policy_request = ActionRequest(
+            action=tool.name,
+            risk=risk,
+            target=str(args.get("path") or args.get("url") or "")[:1000],
+            task_id=self._task_id,
+            task_explicit=tool.task_explicit,
+            source="tool_gateway",
+        )
+        decision = (
+            self._permission_runtime.decide(policy_request)
+            if self._permission_runtime
+            else PermissionPolicy().decide(self._permission_mode, policy_request)
+        )
+        if decision.decision is ActionDecision.BLOCK:
+            record["status"] = "blocked"
+            self.tool_calls.append(record)
+            self._audit.entry(
+                "tool_blocked",
+                task_id=self._task_id,
+                tool=tool_name,
+                risk=risk.value,
+                permission_mode=decision.mode.value,
+                reason=decision.reason,
+            )
+            return ToolResult(
+                ok=False,
+                error="action blocked by Hard Safety Kernel",
+                status="blocked",
+            )
+
+        needs_governance = (
+            decision.decision is ActionDecision.ASK
+            or tool.risk_level is RiskLevel.DANGEROUS
+            or tool.requires_approval
+            or not tool.read_only
+        )
+        approved_pass = decision.decision is ActionDecision.ALLOW
+        if needs_governance and approved_pass:
+            self._audit.entry(
+                "tool_approval_bypassed",
+                task_id=self._task_id,
+                tool=tool_name,
+                risk=risk.value,
+                permission_mode=decision.mode.value,
+                decision="allow",
+                reason=decision.reason,
+            )
+        if needs_governance and not approved_pass:
+            if ctx and ctx.approval_id and self._approval_service is not None:
                 request = self._approval_service.get(ctx.approval_id)
                 if request is not None:
                     try:

@@ -12,6 +12,7 @@ export interface TaskSummary {
   tool_calls: number;
   started_at: string | null;
   duration_s: number | null;
+  permission_mode?: PermissionMode;
 }
 
 export interface SystemHealth {
@@ -41,6 +42,7 @@ export interface DashboardData {
   };
   recent_tasks: TaskSummary[];
   agent_team: AgentCard[];
+  permission_mode?: PermissionMode;
 }
 
 export interface AgentCard {
@@ -114,7 +116,9 @@ export interface TaskDetail {
   current_status: string;
   failure_code: string | null;
   model_mode: string;
-  permission_mode?: "standard" | "full_access";
+  permission_mode?: PermissionMode;
+  permission_mode_at_start?: PermissionMode;
+  permission_mode_current?: PermissionMode;
   goal: string;
   plan: { goal?: string; subtasks?: SubtaskView[] } | null;
   subtasks: SubtaskView[];
@@ -210,6 +214,29 @@ export interface CustomProvider {
   is_default: boolean;
   local_provider: boolean;
   test_provider: boolean;
+}
+
+export type PermissionMode = "safe" | "standard" | "maximum";
+
+export interface PermissionModeSetting {
+  mode: PermissionMode;
+  changed_at: string;
+  changed_by_user: boolean;
+  version: number;
+  maximum_confirmed: boolean;
+  first_upgrade_notice?: boolean;
+}
+
+export interface PermissionAction {
+  action_id: string;
+  timestamp: string;
+  task_id?: string | null;
+  action: string;
+  target: string;
+  risk: string;
+  permission_mode: PermissionMode;
+  decision: "allow" | "ask" | "block";
+  reason: string;
 }
 
 export interface TeamProvider {

@@ -37,6 +37,7 @@ from app.core.patch_engine import (
 from app.core.schemas import ApprovalPayload, Claim, ExecutionResult
 from app.core.state import SubtaskState
 from app.gateway.tool_gateway import ToolGateway
+from app.security.permissions import ActionDecision, ActionRequest, PermissionRuntime, RiskClass
 
 
 @dataclass
@@ -51,6 +52,19 @@ class SandboxContext:
     task_id: str = ""
     run_id: str | None = None  # 真实 run_id（审批记录绑定，API/CLI 恢复定位）
     permission_mode: str = "standard"
+    permission_runtime: PermissionRuntime | None = None
+
+    def patch_decision(self):
+        if self.permission_runtime is None:
+            return None
+        return self.permission_runtime.decide(
+            ActionRequest(
+                action="apply_patch",
+                risk=RiskClass.NORMAL,
+                task_id=self.task_id,
+                source="executor",
+            )
+        )
 
 
 class ExecutorError(Exception):
@@ -271,6 +285,7 @@ class DeterministicFakeExecutor:
         candidate_parameter_hash = ApprovalService.parameter_hash_of(
             {"patch_json": proposal.model_dump_json()}
         )
+        patch_decision = sb.patch_decision()
         # 重放语义（5.4）：LangGraph 恢复时重放本节点——复用该子任务最新**可决策**审批
         # 请求（pending/approved；用户决定绑定其 approval_id）。rejected 请求不可再决策，
         # 重派时必须创建新请求，否则恢复永久卡死（review blocking sa_20260805_144828）
@@ -297,11 +312,7 @@ class DeterministicFakeExecutor:
                 action_type="apply_patch",
                 tool_name="sandbox_apply_patch",
                 risk_level="sensitive",
-                approval_level=(
-                    "automatic_full_access"
-                    if sb.permission_mode == "full_access"
-                    else "explicit"
-                ),
+                approval_level="explicit",
                 summary=proposal.reason,
                 target_paths=proposal.target_files,
                 diff_ref=diff_artifact.artifact_id,
@@ -311,19 +322,21 @@ class DeterministicFakeExecutor:
             )
             from app.core.events import emit as event_emit
 
+            automatic = bool(
+                patch_decision and patch_decision.decision is ActionDecision.ALLOW
+            )
             event_emit(
                 task_id=sb.task_id,
                 run_id=sb.run_id or sb.task_id,
                 event_type=(
-                    "approval_bypassed"
-                    if sb.permission_mode == "full_access"
-                    else "approval_requested"
+                    "approval_bypassed" if automatic else "approval_requested"
                 ),
                 actor_type="executor",
                 actor_id=subtask.subtask_id,
                 summary=(
-                    f"full-access mode applied without manual approval: {proposal.reason}"
-                    if sb.permission_mode == "full_access"
+                    f"{patch_decision.mode.value} mode applied without manual approval: "
+                    f"{proposal.reason}"
+                    if automatic and patch_decision
                     else f"approval requested: {proposal.reason}"
                 ),
                 payload_safe={
@@ -334,16 +347,16 @@ class DeterministicFakeExecutor:
                 },
             )
         # 5.4：LangGraph interrupt（首次执行暂停；恢复时返回用户决定）
-        if sb.permission_mode == "full_access":
+        if patch_decision and patch_decision.decision is ActionDecision.ALLOW:
             sb.approval.decide(
                 request.approval_id,
                 "approved",
-                reason="user selected full-access mode; manual approval bypassed",
+                reason=f"{patch_decision.mode.value} permission policy allowed this patch",
             )
             decision = ApprovalPayload(
                 approval_id=request.approval_id,
                 decision="approved",
-                reason="full_access",
+                reason=patch_decision.mode.value,
             )
         else:
             decision = interrupt(

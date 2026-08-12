@@ -180,7 +180,8 @@ class TaskState(BaseModel):
     approvals: list[Approval] = Field(default_factory=list)
     final_result: str | None = None
     model_mode: str = "fake"  # fake | real（005 十六；真实调用必须服务端显式允许）
-    permission_mode: str = "standard"  # standard | full_access; only user/API may set it
+    permission_mode: str = "standard"  # legacy checkpoint compatibility
+    permission_mode_at_start: str = "standard"
     # ===== M2 多智能体字段（004 四） =====
     clarified_goal: str | None = None
     clarification_history: Annotated[list[ClarificationRecord], operator.add] = Field(

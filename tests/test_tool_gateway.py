@@ -26,11 +26,18 @@ def test_dangerous_tool_blocked_handler_never_runs(tmp_path: Path) -> None:
     assert gateway.approvals[0]["status"] == "pending"
 
 
-def test_full_access_bypasses_only_approval_gate(tmp_path: Path) -> None:
+def test_maximum_mode_auto_allows_governed_write(tmp_path: Path) -> None:
+    from app.security.permissions import PermissionRuntime, PermissionStore
     from app.tools.spec import RiskLevel, ToolSpec
 
     audit = AuditLog(tmp_path / "audit.jsonl")
-    gateway = ToolGateway(audit=audit, task_id="t1", approval_bypass=True)
+    store = PermissionStore(tmp_path)
+    store.set_mode("maximum", changed_by_user=True, confirmed=True)
+    gateway = ToolGateway(
+        audit=audit,
+        task_id="t1",
+        permission_runtime=PermissionRuntime(store),
+    )
     executed: list[str] = []
 
     def handler(path: str, content: str) -> dict:
@@ -39,7 +46,7 @@ def test_full_access_bypasses_only_approval_gate(tmp_path: Path) -> None:
 
     gateway.register(
         ToolSpec(
-            name="full_access_write",
+            name="maximum_write",
             description="write fixture",
             input_schema={"path": "str", "content": "str"},
             risk_level=RiskLevel.DANGEROUS,
@@ -49,7 +56,7 @@ def test_full_access_bypasses_only_approval_gate(tmp_path: Path) -> None:
         )
     )
 
-    result = gateway.invoke("full_access_write", {"path": "/tmp/x", "content": "ok"})
+    result = gateway.invoke("maximum_write", {"path": "/tmp/x", "content": "ok"})
 
     assert result.ok is True
     assert executed == ["/tmp/x:ok"]

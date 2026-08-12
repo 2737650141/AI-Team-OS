@@ -264,13 +264,14 @@ class SandboxToolset:
 
 def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
     """构造沙箱写工具集（roles=executor；requires_approval=True 由网关放行）。"""
-    specs: list[tuple[str, str, dict[str, str], Any, RiskLevel]] = [
+    specs: list[tuple[str, str, dict[str, str], Any, RiskLevel, str]] = [
         (
             "sandbox_create_directory",
             "在任务 worktree 内创建目录",
             {"path": "str"},
             ts.create_directory,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
         (
             "sandbox_write_file",
@@ -278,6 +279,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"path": "str", "content": "str"},
             ts.write_file,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
         (
             "sandbox_apply_patch",
@@ -285,6 +287,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"patch_json": "str"},
             ts.apply_patch,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
         (
             "sandbox_copy_file",
@@ -292,6 +295,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"source": "str", "destination": "str"},
             ts.copy_file,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
         (
             "sandbox_move_file",
@@ -299,6 +303,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"source": "str", "destination": "str"},
             ts.move_file,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
         (
             "sandbox_delete_path",
@@ -306,6 +311,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"path": "str"},
             ts.delete_path,
             RiskLevel.DANGEROUS,
+            "destructive",
         ),
         (
             "sandbox_restore_backup",
@@ -313,6 +319,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             {"backup_name": "str", "target": "str"},
             ts.restore_backup,
             RiskLevel.SENSITIVE,
+            "normal",
         ),
     ]
     return [
@@ -326,6 +333,7 @@ def build_sandbox_tools(ts: SandboxToolset) -> list[ToolSpec]:
             handler=handler,
             roles=("executor",),
             accepts_ctx=True,  # M3-C：写工具需 ctx（approval_id 绑定）
+            permission_risk=permission_risk,
         )
-        for name, desc, schema, handler, risk in specs
+        for name, desc, schema, handler, risk, permission_risk in specs
     ]

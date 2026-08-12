@@ -38,6 +38,7 @@ from app.gateway.router import ModelRouter, build_router
 from app.gateway.tool_gateway import ToolGateway
 from app.gateway.tool_policy import ToolPolicy
 from app.graph import build_graph
+from app.security.permissions import PermissionMode, PermissionRuntime, PermissionStore
 from app.tools.fixture_repo import (
     DangerousWriteTool,
     FixtureRepositoryLookupTool,
@@ -336,7 +337,8 @@ def _build_context(
         policy=ToolPolicy(),
         evidence_writer=EvidenceWriter(data_dir / "runtime", state.task_id),
         run_id=state.run_id,
-        approval_bypass=state.permission_mode == "full_access",
+        permission_runtime=PermissionRuntime(PermissionStore(data_dir)),
+        permission_mode=state.permission_mode,
     )
     tool_gateway.register(FixtureRepositoryLookupTool(DEFAULT_REPO_FIXTURE).spec())
     tool_gateway.register(FixtureSourceLookupTool(DEFAULT_SOURCE_FIXTURE).spec())
@@ -393,7 +395,7 @@ def _build_context(
         task_type="code" if state.user_goal.startswith("sandbox_") else "general",
         items=[ProfileItem.model_validate(item) for item in state.personalization_applied],
         security_invariants={
-            "approval_required": state.permission_mode != "full_access",
+            "approval_required": state.permission_mode == "safe",
             "tool_permissions_immutable": True,
             "budget_immutable": True,
             "workspace_boundary_immutable": True,
@@ -477,6 +479,7 @@ def _build_sandbox_context(
         task_id=state.task_id,
         run_id=run_id,
         permission_mode=state.permission_mode,
+        permission_runtime=PermissionRuntime(PermissionStore(data_dir)),
     )
     # 沙箱写工具注册（roles=executor + requires_approval；网关放行需 ctx.approval_id）
     toolset = SandboxToolset(worktree, state.task_id, artifacts, approval)
@@ -511,12 +514,19 @@ def run_task(
     model_overrides: dict[str, str] | None = None,
     settings: AppSettings | None = None,
     max_model_calls: int = 30,
-    permission_mode: str = "standard",
+    permission_mode: str | None = None,
 ) -> RunReport:
     """创建并运行任务（进程 A）。vague_goal 场景在澄清 interrupt 处暂停返回。"""
-    if permission_mode not in {"standard", "full_access"}:
-        raise ValueError("permission_mode must be 'standard' or 'full_access'")
     data_dir = data_dir or Path("data")
+    permission_store = PermissionStore(data_dir)
+    current_permission = permission_store.mode()
+    if permission_mode is not None:
+        requested = PermissionMode.normalize(permission_mode)
+        if requested is not current_permission:
+            raise ValueError(
+                "Task permission override is forbidden; change global settings explicitly"
+            )
+    permission_mode = current_permission.value
     from app.core.events import emit as event_emit
     from app.core.events import init as events_init
 
@@ -533,6 +543,7 @@ def run_task(
         max_model_calls=max_model_calls,
         model_mode=model_mode,
         permission_mode=permission_mode,
+        permission_mode_at_start=permission_mode,
     )
     from app.memory.service import MemoryService
 
@@ -552,12 +563,12 @@ def run_task(
     state.personalization_applied = [
         item.model_dump(mode="json") for item in adaptive_profile.items if item.enabled
     ]
-    if permission_mode == "full_access":
+    if permission_mode == "maximum":
         for item in state.personalization_applied:
             if item.get("field") == "approval_preference":
                 item.update(
                     {
-                        "value": "full_access",
+                        "value": "maximum",
                         "confidence": 1.0,
                         "reason": "explicit permission selected for this task",
                         "source": "current_task",
@@ -990,6 +1001,7 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
                     "project_id": report.state.project_id,
                     "model_mode": report.state.model_mode,
                     "permission_mode": report.state.permission_mode,
+                    "permission_mode_at_start": report.state.permission_mode_at_start,
                     "tokens": report.state.budget_usage.get("tokens", 0),
                     "cost": report.state.budget_usage.get("cost", 0.0),
                     "cost_available": _model_cost_available(
@@ -1062,6 +1074,7 @@ def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
 
     store = get_store()
     event_count = store.count() if store is not None else 0
+    permission = PermissionStore(data_dir).get()
     return {
         "system": _system_health(data_dir),
         "metrics": {
@@ -1077,6 +1090,7 @@ def dashboard_data(data_dir: Path | None = None) -> dict[str, Any]:
         },
         "recent_tasks": tasks[:10],
         "agent_team": _agent_team_status(tasks, data_dir),
+        "permission_mode": permission.mode.value,
     }
 
 

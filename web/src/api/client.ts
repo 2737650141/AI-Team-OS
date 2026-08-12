@@ -67,6 +67,14 @@ export const api = {
   },
   health: () => request<import("./types").SystemHealth>("/system/health"),
   settingsStatus: () => request<Record<string, unknown>>("/settings/status"),
+  permissionMode: () => request<import("./types").PermissionModeSetting>("/settings/security/permission-mode"),
+  savePermissionMode: (mode: import("./types").PermissionMode, confirmed = false) =>
+    request<import("./types").PermissionModeSetting>("/settings/security/permission-mode", {
+      method: "PUT",
+      body: JSON.stringify({ mode, confirmed, user_explicit_action: true }),
+    }),
+  permissionHistory: () => request<{ actions: import("./types").PermissionAction[] }>("/security/permission-history"),
+  explainPermission: (body: Record<string, unknown>) => request<Record<string, unknown>>("/security/policy/explain", { method: "POST", body: JSON.stringify(body) }),
   connections: () => request<Record<string, import("./types").ConnectionStatus>>("/settings/connections"),
   saveConnection: (provider: string, body: Record<string, unknown>) =>
     request<{ provider: string; configured: boolean }>(`/settings/connections/${provider}`, {
@@ -236,7 +244,6 @@ export const api = {
   createTask: (body: {
     goal: string;
     model_mode: string;
-    permission_mode?: "standard" | "full_access";
     token_budget?: number;
     cost_budget?: number;
     max_calls?: number;

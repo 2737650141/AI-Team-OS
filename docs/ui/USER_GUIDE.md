@@ -23,11 +23,21 @@ scripts\start_ai_team_os.ps1
 2. 展开 **Advanced**，Project 填：`sample-python`。
 3. 点 **Start Task**。
 4. 自动进入任务页：看到 Planner 拆解、Agent 活动、Evidence 出现。
-5. 稍候出现 **Approval Required**（AI 要改代码）。
-6. 点 **Reject**：文件不变；再重新运行任务后点 **Approve**。
+5. 新安装默认是 **标准模式**：普通代码修改、测试和本地 Commit 自动完成。
+6. 如需逐步确认，先到 **Settings → Security & Permissions** 切换安全模式。
 7. 看到 Diff、Tests、Reviewer，最后任务 Completed。
 
-## 4. 设置 API Key（真实模型）
+## 4. 选择权限模式
+
+- **安全模式**：只读与真正低风险操作自动执行；写入、测试和电脑状态变化会询问。
+- **标准模式（推荐）**：普通开发、Research 和电脑助理操作自动完成；删除、外部发送、
+  系统修改和敏感行为才询问。
+- **最高权限模式**：用户目标内的大多数操作完整自动执行。第一次启用只确认一次；密码、
+  Secret、UAC、核心安全系统与 STOP 仍不可绕过。
+
+模式保存在本地设置，重启和新任务继续生效。顶部权限 Badge 可随时返回设置页。
+
+## 5. 设置 API Key（真实模型）
 
 1. 左侧 **Settings** → **Connections**。
 2. OpenAI Compatible 卡片：
@@ -39,27 +49,27 @@ scripts\start_ai_team_os.ps1
 
 以后无需再编辑 `.env` 或 `reasonix.toml`。
 
-## 5. 创建真实任务
+## 6. 创建真实任务
 
 1. 首页输入任务描述（如 `github_compare_team`）。
 2. Model Mode 选 **Real**（需已配置 Provider）。
 3. **Start Task** → 观看团队工作。
 
-## 6. 查看进度
+## 7. 查看进度
 
 - 任务页顶部：状态 / 阶段时间线。
 - Plan 面板：子任务与依赖。
 - Activity：实时事件流。
 - Evidence / Diff / Tests / Reviewer：各区块。
 
-## 7. 批准 / 拒绝补丁
+## 8. 批准 / 拒绝重要操作
 
 出现 Approval 卡片时查看 Diff，然后：
 
 - **Approve**：AI 应用补丁 → 跑测试 → Reviewer。
 - **Reject**：不应用，可填原因。
 
-## 8. 查看最终结果
+## 9. 查看最终结果
 
 任务 Completed 后顶部状态变绿；Reviewer 显示通过；证据与测试结果可展开查看。
 

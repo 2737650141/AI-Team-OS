@@ -14,13 +14,16 @@ import {
   SlidersHorizontal,
   Wrench,
 } from "lucide-react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 
+import { api } from "../api/client";
 import { useI18n } from "../i18n";
 import type { Lang } from "../i18n";
 
 export function AppLayout() {
   const { lang, setLang, t } = useI18n();
+  const permission = useQuery({ queryKey: ["permission-mode"], queryFn: api.permissionMode, refetchInterval: 5000 });
   const NAV = [
     { to: "/", label: t("nav.dashboard"), icon: Gauge },
     { to: "/tasks", label: t("nav.tasks"), icon: ListTodo },
@@ -64,6 +67,7 @@ export function AppLayout() {
         </div>
       </aside>
       <main className="main">
+        <Link className={`global-permission-badge ${permission.data?.mode ?? "standard"}`} to="/settings#security-permissions">{lang === "zh" ? `权限：${permission.data?.mode === "maximum" ? "最高" : permission.data?.mode === "safe" ? "安全" : "标准"}` : `Permissions: ${permission.data?.mode ?? "standard"}`}</Link>
         {/* 右上角语言切换（010-B 九）：简体中文 / English */}
         <div className="lang-switch" title={t("lang.label")}>
           <button

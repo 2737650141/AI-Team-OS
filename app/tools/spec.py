@@ -37,6 +37,8 @@ class ToolSpec:
     path_validator: Callable[[str], Any] | None = None  # 抛异常即拒绝（返回忽略）
     max_result_bytes: int = 512 * 1024
     accepts_ctx: bool = False  # M3-C：handler 需接收 ctx（写工具放行/审批绑定）
+    permission_risk: str | None = None  # M6-P trusted override for the unified risk matrix
+    task_explicit: bool = True  # external/system effects require an explicit task goal
 
 
 @dataclass

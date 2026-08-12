@@ -82,8 +82,8 @@ def test_run_task_emits_lifecycle_events(tmp_path: Path, monkeypatch) -> None:
     assert "review_passed" in types
 
 
-def test_full_access_mode_runs_without_manual_approval(tmp_path: Path, monkeypatch) -> None:
-    """Explicit full-access mode applies a validated sandbox patch without pausing."""
+def test_maximum_global_mode_runs_without_manual_approval(tmp_path: Path, monkeypatch) -> None:
+    """Persisted Maximum mode applies a validated sandbox patch without pausing."""
     from app.core.approval import ApprovalService
     from app.core.events import get_store
     from app.runner import run_task
@@ -91,6 +91,9 @@ def test_full_access_mode_runs_without_manual_approval(tmp_path: Path, monkeypat
     fixtures = Path(__file__).resolve().parent.parent / "fixtures"
     data_dir = tmp_path / "data"
     monkeypatch.setenv("AI_TEAM_ALLOWED_READ_ROOTS", str(fixtures))
+    from app.security.permissions import PermissionStore
+
+    PermissionStore(data_dir).set_mode("maximum", changed_by_user=True, confirmed=True)
 
     report = run_task(
         "sandbox_code_fix",
@@ -98,24 +101,23 @@ def test_full_access_mode_runs_without_manual_approval(tmp_path: Path, monkeypat
         cost_budget=1.0,
         data_dir=data_dir,
         model_overrides={"project_alias": "sample-python"},
-        permission_mode="full_access",
     )
 
     assert report.state.current_status == "completed"
-    assert report.state.permission_mode == "full_access"
+    assert report.state.permission_mode == "maximum"
     assert report.state.pending_approval_id is None
     approval_preference = next(
         item
         for item in report.state.personalization_applied
         if item["field"] == "approval_preference"
     )
-    assert approval_preference["value"] == "full_access"
+    assert approval_preference["value"] == "maximum"
     assert approval_preference["current_task_override"] is True
     task_dir = data_dir / "runtime" / "workspaces" / report.task_id
     approvals = ApprovalService(storage_path=task_dir / "approvals.jsonl").all(report.task_id)
     assert approvals
     assert all(item.status == "approved" for item in approvals)
-    assert approvals[0].approval_level == "automatic_full_access"
+    assert approvals[0].approval_level == "explicit"
     assert "return True" in (task_dir / "worktree" / "src" / "main.py").read_text(
         encoding="utf-8"
     )

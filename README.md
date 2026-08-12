@@ -2,7 +2,7 @@
 
 AI 智能体协作团队平台（MVP）。让用户提出目标，系统自动完成意图理解、计划、多智能体执行、审查与返工。
 
-当前状态：**M4-A Controlled Memory**。现已包含 LangGraph 多智能体运行时、Evidence、沙箱审批、Web Control Center、受治理长期记忆，以及 0..N OpenAI-compatible 自定义 Provider。
+当前状态：**M6-P Desktop Productization**。现已包含多 Provider Agent Team、JARVIS 本地语音与视觉、受治理长期记忆，以及持久化 Safe / Standard / Maximum 三档权限模式。
 
 规划文档见 `docs/planning/`（Phase 0 已通过；M0-00 校准已完成）。
 
