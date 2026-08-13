@@ -136,6 +136,20 @@ export function Settings() {
 
       <div id="custom-providers"><CustomProvidersPanel providers={custom.data?.providers ?? []} /></div>
 
+      <section className="card settings-section" aria-label={lang === "zh" ? "关于" : "About"}>
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">AI Team OS</span>
+            <h2>{lang === "zh" ? "开发者预览版" : "Developer Preview"}</h2>
+            <p className="muted">
+              {lang === "zh"
+                ? "版本 0.1.0 · 本地优先的 Windows 桌面预览版"
+                : "Version 0.1.0 · Local-first Windows desktop preview"}
+            </p>
+          </div>
+        </div>
+      </section>
+
       <details className="card advanced-raw">
         <summary>{t("settings.advancedConfig")}</summary>
         <p className="muted">{t("settings.advancedConfigHint")}</p>

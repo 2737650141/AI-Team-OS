@@ -14,7 +14,7 @@ use tauri::{
     async_runtime::Receiver,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, RunEvent, State, WindowEvent,
+    Emitter, Manager, RunEvent, State, WindowEvent,
 };
 use tauri_plugin_shell::{process::{CommandChild, CommandEvent}, ShellExt};
 
@@ -180,9 +180,32 @@ fn main() {
                 session_id: session_id.clone(),
             });
             append_desktop_log(&data_dir, &session_id, "desktop_started", "sidecar spawned");
-            let show = MenuItem::with_id(app, "show", "Show AI Team OS", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let show = MenuItem::with_id(app, "show", "打开 AI Team OS", true, None::<&str>)?;
+            let pause_jarvis =
+                MenuItem::with_id(app, "pause_jarvis", "暂停 JARVIS", true, None::<&str>)?;
+            let stop_computer = MenuItem::with_id(
+                app,
+                "stop_computer",
+                "停止电脑控制",
+                true,
+                None::<&str>,
+            )?;
+            let toggle_voice =
+                MenuItem::with_id(app, "toggle_voice", "语音 开/关", true, None::<&str>)?;
+            let settings =
+                MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show,
+                    &pause_jarvis,
+                    &stop_computer,
+                    &toggle_voice,
+                    &settings,
+                    &quit,
+                ],
+            )?;
             let mut tray = TrayIconBuilder::with_id("main-tray").menu(&menu).show_menu_on_left_click(false);
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
@@ -193,6 +216,16 @@ fn main() {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
+                }
+                "pause_jarvis" | "stop_computer" | "toggle_voice" => {
+                    let _ = app.emit("desktop-tray-action", event.id.as_ref());
+                }
+                "settings" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit("desktop-tray-action", event.id.as_ref());
                 }
                 "quit" => {
                     let state = app.state::<DesktopState>();

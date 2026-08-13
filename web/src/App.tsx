@@ -5,6 +5,7 @@ import { api } from "./api/client";
 import { I18nProvider, useI18n } from "./i18n";
 import { AppLayout } from "./layouts/AppLayout";
 import { RuntimeHealthGuard } from "./components/RuntimeHealthGuard";
+import { DesktopTrayBridge } from "./components/DesktopTrayBridge";
 import { Agents } from "./pages/Agents";
 import { Dashboard } from "./pages/Dashboard";
 import { Computer } from "./pages/Computer";
@@ -38,6 +39,7 @@ export function App() {
     <QueryClientProvider client={qc}>
       <I18nProvider>
         <RuntimeHealthGuard><BrowserRouter>
+          <DesktopTrayBridge />
           <Routes>
             <Route element={<AppLayout />}>
               <Route path="/" element={<Dashboard />} />

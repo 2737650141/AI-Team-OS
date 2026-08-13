@@ -48,8 +48,14 @@ try {
   $installer = Get-ChildItem "$repo\src-tauri\target\release\bundle\nsis\*.exe" |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if (-not $installer) { throw "NSIS installer not found" }
-  Copy-Item -Force $installer.FullName (Join-Path $releaseDir "AI-Team-OS-x64-Setup.exe")
-  Get-FileHash (Join-Path $releaseDir "AI-Team-OS-x64-Setup.exe") -Algorithm SHA256
+  $releaseInstaller = Join-Path $releaseDir "AI-Team-OS-x64-Setup.exe"
+  Copy-Item -Force $installer.FullName $releaseInstaller
+  Copy-Item -Force (Join-Path $repo "docs\releases\RELEASE_NOTES_M6P2.md") `
+    (Join-Path $releaseDir "RELEASE_NOTES.md")
+  $hash = Get-FileHash $releaseInstaller -Algorithm SHA256
+  "$($hash.Hash)  AI-Team-OS-x64-Setup.exe" | Set-Content `
+    (Join-Path $releaseDir "SHA256SUMS.txt") -Encoding ascii
+  $hash
 } finally {
   Pop-Location
 }
