@@ -44,11 +44,39 @@ as passed.
 4. PyInstaller's two-process one-file bootstrap could leave the worker behind if the desktop shell
    was terminated; the sidecar now watches the shell PID and exits with it.
 
-All three have regression guards and were rebuilt into the final installer.
+All four have regression guards and were rebuilt into the final installer.
+
+## Final release closure (2026-08-14)
+
+- Final source gates: 596 backend tests passed, 2 environment-gated tests skipped; Ruff, mypy,
+  `pip check`, TypeScript, ESLint, 13 frontend tests, production Vite build, Rust release build,
+  PyInstaller, NSIS, and npm high-severity audit all passed. The npm audit reported 0
+  vulnerabilities.
+- Release output contains only `AI-Team-OS-x64-Setup.exe`, `SHA256SUMS.txt`, and
+  `RELEASE_NOTES.md`. Installer size is 100,361,882 bytes; SHA-256 is
+  `85BC1093803E5A39703E5957E6E6DA86C5B58B865D46BB27527E6303814D0065`.
+- Upgrade installation exited 0. The existing audit and checkpoint database files retained their
+  exact pre-upgrade sizes and SHA-256 hashes.
+- Installed startup was measured at 1.15 seconds. A second launch retained one desktop instance;
+  the one-file sidecar had one bootstrap root and one worker, both belonging to that desktop
+  session.
+- Terminating the desktop parent left 0 sidecar processes. Closing the main window hid the window
+  while retaining one desktop session, confirming close-to-tray behavior.
+- The installed backend listened only on dynamic `127.0.0.1:50425`; an unauthenticated health
+  request returned HTTP 401.
+- Installed UI showed system online, zero pending approvals, persisted Maximum permission mode,
+  Developer Preview 0.1.0, and the Usage page's Reported/Estimated/Unavailable labels. The
+  installed store displayed 9 requests and 8,806 tokens, including a separate Diagnostic scope.
+- The six tray commands are release-compiled and covered by the desktop contract test. Windows 11
+  did not expose the hidden notification icon to UI Automation on this host, so per-menu installed
+  clicking is not claimed as passed; close-to-tray itself was exercised successfully.
+- The installer is unsigned, as stated in the release notes.
 
 ## Remaining release gate
 
-Windows Sandbox is not installed on this host, and no clean Windows VM was available. Therefore
+Windows Sandbox, Hyper-V cmdlets, VirtualBox, and VMware were not available on this host, and the
+Windows optional-feature query required elevation. No UAC bypass or automatic elevation was
+attempted. Therefore
 `CLEAN_INSTALL` remains **NOT VALIDATED** even though per-user install, launch, upgrade, live model
 usage, and persistence were validated on the current Windows machine. The phase may be reviewed,
 but M6-P must not be declared complete until the final installer is exercised on a clean Windows
