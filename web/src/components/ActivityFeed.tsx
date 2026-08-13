@@ -19,17 +19,19 @@ const IMPORTANT: Record<string, "success" | "danger" | "warning"> = {
 
 export function ActivityFeed({ events, presenting = false }: { events: RuntimeEvent[]; presenting?: boolean }) {
   const { lang, t } = useI18n();
+  const visibleEvents = events.slice(-300);
   return (
     <div className="feed activity-feed">
       {events.length === 0 && <p className="muted">{t("feed.noActivity")}</p>}
-      {events.map((event) => {
+      {visibleEvents.map((event) => {
         const tone = event.event_type === "test_completed" && Number(event.payload_safe.return_code ?? 0) !== 0
           ? "danger"
           : IMPORTANT[event.event_type];
-        const subtask = String(event.payload_safe.subtask_id ?? "");
+        const payload = event.payload_safe ?? {};
+        const subtask = String(payload.subtask_id ?? "");
         const modelDetail = event.event_type === "model_call_completed"
-          ? `${String(event.payload_safe.model ?? "")} · ${String(event.payload_safe.total_tokens ?? "—")} tokens · ${String(event.payload_safe.latency_ms ?? "—")}ms`
-          : event.event_type === "model_call_started" ? String(event.payload_safe.model ?? "") : "";
+          ? `${String(payload.model ?? "")} · ${String(payload.total_tokens ?? "—")} tokens · ${String(payload.latency_ms ?? "—")}ms`
+          : event.event_type === "model_call_started" ? String(payload.model ?? "") : "";
         return (
           <div key={event.event_id} className={`feed-item ${tone ? `feed-important ${tone}` : ""}`}>
             <span className="feed-icon">{tone === "danger" ? <XCircle size={15} /> : tone === "warning" ? <ShieldAlert size={15} /> : tone === "success" ? <CheckCircle2 size={15} /> : <CircleDot size={13} />}</span>

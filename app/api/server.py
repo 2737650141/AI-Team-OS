@@ -1276,7 +1276,6 @@ def task_events(run_id: str, after: int = 0) -> Any:
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
     def _stream():
-        import json as _json
         import time
 
         last = max(after, 0)
@@ -1299,16 +1298,19 @@ def task_events(run_id: str, after: int = 0) -> Any:
                     try:
                         st = status_task(run_id, data_dir=_data_dir())
                         if st.state.current_status in ("completed", "failed"):
+                            from datetime import datetime, timezone
+
                             payload = {
+                                "event_id": f"terminal-{run_id}-{last + 1}",
                                 "event_type": "task_status_changed",
-                                "task_id": run_id,
+                                "task_id": task_report.task_id,
                                 "run_id": run_id,
                                 "sequence": last + 1,  # 虚拟序列：仅用于终态通知
-                                "ts": _json.dumps({"now": True}),  # 占位，客户端只读类型/序列
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                                 "summary": f"task {st.state.current_status}",
                                 "actor_type": "system",
                                 "actor_id": run_id,
-                                "status": st.state.current_status,
+                                "payload_safe": {"status": st.state.current_status},
                             }
                             yield _format_sse_frame(last + 1, payload)
                             return

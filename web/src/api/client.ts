@@ -17,15 +17,24 @@ async function endpoint(path: string) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const target = await endpoint(path);
-  const resp = await fetch(target.url, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(target.token ? { "X-Desktop-Session": target.token } : {}),
-      ...(init?.headers || {}),
-    },
-  });
+  let resp: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    const target = await endpoint(path);
+    try {
+      resp = await fetch(target.url, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          ...(target.token ? { "X-Desktop-Session": target.token } : {}),
+          ...(init?.headers || {}),
+        },
+      });
+      break;
+    } catch (error) {
+      desktopSession = null;
+      if (attempt >= 1 || !("__TAURI_INTERNALS__" in window)) throw error;
+    }
+  }
   if (!resp.ok) {
     let detail = `${resp.status}`;
     try {
@@ -311,13 +320,17 @@ export function subscribeEvents(
   let lastId = 0;
   let closed = false;
   let abort: AbortController | null = null;
+  let retryTimer: number | null = null;
+  let retryAttempt = 0;
+  const seenIds = new Set<string>();
+  const backoff = [1000, 2000, 5000, 10000, 15000, 30000];
 
   const connect = async () => {
     if (closed) return;
-    const suffix = lastId ? `?after=${lastId}` : "";
-    const target = await endpoint(`/tasks/${runId}/events${suffix}`);
-    abort = new AbortController();
     try {
+      const suffix = lastId ? `?after=${lastId}` : "";
+      const target = await endpoint(`/tasks/${runId}/events${suffix}`);
+      abort = new AbortController();
       const response = await fetch(target.url, {
         headers: target.token ? { "X-Desktop-Session": target.token } : {},
         signal: abort.signal,
@@ -337,13 +350,22 @@ export function subscribeEvents(
           if (!data) continue;
           try {
             const ev = JSON.parse(data) as import("./types").RuntimeEvent;
-            const status = String(ev.payload_safe?.status ?? "");
+            if (
+              typeof ev.event_id !== "string" ||
+              typeof ev.sequence !== "number" ||
+              typeof ev.event_type !== "string" ||
+              !ev.payload_safe || typeof ev.payload_safe !== "object"
+            ) continue;
+            if (seenIds.has(ev.event_id)) continue;
+            seenIds.add(ev.event_id);
+            if (seenIds.size > 600) seenIds.delete(seenIds.values().next().value!);
+            retryAttempt = 0;
+            const status = String(ev.payload_safe.status ?? "");
             if (ev.event_type === "task_status_changed" && ["completed", "failed"].includes(status)) {
               closed = true;
               onDone?.();
               return;
             }
-            if (typeof ev.sequence !== "number" || typeof ev.event_type !== "string") continue;
             lastId = Math.max(lastId, ev.sequence);
             onEvent(ev);
           } catch {
@@ -352,15 +374,21 @@ export function subscribeEvents(
         }
       }
     } catch {
+      desktopSession = null;
       // Retry unless the caller explicitly closed the subscription.
     }
-    if (!closed) setTimeout(() => void connect(), 1500);
+    if (!closed) {
+      const delay = backoff[Math.min(retryAttempt, backoff.length - 1)];
+      retryAttempt += 1;
+      retryTimer = window.setTimeout(() => void connect(), delay);
+    }
   };
 
   void connect();
   return () => {
     closed = true;
     abort?.abort();
+    if (retryTimer !== null) window.clearTimeout(retryTimer);
     onDone?.();
   };
 }

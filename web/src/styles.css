@@ -344,6 +344,8 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .activity-feed .feed-item { align-items: center; padding: 6px 8px; border-bottom-style: solid; border-radius: 6px; }
 .feed-icon { display: inline-flex; color: var(--muted); }
 .activity-feed .feed-type { min-width: 132px; color: var(--text); font-weight: 550; }
+.runtime-recovery { min-height: 100vh; display: grid; place-items: center; padding: 32px; background: var(--bg); color: var(--text); }
+.runtime-recovery .card { width: min(640px, 100%); }
 .feed-context { color: var(--muted); font-family: ui-monospace, monospace; margin-left: auto; }
 .feed-important { border-left: 3px solid var(--yellow); background: rgba(234, 179, 8, .07); }
 .feed-important.danger { border-left-color: var(--red); background: rgba(239, 68, 68, .08); }

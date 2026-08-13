@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import socket
 import threading
@@ -45,10 +46,13 @@ def main() -> None:
     _frozen_support()
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--session-token", default=os.environ.get("AI_TEAM_OS_DESKTOP_SESSION_TOKEN"))
+    parser.add_argument(
+        "--session-token", default=os.environ.get("AI_TEAM_OS_DESKTOP_SESSION_TOKEN")
+    )
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--ready-file", required=True)
     parser.add_argument("--parent-pid", type=int, required=True)
+    parser.add_argument("--session-id", required=True)
     args = parser.parse_args()
     if not args.session_token:
         parser.error("desktop session token is required")
@@ -58,6 +62,13 @@ def main() -> None:
     ready_file.parent.mkdir(parents=True, exist_ok=True)
     os.environ["AI_TEAM_OS_DATA_DIR"] = str(data_dir)
     os.environ["AI_TEAM_OS_DESKTOP_SESSION_TOKEN"] = args.session_token
+    log_dir = data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=log_dir / "backend.log",
+        level=logging.WARNING,
+        format=f"%(asctime)s session={args.session_id} %(levelname)s %(name)s %(message)s",
+    )
     _exit_when_parent_exits(args.parent_pid)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

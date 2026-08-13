@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { api } from "./api/client";
 import { I18nProvider, useI18n } from "./i18n";
 import { AppLayout } from "./layouts/AppLayout";
+import { RuntimeHealthGuard } from "./components/RuntimeHealthGuard";
 import { Agents } from "./pages/Agents";
 import { Dashboard } from "./pages/Dashboard";
 import { Computer } from "./pages/Computer";
@@ -36,7 +37,7 @@ export function App() {
   return (
     <QueryClientProvider client={qc}>
       <I18nProvider>
-        <BrowserRouter>
+        <RuntimeHealthGuard><BrowserRouter>
           <Routes>
             <Route element={<AppLayout />}>
               <Route path="/" element={<Dashboard />} />
@@ -53,10 +54,11 @@ export function App() {
               <Route path="/memory" element={<Memory />} />
               <Route path="/personalization" element={<Personalization />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
             <Route path="/setup" element={<Setup />} />
           </Routes>
-        </BrowserRouter>
+        </BrowserRouter></RuntimeHealthGuard>
       </I18nProvider>
     </QueryClientProvider>
   );
