@@ -40,6 +40,60 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
 
 
+def relocate_single_file_hunks(diff: str, old_text: str) -> str:
+    """Relocate hunk headers only when their old-side text has one exact match.
+
+    The hunk body is never changed. Ambiguous, missing, malformed, or overlapping
+    matches are rejected, so this repairs line-number drift without weakening
+    context/deletion integrity checks.
+    """
+    lines = diff.splitlines()
+    old_lines = old_text.splitlines()
+    header_re = re.compile(
+        r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$"
+    )
+    output: list[str] = []
+    index = 0
+    cumulative_delta = 0
+    previous_end = 0
+    while index < len(lines):
+        line = lines[index]
+        match = header_re.match(line)
+        if match is None:
+            output.append(line)
+            index += 1
+            continue
+        body: list[str] = []
+        index += 1
+        while index < len(lines) and not lines[index].startswith(("@@ ", "--- ")):
+            body.append(lines[index])
+            index += 1
+        old_count = int(match.group(2) or "1")
+        new_count = int(match.group(4) or "1")
+        expected = [entry[1:] for entry in body if entry.startswith((" ", "-"))]
+        if len(expected) != old_count:
+            raise PatchError("cannot relocate hunk with inconsistent old line count")
+        candidates = [
+            start
+            for start in range(previous_end, len(old_lines) - old_count + 1)
+            if old_lines[start : start + old_count] == expected
+        ]
+        if len(candidates) != 1:
+            raise PatchError(
+                "cannot safely relocate hunk: old-side context match is "
+                + ("missing" if not candidates else "ambiguous")
+            )
+        actual_start = candidates[0]
+        previous_end = actual_start + old_count
+        old_start = actual_start + 1 if old_count else actual_start
+        new_start = old_start + cumulative_delta
+        suffix = match.group(5) or ""
+        output.append(f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{suffix}")
+        output.extend(body)
+        cumulative_delta += new_count - old_count
+    return "\n".join(output) + ("\n" if diff.endswith("\n") else "")
+
+
 def _validate_rel_path(rel: str, worktree: Path) -> Path:
     """路径安全（8.2-4/8.2-8）：worktree 内相对路径，拒绝绝对/穿越/UNC/ADS。"""
     if not rel.strip():
@@ -289,18 +343,30 @@ class PatchApplier:
         result.extend(old_lines[:idx])
         for line in hunk[1:]:
             if line.startswith(" "):
-                if idx < len(old_lines):
-                    result.append(old_lines[idx])
-                    idx += 1
-                else:
+                if idx >= len(old_lines):
                     raise PatchError("context line beyond file end")
+                expected = line[1:].rstrip("\r\n")
+                actual = old_lines[idx].rstrip("\r\n")
+                if actual != expected:
+                    raise PatchError(
+                        f"context mismatch at line {idx + 1}: "
+                        f"expected {expected!r}, found {actual!r}"
+                    )
+                result.append(old_lines[idx])
+                idx += 1
             elif line.startswith("+"):
                 result.append(line[1:] + ("\n" if not line[1:].endswith("\n") else ""))
             elif line.startswith("-"):
-                if idx < len(old_lines):
-                    idx += 1
-                else:
+                if idx >= len(old_lines):
                     raise PatchError("deletion beyond file end")
+                expected = line[1:].rstrip("\r\n")
+                actual = old_lines[idx].rstrip("\r\n")
+                if actual != expected:
+                    raise PatchError(
+                        f"deletion mismatch at line {idx + 1}: "
+                        f"expected {expected!r}, found {actual!r}"
+                    )
+                idx += 1
             else:
                 raise PatchError(f"unexpected diff line: {line[:40]}")
         result.extend(old_lines[idx:])

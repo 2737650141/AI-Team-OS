@@ -206,11 +206,18 @@ def build_github_tools(client: GitHubClient) -> list[ToolSpec]:
         except GitHubToolError as exc:
             return _err(exc)
 
-    def search_repositories(query: str, per_page: int = 10) -> dict:
+    def search_repositories(
+        query: str, per_page: int = 10, sort: str = "", order: str = "desc"
+    ) -> dict:
         try:
             q = validate_query(query)
             per = max(1, min(per_page, 100))
-            data = client.get("search/repositories", params={"q": q, "per_page": per})
+            params: dict[str, Any] = {"q": q, "per_page": per}
+            # 热门项目排序（PRODUCT-01 真实门禁："GitHub 热门项目" 按 stars 排序）
+            if sort in ("stars", "updated", "forks"):
+                params["sort"] = sort
+                params["order"] = "asc" if order == "asc" else "desc"
+            data = client.get("search/repositories", params=params)
             items = [
                 {
                     "full_name": r.get("full_name"),
@@ -287,8 +294,13 @@ def build_github_tools(client: GitHubClient) -> list[ToolSpec]:
         ),
         _spec(
             "github_search_repositories",
-            "搜索仓库",
-            {"query": "str", "per_page": "int"},
+            "搜索仓库（可按 stars 排序找热门项目；sort 可选 stars/updated/forks）",
+            {
+                "query": "str",
+                "per_page": "int",
+                "sort": {"type": "str", "required": False},
+                "order": {"type": "str", "required": False},
+            },
             search_repositories,
         ),
         _spec(

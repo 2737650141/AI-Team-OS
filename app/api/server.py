@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import AppSettings, load_settings
 from app.core.resume import ResumePayload
-from app.core.schemas import ClarificationPayload
+from app.core.schemas import ApprovalPayload, ClarificationPayload
 from app.gateway.contracts import ProviderError
 from app.memory.models import MemorySettings, MemoryType, PrivacyLevel
 from app.memory.service import MemoryService
@@ -47,6 +47,7 @@ from app.security.permissions import (
     PermissionMode,
     PermissionStore,
     RiskClass,
+    RiskClassifier,
 )
 from app.usage.context import ContextPolicy
 from app.usage.store import UsageStore
@@ -715,6 +716,55 @@ def put_permission_mode(body: PermissionModeBody) -> dict[str, Any]:
                 "timestamp": setting.changed_at,
             },
         )
+        if task.get("status") != "paused":
+            continue
+        snapshot = status_task(str(task["run_id"]), data_dir=_data_dir())
+        approval_id = snapshot.state.pending_approval_id
+        if not approval_id:
+            continue
+        approval = approval_show(approval_id, data_dir=_data_dir())
+        risk = RiskClassifier.classify(
+            str(approval.get("action_type") or approval.get("tool_name") or ""),
+            target=" ".join(approval.get("target_paths") or []),
+        )
+        decision = _permission_store().explain(
+            action=str(approval.get("action_type") or "pending_action"),
+            risk=risk,
+            target=" ".join(approval.get("target_paths") or []),
+            task_explicit=True,
+            source="permission_mode_change",
+        )
+        event_emit(
+            task_id=str(task["task_id"]),
+            run_id=str(task["run_id"]),
+            event_type="pending_approval_reevaluated",
+            actor_type="system",
+            actor_id="permission_policy",
+            summary=f"pending approval reevaluated: {decision.decision.value}",
+            payload_safe={
+                "approval_id": approval_id,
+                "risk": risk.value,
+                "decision": decision.decision.value,
+                "permission_mode": setting.mode.value,
+            },
+        )
+        if decision.decision.value != "allow":
+            continue
+        try:
+            resume_task(
+                str(task["run_id"]),
+                payload=ApprovalPayload(
+                    approval_id=approval_id,
+                    decision="approved",
+                    reason=f"{setting.mode.value} permission policy reevaluation",
+                ),
+                data_dir=_data_dir(),
+                settings=_settings(),
+            )
+        except (RuntimeError, KeyError):
+            # A concurrent user decision or task completion wins; the next
+            # status refresh observes the authoritative checkpoint.
+            pass
     return setting.model_dump(mode="json")
 
 
@@ -758,6 +808,9 @@ def evidence_detail(evidence_id: str) -> dict[str, Any]:
 
 @app.post("/tasks")
 def create_task(body: TaskCreate) -> dict[str, Any]:
+    from app.core.run_kind import classify_run_kind
+
+    run_kind = classify_run_kind(body.goal)
     overrides = dict(body.model_overrides)
     if body.project_alias:
         overrides["project_alias"] = body.project_alias
@@ -774,6 +827,7 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
             model_overrides=overrides or None,
             settings=_settings(),
             max_model_calls=body.max_calls,
+            run_kind=run_kind.value,
         )
     except ProviderError as exc:
         raise HTTPException(status_code=400, detail=exc.safe_message) from exc
@@ -784,6 +838,7 @@ def create_task(body: TaskCreate) -> dict[str, Any]:
         "task_id": report.task_id,
         "run_id": report.run_id,
         "status": report.status,
+        "run_kind": report.state.run_kind,
         "permission_mode": report.state.permission_mode,
         "permission_mode_at_start": report.state.permission_mode_at_start,
         "final_result": report.state.final_result,
@@ -829,6 +884,7 @@ def get_task(run_id: str) -> dict[str, Any]:
         "run_id": report.run_id,
         "status": report.status,
         "current_status": state.current_status,
+        "run_kind": state.run_kind,
         "failure_code": state.failure_code,
         "model_mode": state.model_mode,
         "permission_mode": state.permission_mode,
@@ -837,6 +893,7 @@ def get_task(run_id: str) -> dict[str, Any]:
         "goal": state.user_goal,
         "clarified_goal": state.clarified_goal,
         "pending_clarification_id": state.pending_clarification_id,
+        "pending_approval_id": state.pending_approval_id,
         "final_result": state.final_result,
         "plan": state.plan,
         "subtasks": [
@@ -1987,20 +2044,21 @@ def test_custom_model(provider_id: str, body: CustomModelTestBody | None = None)
         provider_name=provider.provider_name,
     )
     events_init(_data_dir())
+    diagnostic_id = f"diagnostic:model-test:{uuid.uuid4().hex[:12]}"
     gateway = ModelGateway(
         provider=runtime_provider,
         budget=BudgetController(512, 0.05, max_calls=3),
         audit=AuditLog(_data_dir() / "audit.jsonl"),
-        task_id="real01-model-test",
-        run_id="real01-model-test",
+        task_id=diagnostic_id,
+        run_id=diagnostic_id,
         usage_store=_usage_store(),
     )
     request = ModelRequest(
         request_id=uuid.uuid4().hex[:16],
-        task_id="real01-model-test",
-        run_id="real01-model-test",
-        agent_id="acceptance",
-        role_type="supervisor",
+        task_id=diagnostic_id,
+        run_id=diagnostic_id,
+        agent_id="provider_probe",
+        role_type="diagnostic",
         model=model,
         messages=[
             {"role": "system", "content": "Return only valid JSON with no markdown."},
@@ -2012,7 +2070,7 @@ def test_custom_model(provider_id: str, body: CustomModelTestBody | None = None)
         response_schema={"status": {"type": "str"}, "number": {"type": "int"}},
         max_output_tokens=64,
         timeout_seconds=30,
-        metadata={"acceptance": "REAL-01-A", "provider_id": provider_id},
+        metadata={"scope": "diagnostic", "provider_id": provider_id},
     )
     telemetry: dict[str, Any] = {}
     try:

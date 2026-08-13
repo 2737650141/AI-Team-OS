@@ -52,19 +52,19 @@ class FakeResearcher:
                     claims.extend(
                         [
                             Claim(
-                                claim_id=f"{subtask.subtask_id}-c-license",
+                                claim_id=f"{subtask.subtask_id}-{repo}-c-license",
                                 text=f"{repo} 许可证为 {data['license']}",
                                 evidence_ids=[eid],
                                 confidence=0.95,
                             ),
                             Claim(
-                                claim_id=f"{subtask.subtask_id}-c-stars",
+                                claim_id=f"{subtask.subtask_id}-{repo}-c-stars",
                                 text=f"{repo} stars={data['stars']}",
                                 evidence_ids=[eid],
                                 confidence=0.95,
                             ),
                             Claim(
-                                claim_id=f"{subtask.subtask_id}-c-active",
+                                claim_id=f"{subtask.subtask_id}-{repo}-c-active",
                                 text=f"{repo} 最近提交 {data['pushed_at']}，处于活跃维护",
                                 evidence_ids=[eid],
                                 confidence=0.9,
@@ -105,6 +105,27 @@ class FakeResearcher:
                 else:
                     unverified.append(
                         f"fixture_source_lookup({source_id}) 失败: {redact(str(result.error))}"
+                    )
+            elif ref.startswith("local_list_directory:"):
+                path = ref.split(":", 1)[1] or "."
+                result = self._gw.invoke("local_list_directory", {"path": path}, role=role)
+                if result.ok:
+                    data = result.data
+                    eid = result.evidence_id or (
+                        self._gw.evidence[-1]["id"] if self._gw.evidence else ""
+                    )
+                    evidence_refs.append(eid)
+                    claims.append(
+                        Claim(
+                            claim_id=f"{subtask.subtask_id}-local-list",
+                            text=f"已读取目录 {path} 的受控文件清单：{str(data)[:240]}",
+                            evidence_ids=[eid],
+                            confidence=0.9,
+                        )
+                    )
+                else:
+                    unverified.append(
+                        f"local_list_directory({path}) 失败: {redact(str(result.error))}"
                     )
             elif ref in {s.subtask_id for s in all_subtasks}:
                 dep = next(s for s in all_subtasks if s.subtask_id == ref)

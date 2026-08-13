@@ -7,11 +7,14 @@ Reviewer 只接收：原始要求、验收条件、产物、Evidence、确定性
 
 from __future__ import annotations
 
-from app.core.schemas import ReviewIssue, ReviewResult
+from app.core.schemas import ReviewIssue, ReviewResult, ReviewStatus
 from app.core.state import SubtaskState
 
-# 集中配置：最大返工次数（004 十一，禁止散落硬编码）
-MAX_REWORK = 2
+MAX_REWORK_BY_COMPLEXITY = {"trivial": 0, "simple": 0, "standard": 1, "complex": 2}
+
+
+def max_rework_for(complexity: str) -> int:
+    return MAX_REWORK_BY_COMPLEXITY.get(complexity, 1)
 
 
 class DeterministicReviewer:
@@ -113,7 +116,7 @@ class DeterministicReviewer:
         if subtask.assigned_role == "executor":
             metadata = subtask.execution_result.metadata or {}
             status = metadata.get("status")
-            if status not in ("implemented",):
+            if status not in ("implemented", "implemented_replay"):
                 issues.append(
                     ReviewIssue(
                         code="executor_not_implemented",
@@ -174,7 +177,8 @@ class FakeReviewer:
     ) -> ReviewResult:
         if deterministic_issues:
             return ReviewResult(
-                verdict="reject",
+                status=ReviewStatus.REWORK,
+                summary="确定性验收条件未满足",
                 issues=deterministic_issues,
                 rework_targets=[subtask.subtask_id],
                 accepted_claims=[],
@@ -182,11 +186,16 @@ class FakeReviewer:
                     c.claim_id
                     for c in (subtask.execution_result.claims if subtask.execution_result else [])
                 ],
+                required_change="修正全部确定性检查失败项："
+                + "; ".join(i.message for i in deterministic_issues[:5]),
+                target_role=subtask.assigned_role,
+                retryable=True,
             )
         # 确定性通过后：结构化评审（场景驱动）
         if self._scenario == "review_always_reject":
             return ReviewResult(
-                verdict="reject",
+                status=ReviewStatus.REWORK,
+                summary="测试场景要求 Supervisor replan",
                 issues=[
                     ReviewIssue(
                         code="scenario_always_reject",
@@ -200,6 +209,9 @@ class FakeReviewer:
                     c.claim_id
                     for c in (subtask.execution_result.claims if subtask.execution_result else [])
                 ],
+                required_change="场景强制拒绝：本子任务无法通过重试修复，需 Supervisor replan",
+                target_role=subtask.assigned_role,
+                retryable=False,
             )
         if (
             self._scenario == "review_reject_once_then_pass"
@@ -208,7 +220,8 @@ class FakeReviewer:
         ):
             # GT-11：仅汇总子任务 s3 首次评审拒绝一次（配合 researcher 首次缺证据注入）
             return ReviewResult(
-                verdict="reject",
+                status=ReviewStatus.REWORK,
+                summary="首次评审要求补充证据",
                 issues=[
                     ReviewIssue(
                         code="scenario_reject_once",
@@ -219,6 +232,9 @@ class FakeReviewer:
                 rework_targets=[subtask.subtask_id],
                 accepted_claims=[],
                 rejected_claims=[],
+                required_change="补充证据后重试（场景：仅首次拒绝）",
+                target_role=subtask.assigned_role,
+                retryable=True,
             )
         if (
             self._scenario == "review_reject_tool_once"
@@ -227,7 +243,8 @@ class FakeReviewer:
         ):
             # 004 4.2：工具型子任务首次拒绝一次 → 返工时缓存命中（handler 不重跑）→ 通过
             return ReviewResult(
-                verdict="reject",
+                status=ReviewStatus.REWORK,
+                summary="首次评审要求定向返工",
                 issues=[
                     ReviewIssue(
                         code="scenario_reject_tool_once",
@@ -238,10 +255,14 @@ class FakeReviewer:
                 rework_targets=[subtask.subtask_id],
                 accepted_claims=[],
                 rejected_claims=[],
+                required_change="返工（工具缓存命中后重新评审）",
+                target_role=subtask.assigned_role,
+                retryable=True,
             )
         claims = subtask.execution_result.claims if subtask.execution_result else []
         return ReviewResult(
-            verdict="pass",
+            status=ReviewStatus.PASS,
+            summary="全部核心验收条件满足",
             issues=[],
             rework_targets=[],
             accepted_claims=[c.claim_id for c in claims],

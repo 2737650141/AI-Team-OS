@@ -99,6 +99,7 @@ class UsageReconciler:
         compression = compression or {}
         return NormalizedModelUsage(
             usage_id=uuid.uuid4().hex,
+            scope=str(request.metadata.get("scope") or "user_task"),
             task_id=request.task_id,
             run_id=request.run_id,
             call_id=request.request_id,

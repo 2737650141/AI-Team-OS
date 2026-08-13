@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
@@ -52,6 +53,31 @@ from app.usage.store import UsageStore
 
 DEFAULT_REPO_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "repos.json"
 DEFAULT_SOURCE_FIXTURE = Path(__file__).parent / "tools" / "fixtures" / "sources.json"
+
+_CHECKPOINT_TYPE_ALLOWLIST = (
+    ("app.core.schemas", "Claim"),
+    ("app.core.schemas", "ExecutionResult"),
+    ("app.core.schemas", "ReviewIssue"),
+    ("app.core.schemas", "ReviewStatus"),
+    ("app.core.schemas", "CriterionResult"),
+    ("app.core.schemas", "ReworkItem"),
+    ("app.core.schemas", "ReviewResult"),
+    ("app.core.schemas", "ClarificationRecord"),
+    ("app.core.schemas", "ClarificationPayload"),
+    ("app.core.schemas", "ApprovalPayload"),
+    ("app.core.state", "ToolCallRecord"),
+    ("app.core.state", "Evidence"),
+    ("app.core.state", "Approval"),
+    ("app.core.state", "SubtaskState"),
+)
+
+
+def _checkpoint_saver(conn: sqlite3.Connection) -> SqliteSaver:
+    """Use an explicit local-state allowlist; never deserialize arbitrary types."""
+    return SqliteSaver(
+        conn,
+        serde=JsonPlusSerializer(allowed_msgpack_modules=_CHECKPOINT_TYPE_ALLOWLIST),
+    )
 
 
 @dataclass
@@ -269,6 +295,31 @@ def _open_conn(data_dir: Path) -> sqlite3.Connection:
     return sqlite3.connect(str(data_dir / "checkpoints.db"), check_same_thread=False)
 
 
+def _failure_code_from_provider(code: str) -> str:
+    """ProviderErrorCode → FailureCode 映射（PRODUCT-01 真实门禁修复：
+    未知 code 直接写入 state.failure_code 会被 TaskState 校验拒绝导致崩溃）。"""
+    from app.gateway.contracts import ProviderErrorCode
+
+    mapping = {
+        ProviderErrorCode.BUDGET_INSUFFICIENT: "budget_exceeded",
+        ProviderErrorCode.SCHEMA_VALIDATION_FAILED: "schema_invalid",
+        ProviderErrorCode.MALFORMED_RESPONSE: "schema_invalid",
+        ProviderErrorCode.AUTHENTICATION_ERROR: "provider_auth",
+        ProviderErrorCode.PERMISSION_ERROR: "provider_auth",
+        ProviderErrorCode.TIMEOUT: "provider_timeout",
+        ProviderErrorCode.RATE_LIMITED: "provider_rate_limit",
+        ProviderErrorCode.PROVIDER_INTERNAL_ERROR: "provider_server",
+        ProviderErrorCode.CONNECTION_ERROR: "provider_server",
+        ProviderErrorCode.MODEL_NOT_FOUND: "provider_model",
+        ProviderErrorCode.CONTEXT_LENGTH_EXCEEDED: "provider_model",
+    }
+    try:
+        normalized = ProviderErrorCode(code)
+    except ValueError:
+        return "provider_error"
+    return mapping.get(normalized, "provider_error")
+
+
 def _build_context(
     state: TaskState,
     data_dir: Path,
@@ -316,6 +367,12 @@ def _build_context(
         initial_usage=state.budget_usage,
         max_calls=state.max_model_calls,
     )
+    from app.core.workflow_cost import WorkflowCostGovernor
+
+    workflow_governor = WorkflowCostGovernor(
+        complexity=state.complexity,
+        hard_limit=state.max_model_calls,
+    )
     audit = AuditLog(data_dir / "audit.jsonl")
     if model_mode == "real":
         provider = build_provider(settings, data_dir, project_id=state.project_id)
@@ -328,6 +385,7 @@ def _build_context(
         task_id=state.task_id,
         run_id=state.run_id,
         usage_store=UsageStore(data_dir),
+        workflow_governor=workflow_governor,
     )
     tool_gateway = ToolGateway(
         audit=audit,
@@ -502,7 +560,7 @@ def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
         settings=ctx.settings,
         sandbox_context=ctx.sandbox,
     )
-    return graph.compile(checkpointer=SqliteSaver(conn))
+    return graph.compile(checkpointer=_checkpoint_saver(conn))
 
 
 def run_task(
@@ -515,8 +573,9 @@ def run_task(
     model_mode: str = "fake",
     model_overrides: dict[str, str] | None = None,
     settings: AppSettings | None = None,
-    max_model_calls: int = 30,
+    max_model_calls: int = 20,
     permission_mode: str | None = None,
+    run_kind: str = "user_task",
 ) -> RunReport:
     """创建并运行任务（进程 A）。vague_goal 场景在澄清 interrupt 处暂停返回。"""
     data_dir = data_dir or Path("data")
@@ -540,6 +599,7 @@ def run_task(
         run_id=run_id,
         project_id=project_id,
         user_goal=goal,
+        run_kind=run_kind,
         token_budget=token_budget,
         cost_budget=cost_budget,
         max_model_calls=max_model_calls,
@@ -547,6 +607,11 @@ def run_task(
         permission_mode=permission_mode,
         permission_mode_at_start=permission_mode,
     )
+    from app.core.complexity import classify_task
+    from app.core.orchestration import classify_task_shape
+
+    state.complexity = classify_task(goal).value
+    state.task_shape = classify_task_shape(goal).value
     from app.memory.service import MemoryService
 
     memory_service = MemoryService.from_data_dir(data_dir)
@@ -589,6 +654,7 @@ def run_task(
         summary=f"task created: {goal}",
         payload_safe={
             "goal": goal,
+            "run_kind": run_kind,
             "model_mode": model_mode,
             "project_id": project_id,
             "permission_mode": permission_mode,
@@ -715,15 +781,16 @@ def run_task(
     except ProviderError as exc:
         # Persist bounded model/schema failures as terminal checkpoints. A
         # request that has already ended must never look stuck in planning.
+        fc = _failure_code_from_provider(exc.code.value)
         state.current_status = "failed"
-        state.failure_code = exc.code.value
+        state.failure_code = fc
         state.final_result = exc.safe_message
         state.budget_usage = dict(ctx.budget.usage)
         compiled.update_state(
             {"configurable": {"thread_id": run_id}},
             {
                 "current_status": "failed",
-                "failure_code": exc.code.value,
+                "failure_code": fc,
                 "final_result": exc.safe_message,
                 "budget_usage": ctx.budget.usage,
             },
@@ -735,7 +802,7 @@ def run_task(
             actor_type="system",
             actor_id="runner",
             summary="task failed after bounded model processing",
-            payload_safe={"failure_code": exc.code.value},
+            payload_safe={"failure_code": fc},
         )
     finally:
         conn.close()
@@ -789,7 +856,7 @@ def resume_task(
     data_dir = data_dir or Path("data")
     conn = _open_conn(data_dir)
     try:
-        saver = SqliteSaver(conn)
+        saver = _checkpoint_saver(conn)
         checkpoint = saver.get_tuple(config={"configurable": {"thread_id": run_id}})
         if checkpoint is None:
             raise KeyError(f"run not found: {run_id}")
@@ -887,17 +954,18 @@ def resume_task(
                 "failed",
             )
         except ProviderError as exc:
+            fc = _failure_code_from_provider(exc.code.value)
             compiled.update_state(
                 {"configurable": {"thread_id": run_id}},
                 {
                     "current_status": "failed",
-                    "failure_code": exc.code.value,
+                    "failure_code": fc,
                     "final_result": exc.safe_message,
                     "budget_usage": ctx.budget.usage,
                 },
             )
             state.current_status = "failed"
-            state.failure_code = exc.code.value
+            state.failure_code = fc
             state.final_result = exc.safe_message
             state.budget_usage = dict(ctx.budget.usage)
             return RunReport(
@@ -939,10 +1007,16 @@ def resume_task(
                 "paused",
             )
         state = TaskState.model_validate(result)
+        state.pending_approval_id = None
+        state.pending_clarification_id = None
         state.budget_usage = dict(ctx.budget.usage)
         compiled.update_state(
             {"configurable": {"thread_id": run_id}},
-            {"budget_usage": ctx.budget.usage},
+            {
+                "budget_usage": ctx.budget.usage,
+                "pending_approval_id": None,
+                "pending_clarification_id": None,
+            },
         )
         # 图已设置最终状态（completed / failed），runner 不覆盖
         return RunReport(
@@ -963,7 +1037,7 @@ def status_task(run_id: str, data_dir: Path | None = None) -> RunReport:
     data_dir = data_dir or Path("data")
     conn = _open_conn(data_dir)
     try:
-        saver = SqliteSaver(conn)
+        saver = _checkpoint_saver(conn)
         checkpoint = saver.get_tuple(config={"configurable": {"thread_id": run_id}})
         if checkpoint is None:
             raise KeyError(f"run not found: {run_id}")
@@ -981,7 +1055,9 @@ def status_task(run_id: str, data_dir: Path | None = None) -> RunReport:
         conn.close()
 
 
-def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
+def list_tasks(
+    data_dir: Path | None = None, *, include_conversations: bool = False
+) -> list[dict[str, Any]]:
     """任务列表（UI Dashboard/Recent Tasks）：checkpoints.db 各 thread 最新状态。"""
     data_dir = data_dir or Path("data")
     conn = _open_conn(data_dir)
@@ -998,11 +1074,23 @@ def list_tasks(data_dir: Path | None = None) -> list[dict[str, Any]]:
         for thread_id, _latest_checkpoint in rows:
             try:
                 report = status_task(thread_id, data_dir)
+                from app.core.run_kind import RunKind, effective_run_kind
+
+                run_kind = effective_run_kind(report.state.run_kind, report.state.user_goal)
+                if run_kind in {RunKind.DIAGNOSTIC, RunKind.SYSTEM}:
+                    if run_kind is RunKind.DIAGNOSTIC:
+                        from app.usage.store import UsageStore
+
+                        UsageStore(data_dir).set_scope(report.state.task_id, "diagnostic")
+                    continue
+                if run_kind is RunKind.CONVERSATION and not include_conversations:
+                    continue
                 summary: dict[str, Any] = {
                     "task_id": report.task_id,
                     "run_id": report.run_id or thread_id,
                     "status": report.state.current_status,
                     "goal": report.state.user_goal,
+                    "run_kind": run_kind.value,
                     "project_id": report.state.project_id,
                     "model_mode": report.state.model_mode,
                     "permission_mode": report.state.permission_mode,
@@ -1234,7 +1322,7 @@ def trace_task(run_id: str, data_dir: Path | None = None) -> dict:
     data_dir = data_dir or Path("data")
     conn = _open_conn(data_dir)
     try:
-        saver = SqliteSaver(conn)
+        saver = _checkpoint_saver(conn)
         checkpoint = saver.get_tuple(config={"configurable": {"thread_id": run_id}})
         if checkpoint is None:
             raise KeyError(f"run not found: {run_id}")
@@ -1536,11 +1624,10 @@ def rollback(
 
 def _load_checkpoint(run_id: str, data_dir: Path) -> dict:
     """读取 checkpoint 状态（只读辅助）。"""
-    from langgraph.checkpoint.sqlite import SqliteSaver
 
     conn = _open_conn(data_dir)
     try:
-        saver = SqliteSaver(conn)
+        saver = _checkpoint_saver(conn)
         checkpoint = saver.get_tuple(config={"configurable": {"thread_id": run_id}})
         if checkpoint is None:
             raise KeyError(f"run not found: {run_id}")

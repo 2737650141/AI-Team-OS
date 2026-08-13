@@ -105,6 +105,8 @@ class ContextBuilder:
                         entry[key] = value
                 evidence.append(entry)
         return {
+            "context_pack": "artifact_focused",
+            "context_chars": 0,
             "requirement": subtask.objective,
             "acceptance": subtask.acceptance_criteria,
             "artifact": (

@@ -10,6 +10,7 @@ from typing import Any, Callable, Protocol
 
 from app.core.budget import BudgetController, BudgetExceeded, BudgetSnapshot
 from app.core.config import lookup_price
+from app.core.workflow_cost import CostDecision, WorkflowCostGovernor
 from app.gateway.audit import AuditLog
 from app.gateway.contracts import (
     ModelRequest,
@@ -36,6 +37,18 @@ class LLMProvider(Protocol):
 
     def estimate_cost(self, max_tokens: int) -> float:
         """调用前成本估算（用于预算预留）；无法估算时返回 0.0。"""
+
+
+class UsageStoreProtocol(Protocol):
+    def capability(self, provider_id: str, model_id: str) -> Any | None: ...
+
+    def set_capability(self, capability: Any) -> None: ...
+
+    def record_checkpoint(
+        self, checkpoint: Any, metrics: dict[str, Any], *, role: str, model: str
+    ) -> None: ...
+
+    def record(self, usage: Any) -> None: ...
 
 
 class DeterministicFakeModel:
@@ -81,7 +94,8 @@ class ModelGateway:
         audit: AuditLog,
         task_id: str,
         run_id: str | None = None,
-        usage_store: object | None = None,
+        usage_store: UsageStoreProtocol | None = None,
+        workflow_governor: WorkflowCostGovernor | None = None,
     ) -> None:
         self._provider: Any = provider
         self._budget = budget
@@ -89,6 +103,7 @@ class ModelGateway:
         self._task_id = task_id
         self._run_id = run_id
         self._usage_store = usage_store
+        self._workflow_governor = workflow_governor
 
     @property
     def budget(self) -> BudgetSnapshot:
@@ -152,6 +167,39 @@ class ModelGateway:
             if hasattr(self._provider, "estimate_usage")
             else UsageEstimate()
         )
+        if self._workflow_governor is not None:
+            assessment = self._workflow_governor.assess_and_reserve(
+                request.role_type,
+                int(self._budget.usage.get("calls", 0)),
+            )
+            if assessment.decision in {CostDecision.WARNING, CostDecision.RECOVERY}:
+                from app.core.events import emit as event_emit
+
+                event_emit(
+                    task_id=self._task_id,
+                    run_id=request.run_id or self._run_id,
+                    event_type=(
+                        "budget_warning"
+                        if assessment.decision is CostDecision.WARNING
+                        else "budget_recovery"
+                    ),
+                    actor_type="supervisor",
+                    actor_id="workflow_cost_governor",
+                    summary=assessment.reason,
+                    payload_safe={
+                        "calls_used": assessment.calls_used,
+                        "role": request.role_type,
+                        "role_calls": assessment.role_calls,
+                        "estimated_remaining_calls": assessment.estimated_remaining_calls,
+                    },
+                )
+            if assessment.decision in {CostDecision.RECOVERY, CostDecision.STOP}:
+                raise ProviderError(
+                    ProviderErrorCode.BUDGET_INSUFFICIENT,
+                    assessment.reason,
+                    provider=provider_name,
+                    model=request.model,
+                )
         # 价格按集中价格表计算（10.3）：调用前预留最大费用；未知价格不伪造
         if est.estimated_max_cost is None:
             price = lookup_price(provider_name, request.model)
@@ -214,9 +262,10 @@ class ModelGateway:
                     context_limit=capability.context_window,
                     critical=critical,
                 )
-                self._usage_store.record_checkpoint(
-                    checkpoint, compression, role=request.role_type, model=request.model
-                )
+                if self._usage_store is not None:
+                    self._usage_store.record_checkpoint(
+                        checkpoint, compression, role=request.role_type, model=request.model
+                    )
                 compact_payload = checkpoint.model_dump(
                     mode="json", exclude={"checkpoint_id", "created_at"}
                 )

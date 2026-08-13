@@ -46,7 +46,7 @@ class ToolResult:
     ok: bool
     data: Any = None
     error: str | None = None
-    status: str = "ok"  # ok | blocked | error | skipped | cached_success_result
+    status: str = "ok"  # ok | blocked | error | argument_error | skipped | cached_success_result
     evidence_id: str | None = None  # 成功调用产生的 evidence 记录 id（gateway 生成）
     cached_from: str | None = None  # 缓存命中：原 evidence 记录 id
     original_ts: str | None = None  # 缓存命中：原始执行时间

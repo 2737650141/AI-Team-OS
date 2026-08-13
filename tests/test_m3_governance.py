@@ -362,7 +362,7 @@ def test_llm_reviewer_deterministic_failure_not_overridable(tmp_path: Path) -> N
 # ---------- 21：Prompt 版本和哈希 ----------
 def test_prompt_version_and_hash() -> None:
     assert PLANNER_PROMPT.prompt_id == "planner.plan"
-    assert PLANNER_PROMPT.version == "1.0"
+    assert PLANNER_PROMPT.version == "2.0"
     assert len(PLANNER_PROMPT.hash) == 16
     assert set(PROMPT_REGISTRY.keys()) == {
         "supervisor.decision",

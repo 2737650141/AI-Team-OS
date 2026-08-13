@@ -39,6 +39,7 @@ class CapabilitySource(StrEnum):
 
 class NormalizedModelUsage(BaseModel):
     usage_id: str
+    scope: str = "user_task"
     task_id: str
     run_id: str | None = None
     call_id: str

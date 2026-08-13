@@ -4,6 +4,28 @@ from __future__ import annotations
 
 from app.core.schemas import AgentSpec
 
+RESEARCHER_READ_ONLY_TOOLS = [
+    "github_repo_info",
+    "github_read_file",
+    "github_list_directory",
+    "github_list_commits",
+    "github_list_issues",
+    "github_get_issue",
+    "github_list_pull_requests",
+    "github_get_pull_request",
+    "github_search_repositories",
+    "github_search_code",
+    "fixture_repo_lookup",
+    "fixture_source_lookup",
+    "local_read_text",
+    "local_list_directory",
+    "local_file_metadata",
+    "local_read_json",
+    "local_read_csv",
+    "local_read_pdf",
+    "web_fetch",
+]
+
 
 class AgentRegistry:
     def __init__(self) -> None:
@@ -70,16 +92,7 @@ def default_registry() -> AgentRegistry:
                 "只允许只读 Fixture 工具；输出 ResearchReport；"
                 "无 evidence 的 Claim 必须标记未验证；不能直接写 final_result。"
             ),
-            allowed_tools=[
-                "fixture_repo_lookup",
-                "fixture_source_lookup",
-                "local_read_text",
-                "local_list_directory",
-                "local_file_metadata",
-                "local_read_json",
-                "local_read_csv",
-                "local_read_pdf",
-            ],
+            allowed_tools=RESEARCHER_READ_ONLY_TOOLS,
             token_limit=64000,
             max_tool_calls=10,
         )

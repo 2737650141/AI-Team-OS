@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import threading
 import uuid
@@ -113,6 +114,68 @@ class ToolGateway:
         """可用工具名（006 十二：研究者工具循环的允许集合）。"""
         return sorted(self._tools.keys())
 
+    def audit_event(self, event_type: str, **fields: object) -> None:
+        """Sanitized orchestration event; AuditLog applies the shared redactor."""
+        self._audit.entry(event_type, task_id=self._task_id, **fields)
+
+    def describe_tools(self) -> str:
+        """工具参数说明（PRODUCT-01：减少 LLM 工具参数幻觉——模型需要知道
+        每个工具的必需参数名，否则 github_repo_info 等会因缺 repo/幻觉字段失败）。"""
+        lines = []
+        for name in self.available_tools():
+            contract = self.tool_contract(name)
+            lines.append(
+                f"{name}: {contract['description']}; required={contract['required']}; "
+                f"optional={contract['optional']}; types={contract['types']}; "
+                f"example={contract['example']}"
+            )
+        return "; ".join(lines)
+
+    def tool_contract(self, name: str) -> dict[str, Any]:
+        """Complete, model-facing schema generated from ToolSpec and handler defaults."""
+        spec = self._tools[name]
+        schema = spec.args_schema or spec.input_schema or {}
+        try:
+            signature = inspect.signature(spec.handler)
+        except (TypeError, ValueError):
+            signature = None
+        required: list[str] = []
+        optional: list[str] = []
+        for key, definition in schema.items():
+            explicit_optional = isinstance(definition, dict) and definition.get("required") is False
+            has_default = (
+                signature is not None
+                and key in signature.parameters
+                and signature.parameters[key].default is not inspect.Parameter.empty
+            )
+            (optional if explicit_optional or has_default else required).append(key)
+        example: dict[str, Any] = {}
+        for key in required:
+            lowered = key.lower()
+            if lowered == "repo":
+                example[key] = "langchain-ai/langgraph"
+            elif lowered == "query":
+                example[key] = "multi agent orchestration"
+            elif lowered == "path":
+                example[key] = "README.md"
+            elif lowered == "number":
+                example[key] = 1
+            else:
+                example[key] = f"<{key}>"
+        return {
+            "name": name,
+            "description": spec.description,
+            "required": required,
+            "optional": optional,
+            "types": schema,
+            "allowed_values": {
+                key: value.get("allowed_values")
+                for key, value in schema.items()
+                if isinstance(value, dict) and value.get("allowed_values")
+            },
+            "example": example,
+        }
+
     def invoke(
         self,
         tool_name: str,
@@ -189,6 +252,44 @@ class ToolGateway:
                 error=f"tool {tool_name} not allowed for role {effective_role}",
                 status="blocked",
             )
+        # Normalize before schema validation, policy, quota and idempotency so
+        # semantically identical calls cannot consume duplicate quota/cache keys.
+        contract = self.tool_contract(tool_name)
+        from app.core.tool_repair import ToolCallRepairLayer
+
+        prepared = ToolCallRepairLayer.prepare(
+            args,
+            set(contract["required"]) | set(contract["optional"]),
+            set(contract["required"]),
+        )
+        if prepared.removed or prepared.normalized:
+            self._audit.entry(
+                "tool_args_sanitized",
+                task_id=self._task_id,
+                tool=tool_name,
+                removed=prepared.removed,
+                normalized=prepared.normalized,
+            )
+            # Compatibility for existing audit consumers; remove after migration.
+            self._audit.entry(
+                "tool_args_dropped",
+                task_id=self._task_id,
+                tool=tool_name,
+                error=redact(str(prepared.removed))[:200],
+            )
+        if prepared.missing:
+            self._audit.entry(
+                "tool_argument_missing",
+                task_id=self._task_id,
+                tool=tool_name,
+                required=prepared.missing,
+            )
+            return ToolResult(
+                ok=False,
+                error=f"TOOL_ARGUMENT_MISSING required={prepared.missing}",
+                status="argument_error",
+            )
+        args = prepared.args
         if tool.args_schema:
             try:
                 from app.core.output_governance import build_validator
@@ -451,7 +552,15 @@ class ToolGateway:
                 )
 
         try:
-            data = tool.handler(**args, ctx=ctx) if tool.accepts_ctx else tool.handler(**args)
+            # PRODUCT-01 真实门禁：LLM 提议的工具参数可能包含 Schema 外幻觉字段
+            # （如 q/sort/order），直接 **args 展开会让 handler 因 unexpected
+            # keyword argument 崩溃。按参数 Schema 的字段白名单过滤后再调用
+            # （过滤属防御，不影响 Schema 内合法参数）。
+            data = (
+                tool.handler(**args, ctx=ctx)
+                if tool.accepts_ctx
+                else tool.handler(**args)
+            )
         except Exception as exc:  # noqa: BLE001
             record["status"] = "error"
             self.tool_calls.append(record)

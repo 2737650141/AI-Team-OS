@@ -38,6 +38,9 @@ def test_agent_tool_whitelist() -> None:
     researcher = registry.get("researcher")
     # 007 六：researcher 白名单扩展本地只读工具（沙箱任务读取 worktree）
     assert {"fixture_repo_lookup", "fixture_source_lookup"} <= set(researcher.allowed_tools)
+    assert {"github_search_repositories", "github_repo_info"} <= set(
+        researcher.allowed_tools
+    )
     # 全部为只读工具（无沙箱写工具/危险工具）
     assert "sandbox_write_file" not in researcher.allowed_tools
     assert "sandbox_delete_path" not in researcher.allowed_tools

@@ -50,6 +50,20 @@ class FailureCode(str, Enum):
     REWORK_LIMIT_EXCEEDED = "rework_limit_exceeded"
     INFORMATION_INSUFFICIENT = "information_insufficient"
     FINALIZE_CONDITIONS_NOT_MET = "finalize_conditions_not_met"
+    # PRODUCT-01（020-B）：Provider 层失败（超时/连接/鉴权/限流/配置缺失等）
+    PROVIDER_ERROR = "provider_error"
+    PROVIDER_AUTH = "provider_auth"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_RATE_LIMIT = "provider_rate_limit"
+    PROVIDER_SERVER = "provider_server"
+    PROVIDER_MODEL = "provider_model"
+    TOOL_ARGUMENT_ERROR = "tool_argument_error"
+    TOOL_TRANSIENT_ERROR = "tool_transient_error"
+    TOOL_DATA_NOT_FOUND = "tool_data_not_found"
+    TOOL_POLICY_BLOCK = "tool_policy_block"
+    TOOL_PLAN_INVALID = "tool_plan_invalid"
+    REWORK_NO_PROGRESS = "rework_no_progress"
+    COMPLETION_INVALID = "completion_invalid"
 
 
 def _validate_status(value: Any) -> str:
@@ -121,6 +135,10 @@ class SubtaskState(SubtaskSpec):
     evidence_refs: list[str] = Field(default_factory=list)
     review_history: list[ReviewResult] = Field(default_factory=list)
     rework_count: int = 0
+    # PRODUCT-01：每次 reject 时追加的失败特征串（ReworkProgressGuard 检测无进展）
+    rework_signatures: list[str] = Field(default_factory=list)
+    # PRODUCT-01：被 Supervisor replan 取代后置 True，调度/审查/汇总忽略
+    superseded: bool = False
 
 
 def merge_subtasks(left: list[SubtaskState], right: list[SubtaskState]) -> list[SubtaskState]:
@@ -162,11 +180,13 @@ class TaskState(BaseModel):
     pause_after: str | None = None
     project_id: str = "default"
     user_goal: str
+    # Runtime purpose is explicit and checkpoint-compatible.
+    run_kind: str = "user_task"
     current_status: TaskStatusStr = "created"
     # 预算：创建时由 API/用户写入，对 LLM 不可修改（002-A 第二节）
     token_budget: int = Field(gt=0)
     cost_budget: float = Field(gt=0)
-    max_model_calls: int = Field(default=30, gt=0, le=100)
+    max_model_calls: int = Field(default=20, gt=0, le=100)
     budget_usage: dict[str, float] = Field(
         default_factory=lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0.0}
     )
@@ -192,6 +212,16 @@ class TaskState(BaseModel):
     selected_agents: dict[str, str] = Field(default_factory=dict)
     review_history: Annotated[list[ReviewResult], operator.add] = Field(default_factory=list)
     rework_count: int = 0
+    # PRODUCT-01：复杂度分类与编排开关（TaskComplexityClassifier / 简单任务不过度编排）
+    complexity: str = "standard"  # trivial | simple | standard | complex
+    task_shape: str = "multi_step_delivery"
+    planning_envelope: dict[str, Any] = Field(default_factory=dict)
+    review_required: bool = True  # False = SIMPLE/TRIVIAL 快速路径跳过 Reviewer Gate
+    replan_reason: str | None = None  # 非空 = Supervisor 已判定需 replan（换方法/重拆任务）
+    replan_count: int = 0  # Supervisor replan 累计次数（超过上限停止）
+    role_model_calls: dict[str, int] = Field(default_factory=dict)
+    budget_phase: str = "normal"  # normal | warning | recovery | stopped
+    failure_details: dict[str, Any] = Field(default_factory=dict)
     final_evidence: list[Evidence] = Field(default_factory=list)
     current_subtask_id: str | None = None
     pending_clarification_id: str | None = None

@@ -19,6 +19,7 @@ from app.core.patch_engine import (
     PatchError,
     PatchProposal,
     PatchValidator,
+    relocate_single_file_hunks,
 )
 from app.gateway.audit import AuditLog
 from app.gateway.tool_gateway import ToolGateway
@@ -181,6 +182,48 @@ def test_validator_rejects_out_of_bounds_single_file_hunk(worktree: Path) -> Non
     )
     with pytest.raises(PatchError, match="line count mismatch|beyond file end|out of range"):
         PatchValidator(worktree).validate(proposal)
+
+
+def test_validator_rejects_shifted_hunk_with_wrong_context(worktree: Path) -> None:
+    old = (worktree / "main.py").read_text(encoding="utf-8")
+    proposal = PatchProposal(
+        task_id="t1",
+        target_files=["main.py"],
+        unified_diff=(
+            "--- a/main.py\n"
+            "+++ b/main.py\n"
+            "@@ -1,2 +1,2 @@\n"
+            " def shifted_main():\n"
+            "-    return 1\n"
+            "+    return 2\n"
+        ),
+    )
+    assert old.startswith("def main")
+    with pytest.raises(PatchError, match="context mismatch|deletion mismatch"):
+        PatchValidator(worktree).validate(proposal)
+
+
+def test_unique_hunk_context_can_be_relocated_without_changing_body(worktree: Path) -> None:
+    old = (worktree / "main.py").read_text(encoding="utf-8")
+    shifted = (
+        "--- a/main.py\n"
+        "+++ b/main.py\n"
+        "@@ -2,2 +2,2 @@\n"
+        " def main():\n"
+        "-    return 1\n"
+        "+    return 2\n"
+    )
+    relocated = relocate_single_file_hunks(shifted, old)
+    assert "@@ -1,2 +1,2 @@" in relocated
+    assert "-    return 1\n+    return 2" in relocated
+    proposal = PatchProposal(task_id="t1", target_files=["main.py"], unified_diff=relocated)
+    PatchValidator(worktree).validate(proposal)
+
+
+def test_hunk_relocation_rejects_ambiguous_old_context() -> None:
+    diff = "--- a/x.txt\n+++ b/x.txt\n@@ -9,1 +9,1 @@\n-same\n+new\n"
+    with pytest.raises(PatchError, match="ambiguous"):
+        relocate_single_file_hunks(diff, "same\nsame\n")
 
 
 def test_delete_moves_to_trash(worktree: Path, tmp_path: Path) -> None:

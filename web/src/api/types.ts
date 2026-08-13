@@ -3,6 +3,7 @@ export interface TaskSummary {
   task_id: string;
   run_id: string;
   status: string;
+  run_kind?: "user_task" | "conversation" | "diagnostic" | "system";
   goal: string;
   project_id: string;
   model_mode: string;
@@ -114,6 +115,7 @@ export interface TaskDetail {
   task_id: string;
   run_id: string;
   current_status: string;
+  run_kind?: "user_task" | "conversation" | "diagnostic" | "system";
   failure_code: string | null;
   model_mode: string;
   permission_mode?: PermissionMode;
@@ -129,6 +131,8 @@ export interface TaskDetail {
   cost_available?: boolean;
   rework_count: number;
   final_result: string | null;
+  pending_clarification_id?: string | null;
+  pending_approval_id?: string | null;
   memory_context_count?: number;
   personalization_applied_count?: number;
   personalization_applied?: PersonalizationItem[];
@@ -267,6 +271,7 @@ export interface UsageSummary {
   by_task: UsageGroup[];
     timeline: Array<{
       timestamp: string;
+      scope: "user_task" | "conversation" | "diagnostic" | "system";
       agent: string;
       model: string;
       tokens: number | null;

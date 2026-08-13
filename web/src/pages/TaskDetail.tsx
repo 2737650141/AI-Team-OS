@@ -54,7 +54,7 @@ export function TaskDetail() {
   const changedFiles = diff.data?.files?.map((file) => file.path) ?? Array.from(new Set((approvals.data ?? []).filter((approval) => approval.status === "approved").flatMap((approval) => approval.target_paths)));
   const finalReport = parseFinalResult(taskData.final_result);
   const duration = eventDuration(events);
-  const supervisorStatus = taskData.current_status === "paused" ? "waiting_approval" : taskData.current_status;
+  const supervisorStatus = taskData.pending_approval_id ? "waiting_approval" : taskData.current_status;
 
   return (
     <div className="page task-detail-page">

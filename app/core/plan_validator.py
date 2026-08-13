@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from collections import deque
 
+from app.core.orchestration import PlanningEnvelope, RoleRouter
 from app.core.registry import AgentRegistry
 from app.core.schemas import Plan
 
 # 集中配置：子任务数量上限（004 六.1，禁止散落硬编码）
 MAX_SUBTASKS = 8
+
+# 集中配置：运行时真正可执行的角色（PRODUCT-01：exec_subtask 图节点仅支持
+# executor / researcher；Planner 不得把 supervisor/planner/reviewer 分配给子任务，
+# 否则 validate 放行、执行时 unsupported role 盲重试至 fail_rework_limit）。
+EXECUTABLE_ROLES = ("executor", "researcher")
 
 
 class PlanValidationError(ValueError):
@@ -19,13 +25,28 @@ class PlanValidationError(ValueError):
         super().__init__(message)
 
 
-def validate_plan(plan: Plan, registry: AgentRegistry, task_token_budget: int) -> None:
+def validate_plan(
+    plan: Plan,
+    registry: AgentRegistry,
+    task_token_budget: int,
+    envelope: PlanningEnvelope | None = None,
+) -> None:
     """10 项确定性校验，任一失败抛 PlanValidationError；不得绕过 Schema 继续执行。"""
     # 1. 子任务数量不超过配置上限
     if len(plan.subtasks) > MAX_SUBTASKS:
         raise PlanValidationError(
             "too_many_subtasks",
             f"subtask count {len(plan.subtasks)} exceeds limit {MAX_SUBTASKS}",
+        )
+    if envelope is not None and len(plan.subtasks) > envelope.max_subtasks:
+        raise PlanValidationError(
+            "plan_too_complex",
+            f"subtask count {len(plan.subtasks)} exceeds envelope {envelope.max_subtasks}",
+        )
+    if envelope is not None and len(plan.subtasks) < envelope.min_subtasks:
+        raise PlanValidationError(
+            "plan_too_shallow",
+            f"subtask count {len(plan.subtasks)} below envelope {envelope.min_subtasks}",
         )
     # 2. subtask_id 唯一
     ids = [s.subtask_id for s in plan.subtasks]
@@ -34,6 +55,25 @@ def validate_plan(plan: Plan, registry: AgentRegistry, task_token_budget: int) -
     # 3. 所有依赖目标存在
     id_set = set(ids)
     for s in plan.subtasks:
+        if envelope is not None:
+            capability = s.capability_required or "research"
+            if capability not in {item.value for item in envelope.allowed_capabilities}:
+                raise PlanValidationError(
+                    "capability_not_allowed",
+                    f"{s.subtask_id} capability {capability} not allowed for {envelope.task_shape}",
+                )
+            try:
+                expected_role = RoleRouter().route(capability)
+            except ValueError as exc:
+                raise PlanValidationError(
+                    "capability_unknown", f"{s.subtask_id} unknown capability {capability}"
+                ) from exc
+            if s.assigned_role != expected_role:
+                raise PlanValidationError(
+                    "capability_role_mismatch",
+                    f"{s.subtask_id} capability {capability} routes to {expected_role}, "
+                    f"not {s.assigned_role}",
+                )
         for dep in s.dependencies:
             if dep not in id_set:
                 raise PlanValidationError(
@@ -63,6 +103,14 @@ def validate_plan(plan: Plan, registry: AgentRegistry, task_token_budget: int) -
             raise PlanValidationError(
                 "unknown_role", f"{s.subtask_id} role {s.assigned_role} not in registry"
             ) from exc
+        # 8.5 角色必须可由运行时执行（PRODUCT-01：Planner 分配不可执行角色
+        # 曾导致 unsupported role 盲重试至 rework_limit_exceeded）
+        if s.assigned_role not in EXECUTABLE_ROLES:
+            raise PlanValidationError(
+                "role_not_executable",
+                f"{s.subtask_id} role {s.assigned_role} is not executable by the runtime "
+                f"(allowed: {', '.join(EXECUTABLE_ROLES)})",
+            )
         # 9. 角色必须启用
         if not agent.enabled:
             raise PlanValidationError(

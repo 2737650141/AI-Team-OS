@@ -64,11 +64,11 @@ SUPERVISOR_PROMPT = Prompt(
 
 PLANNER_PROMPT = Prompt(
     prompt_id="planner.plan",
-    version="1.0",
+    version="2.0",
     role="planner",
     purpose="把澄清后的目标拆解为结构化 Plan（005 15.1，必须通过 10 项确定性校验）",
     input_contract="clarified_goal、约束、可用 Agent、总预算",
-    output_contract="Plan Schema：{goal, subtasks: [{subtask_id,title,objective,dependencies,assigned_role,input_refs,expected_output,acceptance_criteria,required_tools,token_budget,tool_call_budget}]}",
+    output_contract="Plan Schema：{goal, subtasks: [{subtask_id,title,objective,dependencies,capability_required,task_type,deliverable,acceptance_criteria,required_tools,token_budget,tool_call_budget}]}；assigned_role 仅兼容输入，Runtime RoleRouter 最终决定执行角色",
     forbidden_actions=["不得调用外部工具", "不得修改 Registry", "预算总和不得超过任务总预算"],
     template=(
         "你是 AI Team OS 的 Planner。把目标拆解为不超过 {max_subtasks} 个子任务的计划。\n"
@@ -76,6 +76,8 @@ PLANNER_PROMPT = Prompt(
         "目标：{goal}\n"
         "只输出符合以下 JSON Schema 的单个 JSON 对象：\n"
         "{schema}\n"
+        "优先输出 capability_required（research/code_change/verification/analysis/windows_action），"
+        "不要把 supervisor/planner/reviewer 当作可执行子任务。\n"
         "子任务 token_budget 总和不得超过任务总预算。\n" + _shared_security_block()
     ),
 )
@@ -105,17 +107,28 @@ RESEARCHER_PROMPT = Prompt(
 
 REVIEWER_PROMPT = Prompt(
     prompt_id="reviewer.review",
-    version="1.0",
+    version="2.0",
     role="reviewer",
     purpose="在确定性检查通过后做结构化评审（005 15.3：不能将确定性失败改为 pass）",
     input_contract="原始要求、验收条件、产物、Evidence、确定性检查结果",
-    output_contract="ReviewResult Schema：{verdict: 'pass'|'reject', issues: [{code,message,subtask_id}], rework_targets, accepted_claims, rejected_claims}",
+    output_contract="ReviewResult Schema：{status: PASS|PASS_WITH_NOTES|REWORK|BLOCK, summary, criteria_results, blocking_issues, rework_items, notes, evidence_refs, confidence}",
     forbidden_actions=["不得覆盖确定性失败", "不得修改状态", "不得调用工具"],
     template=(
         "你是 AI Team OS 的 Reviewer。确定性检查已通过，请评审以下产物。\n"
         "原始要求：{requirement}\n验收条件：{acceptance}\n产物：\n{artifact}\nEvidence：\n{evidence}\n"
-        '只输出 JSON 对象：{{"verdict": "pass"|"reject", "issues": [...], '
-        '"rework_targets": [...], "accepted_claims": [...], "rejected_claims": [...]}}。\n'
+        '只输出 JSON 对象，status 只能是 PASS、PASS_WITH_NOTES、REWORK、BLOCK。'
+        '每条验收条件写入 criteria_results（PASS/FAIL/NOT_APPLICABLE）。'
+        '只有核心验收失败才 REWORK；纯优化建议、风格建议、非关键证据缺口必须 PASS_WITH_NOTES。'
+        'REWORK 必须给 required_change、target_role 和可执行 rework_items。'
+        '只有安全或硬策略违规才 BLOCK。\n'
+        '嵌套字段必须严格使用以下对象结构，不得用字符串代替对象：\n'
+        'criteria_results=[{{"criterion":str,"status":"PASS|FAIL|NOT_APPLICABLE",'
+        '"evidence_refs":[str],"note":str|null}}]；\n'
+        'blocking_issues=[{{"code":str,"message":str,"subtask_id":str|null}}]；\n'
+        'rework_items=[{{"failure_code":str,"target_subtask":str,"target_role":str,'
+        '"failed_criterion":str,"required_change":str,"why_it_matters":str,'
+        '"verification_required":str}}]。\n'
+        'PASS/PASS_WITH_NOTES 时 blocking_issues 和 rework_items 必须为空。\n'
         + _shared_security_block()
     ),
 )

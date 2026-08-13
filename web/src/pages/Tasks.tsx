@@ -31,7 +31,7 @@ export function Tasks() {
                 <td>
                   <code>{tr.run_id}</code>
                 </td>
-                <td>{tr.goal}</td>
+                <td>{tr.goal}{tr.run_kind === "conversation" && <small className="muted"> · 对话</small>}</td>
                 <td>
                   <StatusBadge status={tr.status} />
                 </td>

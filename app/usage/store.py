@@ -26,7 +26,8 @@ class UsageStore:
                     version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS model_usage (
-                    usage_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, run_id TEXT,
+                    usage_id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user_task',
+                    task_id TEXT NOT NULL, run_id TEXT,
                     call_id TEXT NOT NULL UNIQUE, role TEXT NOT NULL, agent_id TEXT NOT NULL,
                     provider_id TEXT NOT NULL, provider_name TEXT NOT NULL, model_id TEXT NOT NULL,
                     input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
@@ -66,6 +67,11 @@ class UsageStore:
                     VALUES (1, CURRENT_TIMESTAMP);
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(model_usage)")}
+            if "scope" not in columns:
+                conn.execute(
+                    "ALTER TABLE model_usage ADD COLUMN scope TEXT NOT NULL DEFAULT 'user_task'"
+                )
 
     def record_checkpoint(
         self, checkpoint, metrics: dict[str, Any], *, role: str, model: str
@@ -107,6 +113,15 @@ class UsageStore:
                 f"INSERT OR REPLACE INTO model_usage ({','.join(_USAGE_COLUMNS)}) VALUES ({marks})",
                 values,
             )
+
+    def set_scope(self, task_id: str, scope: str) -> int:
+        if scope not in {"user_task", "conversation", "diagnostic", "system"}:
+            raise ValueError("invalid usage scope")
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                "UPDATE model_usage SET scope=? WHERE task_id=?", (scope, task_id)
+            )
+            return max(0, cursor.rowcount)
 
     def set_capability(self, capability: ModelCapability) -> None:
         data = capability.model_dump(mode="json")
@@ -318,6 +333,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "timeline": [
             {
                 "timestamp": row["timestamp"],
+                "scope": row["scope"],
                 "agent": row["agent_id"],
                 "model": row["model_id"],
                 "tokens": row["total_tokens"],
