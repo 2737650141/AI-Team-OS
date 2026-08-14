@@ -78,7 +78,11 @@ describe("NAV · 三栏信息架构", () => {
   it("NAV04: Control Center 收纳 Tasks/Agents/Approvals/Evidence/Usage/Memory/Tools/Logs", async () => {
     renderLayout();
     await screen.findByText("新对话");
-    expect(screen.getAllByText("控制中心").length).toBeGreaterThanOrEqual(1);
+    const controlCenter = screen.getByRole("button", { name: "控制中心" });
+    expect(controlCenter).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("任务")).not.toBeInTheDocument();
+    await userEvent.click(controlCenter);
+    expect(controlCenter).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("任务")).toBeInTheDocument();
     expect(screen.getByText("智能体")).toBeInTheDocument();
     expect(screen.getByText("审批")).toBeInTheDocument();
@@ -91,6 +95,7 @@ describe("NAV · 三栏信息架构", () => {
 
   it("NAV05: 控制中心入口保留原路由（/tasks 仍可达）", async () => {
     renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "控制中心" }));
     await userEvent.click(await screen.findByText("任务"));
     expect(await screen.findByText("任务页面")).toBeInTheDocument();
   });
@@ -110,6 +115,7 @@ describe("NAV · 三栏信息架构", () => {
 
   it("NAV08: 既有页面路由未删除（/usage 可达）", async () => {
     renderLayout();
+    await userEvent.click(await screen.findByRole("button", { name: "控制中心" }));
     await userEvent.click(await screen.findByText("用量"));
     expect(await screen.findByText("用量页面")).toBeInTheDocument();
   });

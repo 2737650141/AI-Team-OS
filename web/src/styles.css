@@ -841,6 +841,8 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .left-nav-group { display: flex; flex-direction: column; gap: 2px; }
 .left-nav-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; padding: 6px 10px 3px; }
 .left-nav-empty { color: var(--muted); font-size: 11px; padding: 3px 10px; }
+.control-center-toggle { width: 100%; border: 0; background: transparent; font: inherit; cursor: pointer; }
+.control-center-pages { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; }
 .new-conversation-btn {
   display: flex; align-items: center; gap: 9px; width: 100%;
   padding: 9px 12px; margin-bottom: 6px; border-radius: 10px; cursor: pointer;

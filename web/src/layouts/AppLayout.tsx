@@ -1,6 +1,8 @@
 import {
   Activity,
   Bot,
+  ChevronDown,
+  ChevronRight,
   FolderKanban,
   KeyRound,
   ListTodo,
@@ -12,8 +14,9 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { api } from "../api/client";
 import { useI18n } from "../i18n";
@@ -42,7 +45,11 @@ const CONTROL_CENTER_PAGES = [
 export function AppLayout() {
   const { lang, setLang, t } = useI18n();
   const navigate = useNavigate();
+  const location = useLocation();
   const qc = useQueryClient();
+  const [controlCenterOpen, setControlCenterOpen] = useState(() =>
+    CONTROL_CENTER_PAGES.some(({ to }) => location.pathname.startsWith(to)),
+  );
   const permission = useQuery({ queryKey: ["permission-mode"], queryFn: api.permissionMode, refetchInterval: 5000 });
   const activeContext = useQuery({ queryKey: ["active-context"], queryFn: api.activeContext, refetchInterval: 4000 });
   const sessions = useQuery({ queryKey: ["jarvis-sessions"], queryFn: api.jarvisSessions, refetchInterval: 15000 });
@@ -109,13 +116,25 @@ export function AppLayout() {
           </div>
 
           <div className="left-nav-group">
-            <span className="left-nav-label">{lang === "zh" ? "控制中心" : "Control Center"}</span>
-            {CONTROL_CENTER_PAGES.map(({ to, label, icon: Icon }) => (
-              <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
-                <Icon size={15} />
-                <span>{t(label)}</span>
-              </NavLink>
-            ))}
+            <button
+              className="nav-item control-center-toggle"
+              type="button"
+              aria-expanded={controlCenterOpen}
+              onClick={() => setControlCenterOpen((open) => !open)}
+            >
+              {controlCenterOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+              <span>{lang === "zh" ? "控制中心" : "Control Center"}</span>
+            </button>
+            {controlCenterOpen && (
+              <div className="control-center-pages">
+                {CONTROL_CENTER_PAGES.map(({ to, label, icon: Icon }) => (
+                  <NavLink key={to} to={to} className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
+                    <Icon size={15} />
+                    <span>{t(label)}</span>
+                  </NavLink>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="left-nav-group">
