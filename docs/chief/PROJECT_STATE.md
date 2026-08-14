@@ -51,7 +51,7 @@
 ## 当前分支 / HEAD
 
 - 分支：`phase-6p2/desktop-usage-observatory`
-- 024 实现 HEAD：`9d7b7f9`（fix: complete UX-03.1 product gates）
+- 024 实现 HEAD：`533a437`（fix: collapse control center navigation）
 - 024：VALIDATED
 - 工作区：干净
 
@@ -111,7 +111,8 @@
   - B. NAVIGATION：三栏信息架构（LEFT：新对话/Projects/Recent conversations/Control Center 收纳
     Tasks-Agents-Approvals-Evidence-Usage-Memory-Tools-Logs/设置；CENTER：JARVIS Conversation/Task/
     Composer；RIGHT INSPECTOR：Overview|Files|Changes|Activity）。原页面路由全部保留；
-    Computer/Voice/Permission 顶部轻量快捷入口；Design System 未重做。
+    根页面 Control Center 默认折叠为单入口、进入专业页面后可展开；Computer/Voice/Permission
+    顶部轻量快捷入口；Design System 未重做。
   - C. SCROLL：ConversationScrollController（ConversationSession 持久化 scroll_top/anchor_message_id/
     was_near_bottom + PUT scroll 端点 + 会话级锁防竞态；前端 useConversationScroll hook 实现 6 条规则：
     回到底部→最新、看历史→恢复、新消息跟随/不抢滚动+↓N 条、route switch 不回到顶部、会话隔离；
@@ -124,7 +125,7 @@
   - 测试门禁：STORAGE01-23 / NAV01-10 / SCROLL01-10（含额外满缓冲区回归）/
     CACHE01-10 全部通过；受影响后端回归 147 PASS + 1 条既有 SKIP，前端 36 PASS，
     Ruff/Mypy/lint 全绿；production installer SHA-256
-    `7EFDF07DEBC0594EB218FC579154A0DE1D968CCC52943270F064E0268E44AE62`。
+    `F962C6F082200DB0EC04FBB376144794FDA40AFC7666890B8D6DFEC8FBEF346A`。
   - 真实产品验证：Conversation 0 model calls；SIMPLE REAL completed（3 calls/3419 tokens/0 rework）；
     固定 STANDARD PRODUCT-02/B15 REAL completed（4 calls/5155 tokens/0 rework）。STANDARD 四次
     Provider REPORTED input/cache-hit/cache-miss/output 分别为 1062/0/1062/293、
