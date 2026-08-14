@@ -3,5 +3,9 @@
   "identifier": "main-capability",
   "description": "Main desktop window permissions",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "notification:allow-register-listener"
+  ]
 }

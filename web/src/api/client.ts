@@ -58,8 +58,27 @@ function queryString(values: Record<string, string | undefined>) {
 
 export const api = {
   dashboard: () => request<import("./types").DashboardData>("/dashboard"),
+  jarvisSession: (sessionId: string) =>
+    request<import("./types").JarvisSession>(`/jarvis/sessions/${encodeURIComponent(sessionId)}`),
+  jarvisTurn: (sessionId: string, body: {
+    user_input: string;
+    model_mode?: "fake" | "real";
+    token_budget?: number;
+    cost_budget?: number;
+    project_id?: string;
+    project_alias?: string | null;
+  }) => request<import("./types").JarvisTurnResponse>(
+    `/jarvis/sessions/${encodeURIComponent(sessionId)}/turns`,
+    { method: "POST", body: JSON.stringify(body) },
+  ),
   tasks: () => request<import("./types").TaskSummary[]>("/tasks"),
   task: (runId: string) => request<import("./types").TaskDetail>(`/tasks/${runId}`),
+  taskControl: (runId: string) => request<{ run_id: string; action: "pause" | "stop" | null; constraints: string[]; task_status: string; pending_approval_id?: string | null }>(`/tasks/${runId}/control`),
+  steerTask: (runId: string, instruction: string, sessionId?: string) =>
+    request<import("./types").TaskControlResponse>(`/tasks/${runId}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ instruction, session_id: sessionId }),
+    }),
   usage: (days = 30, runId?: string, taskId?: string) =>
     request<import("./types").UsageSummary>(
       `/usage${queryString({ days: String(days), run_id: runId, task_id: taskId })}`,
@@ -72,6 +91,9 @@ export const api = {
     context: import("./types").UsageSummary["context"] | null;
   }>("/usage/active-context"),
   usageSettings: () => request<{ retention: "7" | "30" | "90" | "forever" }>("/settings/usage"),
+  interactionSettings: () => request<import("./types").InteractionSettings>("/settings/interaction"),
+  saveInteractionSettings: (body: import("./types").InteractionSettings) =>
+    request<import("./types").InteractionSettings>("/settings/interaction", { method: "PUT", body: JSON.stringify(body) }),
   saveUsageSettings: (retention: "7" | "30" | "90" | "forever") =>
     request<{ retention: string }>("/settings/usage", {
       method: "PUT",
@@ -106,6 +128,11 @@ export const api = {
     request<import("./types").ArtifactDetail>(`/artifacts/${artifactId}`),
   diff: (runId: string) =>
     request<{ diff: string; files?: import("./types").DiffFile[] }>(`/tasks/${runId}/diff`),
+  rollback: (runId: string, patchApprovalId: string) =>
+    request<{ restored: boolean; artifact_id?: string }>(`/tasks/${runId}/rollback`, {
+      method: "POST",
+      body: JSON.stringify({ patch_approval_id: patchApprovalId }),
+    }),
   agents: () => request<import("./types").AgentInfo[]>("/agents"),
   tools: async () => {
     const r = await request<{ tools: import("./types").ToolInfo[] }>("/tools");

@@ -11,10 +11,12 @@ run_conversation_turn(session_id, user_input, ...)：
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from app.conversation.session import ConversationReferenceResolver, ConversationSession, PendingPlan
+from app.core.run_kind import classify_run_kind
 from app.runner import run_task
 
 _WRITE_MARKERS = ("实施", "修改", "写入", "创建文件", "删除", "执行第一项", "patch", "改代码")
@@ -32,10 +34,18 @@ def _extract_claims(report: Any) -> list[str]:
 
 
 def _extract_items(report: Any) -> list[str]:
-    """提取候选列表项（"第二个"引用）：fixture repo 短名 + owner/repo 全名。"""
+    """提取最近回答中的候选项，优先使用已呈现给用户的仓库全名。"""
     import re as _re
 
     items: list[str] = []
+    for claim in _extract_claims(report):
+        for m in _re.findall(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", claim):
+            if m not in items:
+                items.append(m)
+    if items:
+        return items
+    # Offline fixtures may only expose lookup refs. They are a fallback, never
+    # allowed to outrank concrete candidates from the latest user-facing result.
     for s in report.state.subtasks:
         if s.superseded:
             continue
@@ -43,10 +53,6 @@ def _extract_items(report: Any) -> list[str]:
             m = _re.match(r"fixture_repo_lookup:([\w.-]+)", ref)
             if m and m.group(1) not in items:
                 items.append(m.group(1))
-    for claim in _extract_claims(report):
-        for m in _re.findall(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)", claim):
-            if m not in items:
-                items.append(m)
     return items
 
 
@@ -62,7 +68,7 @@ def _turn_result(report: Any) -> dict[str, Any]:
         "complexity": report.state.complexity,
         "rework": report.state.rework_count,
         "replan": report.state.replan_count,
-        "summary": (report.state.final_result or "")[:400],
+        "summary": _public_summary(report.state.final_result or "")[:400],
         "claims": _extract_claims(report),
         "items": _extract_items(report),
         "unverified": [
@@ -72,6 +78,21 @@ def _turn_result(report: Any) -> dict[str, Any]:
             for item in s.execution_result.unverified_items
         ][:5],
     }
+
+
+def _public_summary(value: str) -> str:
+    """Return the user-facing answer without exposing the structured result envelope."""
+    try:
+        result = json.loads(value)
+    except (TypeError, ValueError):
+        return value
+    if not isinstance(result, dict):
+        return value
+    for key in ("summary", "answer", "content", "final_result"):
+        candidate = result.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return value
 
 
 def run_conversation_turn(
@@ -178,6 +199,9 @@ def run_conversation_turn(
         data_dir=data_dir,
         model_mode=model_mode,
         model_overrides={"project_alias": effective_alias} if effective_alias else None,
+        # ConversationSession is the intent boundary. Pure conversational turns stay
+        # out of the user task list, while work requests keep the normal orchestrator.
+        run_kind=classify_run_kind(user_input).value,
     )
     result = _turn_result(report)
 

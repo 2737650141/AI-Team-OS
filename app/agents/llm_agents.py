@@ -616,8 +616,8 @@ class LLMResearcher:
                 ctx_view["personalization"], ensure_ascii=False
             )
         request = _new_request(
-            task_id=subtask.subtask_id,
-            run_id=None,
+            task_id=self._tgw.task_id,
+            run_id=self._tgw.run_id,
             agent_id="researcher",
             role_type="researcher",
             model=self._router.resolve("researcher"),
@@ -711,8 +711,8 @@ class LLMResearcher:
             collected=json.dumps(collected, ensure_ascii=False, default=str)[:8000],
         )
         request = _new_request(
-            task_id=subtask.subtask_id,
-            run_id=None,
+            task_id=self._tgw.task_id,
+            run_id=self._tgw.run_id,
             agent_id="researcher",
             role_type="researcher",
             model=self._router.resolve("researcher"),

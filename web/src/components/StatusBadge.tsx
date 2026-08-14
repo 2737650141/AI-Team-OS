@@ -19,6 +19,7 @@ const MAP: Record<string, string> = {
   expired: "badge-gray",
   superseded: "badge-yellow",
   cancelled: "badge-gray",
+  stopped: "badge-gray",
   error: "badge-red",
 };
 

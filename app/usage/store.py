@@ -182,7 +182,12 @@ class UsageStore:
             return max(0, cursor.rowcount)
 
     def summary(
-        self, *, run_id: str | None = None, task_id: str | None = None, days: int | None = 30
+        self,
+        *,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        days: int | None = 30,
+        scope: str | None = None,
     ) -> dict[str, Any]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -192,6 +197,9 @@ class UsageStore:
         if task_id:
             clauses.append("task_id=?")
             params.append(task_id)
+        if scope:
+            clauses.append("scope=?")
+            params.append(scope)
         if days is not None:
             clauses.append("timestamp>=?")
             params.append((datetime.now(timezone.utc) - timedelta(days=days)).isoformat())

@@ -56,6 +56,7 @@ from app.core.schemas import (
     SubtaskSpec,
 )
 from app.core.state import CHECKPOINT_VERSION, SubtaskState, TaskState
+from app.core.task_control import TaskControlStore
 from app.gateway.contracts import ProviderError
 from app.gateway.model_gateway import ModelGateway
 from app.gateway.router import ModelRouter
@@ -154,6 +155,7 @@ def build_graph(
     context: ContextBuilder | None = None,
     settings: AppSettings | None = None,
     sandbox_context: SandboxContext | None = None,
+    task_control: TaskControlStore | None = None,
 ) -> StateGraph:
     """M2/M3-A 图。goal 用于推导 Plan/Reviewer 场景（测试与 CLI 共用同一 Runtime）。
 
@@ -241,6 +243,31 @@ def build_graph(
             )
 
     # ---------- 节点 ----------
+    def _respect_task_control(state: TaskState | dict) -> None:
+        if task_control is None:
+            return
+        run_id = str(
+            state.get("run_id") if isinstance(state, dict) else state.run_id or ""
+        )
+        if not run_id and isinstance(state, dict):
+            run_id = str((state.get("exec_payload") or {}).get("run_id") or "")
+        if not run_id:
+            return
+        action = task_control.snapshot(run_id).get("action")
+        if action not in {"pause", "stop"}:
+            return
+        # LangGraph persists this interrupt at the next safe node boundary. Resume
+        # continues the same node; STOP remains paused until the user explicitly acts.
+        interrupt({"kind": "task_control", "action": action, "run_id": run_id})
+        task_control.clear_action(run_id)
+
+    def _controlled(node):
+        def invoke(state):
+            _respect_task_control(state)
+            return node(state)
+
+        return invoke
+
     def ingest(state: TaskState) -> dict:
         _validate_checkpoint(state)
         if needs_clarification(state.user_goal):
@@ -285,6 +312,10 @@ def build_graph(
 
     def plan(state: TaskState) -> dict:
         goal_text = state.clarified_goal or state.user_goal
+        if task_control is not None and state.run_id:
+            constraints = task_control.take_constraints(state.run_id)
+            if constraints:
+                goal_text += "\n\nUser steering constraints:\n- " + "\n- ".join(constraints)
         complexity = classify_task(goal_text)
         envelope = PlanningEnvelope.for_task(
             goal_text,
@@ -699,6 +730,11 @@ def build_graph(
 
     def review_all(state: TaskState) -> dict:
         """独立审查（004 十）：确定性检查 + 结构化评审；评审结果追加历史（不覆盖）。"""
+        steering_constraints = (
+            task_control.take_constraints(state.run_id)
+            if task_control is not None and state.run_id
+            else []
+        )
         valid_ids = evidence_ids_of(state)
         if sandbox_context is not None:
             # M3-C：Executor 的 Claim 可引用 Artifact ID（diff/patch/test_report，十四.1）
@@ -849,7 +885,7 @@ def build_graph(
                 summary=f"rework limit reached on {ids}; supervisor replan",
                 payload_safe={"subtask_ids": ids, "reason": replan_reason},
             )
-        return {
+        response = {
             "subtasks": updated_subtasks,
             "review_history": all_results,
             "rework_count": max(
@@ -857,6 +893,14 @@ def build_graph(
             ),
             "replan_reason": replan_reason,
         }
+        if steering_constraints:
+            response["clarified_goal"] = (
+                (state.clarified_goal or state.user_goal)
+                + "\n\nUser steering constraints:\n- "
+                + "\n- ".join(steering_constraints)
+            )
+            response["replan_reason"] = "user_steering"
+        return response
 
     def route_after_review(state: TaskState) -> str:
         if state.replan_reason:
@@ -997,13 +1041,13 @@ def build_graph(
 
     # ---------- 图装配 ----------
     graph = StateGraph(TaskState)
-    graph.add_node("ingest", ingest)
+    graph.add_node("ingest", _controlled(ingest))
     graph.add_node("clarify", clarify)
-    graph.add_node("plan", plan)
-    graph.add_node("dispatch", dispatch)
+    graph.add_node("plan", _controlled(plan))
+    graph.add_node("dispatch", _controlled(dispatch))
     graph.add_node("exec_subtask", exec_subtask)  # type: ignore[type-var]  # Send 目标输入为 payload dict
-    graph.add_node("review_all", review_all)
-    graph.add_node("finalize", finalize)
+    graph.add_node("review_all", _controlled(review_all))
+    graph.add_node("finalize", _controlled(finalize))
     graph.add_node("fail_rework_limit", fail_rework_limit)
 
     graph.add_edge(START, "ingest")

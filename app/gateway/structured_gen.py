@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -36,6 +37,8 @@ def generate_structured(
     """生成并校验结构化输出；失败时按修复上限重试；超限抛 SCHEMA_VALIDATION_FAILED。"""
     last_error: OutputValidationError | None = None
     for attempt in range(settings.max_output_repair_attempts + 1):
+        if attempt:
+            request = request.model_copy(update={"request_id": uuid.uuid4().hex[:16]})
         resp = gateway.generate(
             request,
             max_retries=max_retries if max_retries is not None else settings.model.max_retries,

@@ -222,6 +222,57 @@ export interface CustomProvider {
   context_window_source?: "USER_CONFIGURED" | null;
 }
 
+export interface JarvisMessage {
+  role: "user" | "assistant";
+  content: string;
+  status?: string | null;
+  task_id?: string | null;
+  run_id?: string | null;
+}
+
+export interface JarvisSession {
+  session_id: string;
+  messages: JarvisMessage[];
+  current_goal: string | null;
+  current_task_reference: string | null;
+  current_project: string;
+  no_write: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JarvisTurnResponse {
+  session: JarvisSession;
+  result: {
+    status: string;
+    summary: string;
+    task_id?: string;
+    run_id?: string;
+    tokens?: number | null;
+    action?: string;
+    failure_code?: string | null;
+  };
+  run_kind: "user_task" | "conversation";
+}
+
+export interface TaskControlResponse {
+  run_id: string;
+  steering_kind: "PAUSE" | "RESUME" | "STOP" | "ADD_CONSTRAINT" | "CHANGE_SCOPE" | "SELECT_RESULT" | "CHANGE_OUTPUT_FORMAT";
+  action?: "pause" | "stop" | null;
+  task_status?: string;
+  constraints?: string[];
+  summary?: string;
+  session?: JarvisSession;
+}
+
+export interface InteractionSettings {
+  mode: "normal" | "minimal_interruption";
+  notify_completed: boolean;
+  notify_approval: boolean;
+  notify_failed: boolean;
+  changed_at: string;
+}
+
 export interface UsageGroup {
   name: string;
   requests: number;
@@ -232,6 +283,8 @@ export interface UsageGroup {
 }
 
 export interface UsageSummary {
+  task_id?: string;
+  run_id?: string;
   has_data: boolean;
   requests: number;
   total_tokens: number | null;
@@ -247,6 +300,7 @@ export interface UsageSummary {
   runtime_ms: number | null;
     average_latency_ms: number | null;
     usage_source: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";
+    usage_source_summary?: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";
     last_compression: {
       before_tokens: number | null;
       after_tokens: number | null;

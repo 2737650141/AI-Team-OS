@@ -21,6 +21,8 @@ from app.core.secrets import redact
 _EVENT_TYPES = {
     "task_created",
     "task_status_changed",
+    "task_control_requested",
+    "task_steered",
     "task_completed",
     "task_failed",
     "plan_created",

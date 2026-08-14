@@ -101,6 +101,7 @@ class RunContext:
     router: ModelRouter
     context: ContextBuilder
     settings: AppSettings
+    data_dir: Path
     local_roots: list = field(default_factory=list)
     sandbox: SandboxContext | None = None  # 007 四-十三：沙箱执行上下文
 
@@ -487,6 +488,7 @@ def _build_context(
         router=router,
         context=context,
         settings=settings,
+        data_dir=data_dir,
         local_roots=local_roots,
         sandbox=sandbox,
     )
@@ -549,6 +551,8 @@ def _build_sandbox_context(
 
 
 def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
+    from app.core.task_control import TaskControlStore
+
     graph = build_graph(
         ctx.model_gateway,
         ctx.tool_gateway,
@@ -559,6 +563,7 @@ def _compile(ctx: RunContext, state: TaskState, conn: sqlite3.Connection):
         context=ctx.context,
         settings=ctx.settings,
         sandbox_context=ctx.sandbox,
+        task_control=TaskControlStore(ctx.data_dir),
     )
     return graph.compile(checkpointer=_checkpoint_saver(conn))
 

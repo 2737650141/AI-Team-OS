@@ -107,6 +107,14 @@ class ToolGateway:
     def seen_keys(self) -> set[str]:
         return self._seen_keys
 
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
     def register(self, tool: ToolSpec) -> None:
         self._tools[tool.name] = tool
 

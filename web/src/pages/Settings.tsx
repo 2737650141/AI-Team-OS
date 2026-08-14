@@ -126,6 +126,8 @@ export function Settings() {
 
       <PermissionSettingsPanel />
 
+      <InteractionSettingsPanel />
+
       <UsageHistoryPanel />
 
       <ModelRoutingPanel />
@@ -160,6 +162,25 @@ export function Settings() {
       </p>
     </div>
   );
+}
+
+function InteractionSettingsPanel() {
+  const { lang } = useI18n();
+  const zh = lang === "zh";
+  const qc = useQueryClient();
+  const query = useQuery({ queryKey: ["interaction-settings"], queryFn: api.interactionSettings });
+  const mutation = useMutation({
+    mutationFn: api.saveInteractionSettings,
+    onSuccess: (data) => qc.setQueryData(["interaction-settings"], data),
+  });
+  const settings = query.data;
+  if (!settings) return null;
+  const save = (patch: Partial<typeof settings>) => mutation.mutate({ ...settings, ...patch });
+  return <section className="card settings-section" id="interaction-settings">
+    <div className="section-heading"><div><span className="eyebrow">JARVIS Experience</span><h2>{zh ? "交互与通知" : "Interaction & Notifications"}</h2><p className="muted">{zh ? "交互偏好只影响非安全打扰和进度密度，不会改变权限、敏感确认或 STOP。" : "Interaction preferences only affect non-security interruptions and progress detail. Permissions, sensitive confirmation, and STOP never change."}</p></div></div>
+    <label className="field">{zh ? "交互模式" : "Interaction mode"}<select value={settings.mode} disabled={mutation.isPending} onChange={(event) => save({ mode: event.target.value as typeof settings.mode })}><option value="normal">{zh ? "标准" : "Normal"}</option><option value="minimal_interruption">{zh ? "少打扰" : "Minimal interruption"}</option></select></label>
+    <div className="notification-settings"><label className="switch-row"><input type="checkbox" checked={settings.notify_completed} onChange={(event) => save({ notify_completed: event.target.checked })} /><span>{zh ? "任务完成" : "Task completed"}</span></label><label className="switch-row"><input type="checkbox" checked={settings.notify_approval} onChange={(event) => save({ notify_approval: event.target.checked })} /><span>{zh ? "需要确认" : "Approval required"}</span></label><label className="switch-row"><input type="checkbox" checked={settings.notify_failed} onChange={(event) => save({ notify_failed: event.target.checked })} /><span>{zh ? "任务失败" : "Task failed"}</span></label></div>
+  </section>;
 }
 
 function UsageHistoryPanel() {

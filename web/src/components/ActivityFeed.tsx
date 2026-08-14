@@ -38,6 +38,7 @@ export function ActivityFeed({ events, presenting = false }: { events: RuntimeEv
             <span className="feed-time">{formatTime(event.timestamp, lang)}</span>
             <span className="feed-actor">{displayLabel(event.actor_type ?? "system", lang)}</span>
             <span className="feed-type">{displayLabel(event.event_type, lang)}</span>
+            {event.summary && <span className="feed-summary">{event.summary}</span>}
             {subtask && <span className="feed-context">{subtask}</span>}
             {modelDetail && <span className="feed-context">{modelDetail}</span>}
           </div>

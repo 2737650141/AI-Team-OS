@@ -3,7 +3,6 @@ import {
   Bot,
   FileText,
   FolderKanban,
-  Gauge,
   KeyRound,
   ListTodo,
   MonitorCog,
@@ -12,6 +11,7 @@ import {
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Wrench,
   BarChart3,
 } from "lucide-react";
@@ -27,7 +27,7 @@ export function AppLayout() {
   const permission = useQuery({ queryKey: ["permission-mode"], queryFn: api.permissionMode, refetchInterval: 5000 });
   const activeContext = useQuery({ queryKey: ["active-context"], queryFn: api.activeContext, refetchInterval: 4000 });
   const NAV = [
-    { to: "/", label: t("nav.dashboard"), icon: Gauge },
+    { to: "/", label: "JARVIS", icon: Sparkles },
     { to: "/tasks", label: t("nav.tasks"), icon: ListTodo },
     { to: "/computer", label: t("nav.computer"), icon: MonitorCog },
     { to: "/usage", label: lang === "zh" ? "用量与上下文" : "Usage & Context", icon: BarChart3 },

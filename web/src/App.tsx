@@ -6,8 +6,10 @@ import { I18nProvider, useI18n } from "./i18n";
 import { AppLayout } from "./layouts/AppLayout";
 import { RuntimeHealthGuard } from "./components/RuntimeHealthGuard";
 import { DesktopTrayBridge } from "./components/DesktopTrayBridge";
+import { JarvisNotifications } from "./components/JarvisNotifications";
 import { Agents } from "./pages/Agents";
 import { Dashboard } from "./pages/Dashboard";
+import { Jarvis } from "./pages/Jarvis";
 import { Computer } from "./pages/Computer";
 import { Evidence } from "./pages/Evidence";
 import { Logs } from "./pages/Logs";
@@ -40,9 +42,11 @@ export function App() {
       <I18nProvider>
         <RuntimeHealthGuard><BrowserRouter>
           <DesktopTrayBridge />
+          <JarvisNotifications />
           <Routes>
             <Route element={<AppLayout />}>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/" element={<Jarvis />} />
+              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/tasks" element={<Tasks />} />
               <Route path="/computer" element={<Computer />} />
               <Route path="/voice" element={<Voice />} />

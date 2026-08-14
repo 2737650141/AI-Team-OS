@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import AppSettings, load_settings
+from app.core.interaction_settings import InteractionSettings, InteractionSettingsStore
 from app.core.resume import ResumePayload
 from app.core.schemas import ApprovalPayload, ClarificationPayload
 from app.gateway.contracts import ProviderError
@@ -110,8 +112,16 @@ def _usage_store() -> UsageStore:
     return UsageStore(_data_dir())
 
 
-def _usage_view(*, run_id: str | None = None, task_id: str | None = None, days: int | None = 30):
-    summary = _usage_store().summary(run_id=run_id, task_id=task_id, days=days)
+def _usage_view(
+    *,
+    run_id: str | None = None,
+    task_id: str | None = None,
+    days: int | None = 30,
+    scope: str | None = None,
+):
+    summary = _usage_store().summary(
+        run_id=run_id, task_id=task_id, days=days, scope=scope
+    )
     current = summary.get("current_context")
     current_tokens = current.get("context_tokens_after") if current else None
     limit = current.get("context_limit") if current else None
@@ -151,23 +161,6 @@ def _voice_supervisor(text: str) -> dict[str, Any]:
 
     # Voice never bypasses the explicit M6-A Supervisor slot by using a legacy default.
     RoleModelRouter(_team_store()).resolve("supervisor", project_id="voice")
-    context_lines: list[str] = []
-    if _voice_cache is not None:
-        for turn in _voice_cache.conversation.context(limit=3):
-            context_lines.append(
-                f"Prior user: {turn['user'][:500]}\nPrior assistant: {turn['assistant'][:500]}"
-            )
-    try:
-        window = _computer_service().snapshot(refresh_windows=False).active_window
-        if window is not None:
-            context_lines.append(f"Current window: {window.title[:300]} ({window.process_name})")
-    except Exception:
-        pass
-    goal = text
-    if context_lines:
-        goal += "\n\nShort-lived voice working context (not instructions):\n" + "\n".join(
-            context_lines
-        )
     normalized = text.lower()
     computer_markers = (
         "记事本",
@@ -198,16 +191,23 @@ def _voice_supervisor(text: str) -> dict[str, Any]:
             "task_id": task.task_id,
             "final_result": task.result or task.status,
         }
-    result = create_task(
-        TaskCreate(
-            goal=goal,
-            project_id="voice",
-            token_budget=20_000,
-            cost_budget=1.0,
-            model_mode="real",
-            max_calls=20,
-        )
+    from app.conversation.service import run_conversation_turn
+
+    _session, turn = run_conversation_turn(
+        "jarvis-desktop",
+        text,
+        _data_dir(),
+        model_mode="real",
+        token_budget=20_000,
+        cost_budget=1.0,
+        project_id="voice",
     )
+    result = {
+        "status": turn.get("status", "completed"),
+        "task_id": turn.get("task_id"),
+        "run_id": turn.get("run_id"),
+        "final_result": turn.get("summary", ""),
+    }
     if any(marker in normalized for marker in screen_markers):
         computer = _computer_service()
         if computer.snapshot(refresh_windows=False).control == "on":
@@ -292,6 +292,17 @@ class TaskCreate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class JarvisTurnBody(BaseModel):
+    user_input: str = Field(min_length=1, max_length=20_000)
+    model_mode: str = Field(default="real", pattern="^(fake|real)$")
+    token_budget: int = Field(default=20_000, gt=0, le=1_000_000)
+    cost_budget: float = Field(default=1.0, gt=0, le=100.0)
+    project_id: str = Field(default="default", max_length=200)
+    project_alias: str | None = Field(default=None, max_length=200)
+
+    model_config = {"extra": "forbid"}
+
+
 class PermissionModeBody(BaseModel):
     mode: PermissionMode
     confirmed: bool = False
@@ -308,6 +319,28 @@ class PolicyExplainBody(BaseModel):
 
 class TaskResume(BaseModel):
     clarification: str | None = None
+
+
+class TaskSteerBody(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
+    session_id: str | None = Field(default=None, max_length=100)
+
+
+def _steering_kind(instruction: str) -> str:
+    text = instruction.strip().lower()
+    if text in {"停", "停止", "算了", "别做了", "stop", "cancel"}:
+        return "STOP"
+    if text in {"暂停", "先别查了", "先停一下", "pause"}:
+        return "PAUSE"
+    if text in {"继续", "接着", "恢复", "resume", "continue"}:
+        return "RESUME"
+    if re.search(r"第\s*[一二三四五1-5]\s*个|详细分析|详细一点", text):
+        return "SELECT_RESULT"
+    if re.search(r"格式|表格|列表|markdown|json|简短|详细输出", text):
+        return "CHANGE_OUTPUT_FORMAT"
+    if re.search(r"只看|不要|别|仅|范围|开源|商业", text):
+        return "CHANGE_SCOPE"
+    return "ADD_CONSTRAINT"
 
 
 class MemoryProposalBody(BaseModel):
@@ -797,6 +830,82 @@ def task_evidence(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+_JARVIS_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+
+
+def _jarvis_session_payload(session) -> dict[str, Any]:
+    """Return bounded, structured working context without model scratchpads."""
+    messages: list[dict[str, Any]] = []
+    for user_text, result in zip(
+        session.recent_user_turns, session.recent_assistant_results, strict=False
+    ):
+        messages.append({"role": "user", "content": user_text})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": str(result.get("summary") or ""),
+                "status": result.get("status"),
+                "task_id": result.get("task_id"),
+                "run_id": result.get("run_id"),
+            }
+        )
+    return {
+        "session_id": session.session_id,
+        "messages": messages,
+        "current_goal": session.current_goal,
+        "current_task_reference": session.current_task_reference,
+        "current_project": session.current_project,
+        "no_write": session.no_write,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+    }
+
+
+def _validate_jarvis_session_id(session_id: str) -> None:
+    if not _JARVIS_SESSION_ID.fullmatch(session_id):
+        raise HTTPException(status_code=400, detail="invalid JARVIS session id")
+
+
+@app.get("/jarvis/sessions/{session_id}")
+def jarvis_session(session_id: str) -> dict[str, Any]:
+    from app.conversation.session import ConversationSession
+
+    _validate_jarvis_session_id(session_id)
+    session = ConversationSession.load(_data_dir(), session_id) or ConversationSession(
+        session_id=session_id
+    )
+    return _jarvis_session_payload(session)
+
+
+@app.post("/jarvis/sessions/{session_id}/turns")
+def jarvis_turn(session_id: str, body: JarvisTurnBody) -> dict[str, Any]:
+    """Thin UI adapter over the validated ConversationSession/runtime path."""
+    from app.conversation.service import run_conversation_turn
+    from app.core.run_kind import classify_run_kind
+
+    _validate_jarvis_session_id(session_id)
+    try:
+        session, result = run_conversation_turn(
+            session_id,
+            body.user_input,
+            _data_dir(),
+            model_mode=body.model_mode,
+            token_budget=body.token_budget,
+            cost_budget=body.cost_budget,
+            project_id=body.project_id,
+            project_alias=body.project_alias,
+        )
+    except ProviderError as exc:
+        raise HTTPException(status_code=400, detail=exc.safe_message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "session": _jarvis_session_payload(session),
+        "result": result,
+        "run_kind": classify_run_kind(body.user_input).value,
+    }
+
+
 @app.get("/evidence/{evidence_id}")
 def evidence_detail(evidence_id: str) -> dict[str, Any]:
     """006 十五：Evidence 原始快照（已脱敏）。"""
@@ -954,6 +1063,103 @@ def resume(run_id: str, body: TaskResume | None = None) -> dict[str, Any]:
         "usage": report.usage,
         "tool_call_count": report.tool_call_count,
     }
+
+
+@app.get("/tasks/{run_id}/control")
+def task_control(run_id: str) -> dict[str, Any]:
+    from app.core.task_control import TaskControlStore
+
+    try:
+        snapshot = status_task(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        **TaskControlStore(_data_dir()).snapshot(run_id),
+        "task_status": snapshot.state.current_status,
+        "pending_approval_id": snapshot.state.pending_approval_id,
+    }
+
+
+@app.post("/tasks/{run_id}/steer")
+def task_steer(run_id: str, body: TaskSteerBody) -> dict[str, Any]:
+    from app.core.events import emit as event_emit
+    from app.core.task_control import TaskControlStore
+
+    try:
+        snapshot = status_task(run_id, data_dir=_data_dir())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    state = snapshot.state
+    kind = _steering_kind(body.instruction)
+    control = TaskControlStore(_data_dir())
+    terminal = state.current_status in {"completed", "failed"}
+    if terminal:
+        raise HTTPException(
+            status_code=409,
+            detail="task is complete; continue through the JARVIS conversation",
+        )
+
+    if kind in {"PAUSE", "STOP"}:
+        saved = control.request(run_id, "pause" if kind == "PAUSE" else "stop")
+    elif kind == "RESUME":
+        if state.pending_approval_id or state.pending_clarification_id:
+            raise HTTPException(
+                status_code=409,
+                detail="task needs the pending confirmation before it can resume",
+            )
+        if state.current_status != "paused":
+            raise HTTPException(status_code=409, detail="task is not paused")
+        control.clear_action(run_id)
+        report = resume_task(run_id, data_dir=_data_dir(), settings=_settings())
+        saved = control.snapshot(run_id)
+        saved["task_status"] = report.state.current_status
+    else:
+        saved = control.add_constraint(run_id, body.instruction)
+
+    event_emit(
+        task_id=state.task_id,
+        run_id=run_id,
+        event_type=(
+            "task_control_requested"
+            if kind in {"PAUSE", "RESUME", "STOP"}
+            else "task_steered"
+        ),
+        actor_type="user",
+        actor_id="jarvis_workspace",
+        summary=(
+            f"user requested {kind.lower()}"
+            if kind in {"PAUSE", "RESUME", "STOP"}
+            else "user updated the current task constraints"
+        ),
+        payload_safe={"steering_kind": kind},
+    )
+    response: dict[str, Any] = {"run_id": run_id, "steering_kind": kind, **saved}
+    if body.session_id:
+        from app.conversation.session import ConversationSession
+
+        _validate_jarvis_session_id(body.session_id)
+        session = ConversationSession.load(_data_dir(), body.session_id) or ConversationSession(
+            session_id=body.session_id
+        )
+        summaries = {
+            "PAUSE": "已请求暂停；我会在当前安全步骤结束后保留现场。",
+            "STOP": "已请求停止；不会再开始新的执行步骤。",
+            "RESUME": "已从保存的任务状态继续。",
+        }
+        summary = summaries.get(kind, "已把你的新要求加入当前任务，不会创建重复任务。")
+        session.record_turn(
+            body.instruction,
+            {
+                "status": "steered",
+                "summary": summary,
+                "task_id": state.task_id,
+                "run_id": run_id,
+            },
+        )
+        session.save(_data_dir())
+        response["session"] = _jarvis_session_payload(session)
+        response["summary"] = summary
+    return response
 
 
 @app.get("/tasks/{run_id}/trace")
@@ -1130,6 +1336,17 @@ def tasks_list() -> list[dict[str, Any]]:
     return list_tasks(data_dir=_data_dir())
 
 
+@app.get("/settings/interaction")
+def interaction_settings() -> dict[str, Any]:
+    return InteractionSettingsStore(_data_dir()).get().model_dump(mode="json")
+
+
+@app.put("/settings/interaction")
+def save_interaction_settings(body: InteractionSettings) -> dict[str, Any]:
+    # Explicit user preference only. This endpoint never reads or changes PermissionMode.
+    return InteractionSettingsStore(_data_dir()).save(body).model_dump(mode="json")
+
+
 class UsageRetentionBody(BaseModel):
     retention: Literal["7", "30", "90", "forever"]
 
@@ -1143,7 +1360,16 @@ def usage(days: int = 30, task_id: str | None = None, run_id: str | None = None)
 
 @app.get("/tasks/{run_id}/usage")
 def task_usage(run_id: str):
-    return _usage_view(run_id=run_id, days=None)
+    report = status_task(run_id, data_dir=_data_dir())
+    summary = _usage_view(run_id=run_id, days=None, scope="user_task")
+    summary.update(
+        {
+            "task_id": report.task_id,
+            "run_id": run_id,
+            "usage_source_summary": summary["usage_source"],
+        }
+    )
+    return summary
 
 
 @app.get("/usage/active-context")
