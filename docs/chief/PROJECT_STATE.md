@@ -51,7 +51,7 @@
 ## 当前分支 / HEAD
 
 - 分支：`phase-6p2/desktop-usage-observatory`
-- HEAD：`4352d38`（feat: UX-03.1 product efficiency & ergonomics (024)）
+- 024 实现 HEAD：`9d7b7f9`（fix: complete UX-03.1 product gates）
 - 024：VALIDATED
 - 工作区：干净
 
@@ -104,8 +104,9 @@
 - **总管令 024 UX-03.1（2026-08-14 执行，VALIDATED）**：
   - A. STORAGE：`app/core/storage.py` StorageRegistry（8 类根目录：app_install/data/memory/workspace/
     artifact/snapshot/cache/log；App 安装目录只读禁止写用户数据；memory/workspace 用户可选；
-    全局默认 Workspace + Project override；原子迁移 + 校验 + 失败回滚；非空/文件/嵌套目标拒绝；
-    cache/log/snapshot 安全清理；Secret 仅 DPAPI 密文迁移不转明文）+ `/settings/storage` 端点
+    全局默认 Workspace + Project Name/Workspace/Memory Scope/Artifact Path override；原子迁移 + SHA-256
+    文件清单校验 + 失败回滚；相对路径/非空/文件/嵌套目标拒绝；cache/log/obsolete snapshot
+    安全清理；Secret 仅 DPAPI 密文迁移不转明文）+ `/settings/storage` 端点
     + Settings → Storage & Workspace 面板。
   - B. NAVIGATION：三栏信息架构（LEFT：新对话/Projects/Recent conversations/Control Center 收纳
     Tasks-Agents-Approvals-Evidence-Usage-Memory-Tools-Logs/设置；CENTER：JARVIS Conversation/Task/
@@ -113,14 +114,21 @@
     Computer/Voice/Permission 顶部轻量快捷入口；Design System 未重做。
   - C. SCROLL：ConversationScrollController（ConversationSession 持久化 scroll_top/anchor_message_id/
     was_near_bottom + PUT scroll 端点 + 会话级锁防竞态；前端 useConversationScroll hook 实现 6 条规则：
-    回到底部→最新、看历史→恢复、新消息跟随/不抢滚动+↓N 条、route switch 不回到顶部、会话隔离）。
+    回到底部→最新、看历史→恢复、新消息跟随/不抢滚动+↓N 条、route switch 不回到顶部、会话隔离；
+    生产实机补证了 Grid 收缩、整数滚动持久化、旧查询缓存与 10 轮满缓冲区未读计数边界）。
   - D. CACHE：ModelGateway prompt 组装核查——已是 stable static prefix + dynamic suffix
-    （system 前缀固定、tool schema 确定性排序、repair append 不重建、messages 无时间戳），
+    （system 前缀固定、tool schema 确定性排序、structured repair 仅发送 schema/验证错误/无效响应/
+    最小目标与安全上下文、messages 无时间戳/随机 ID），
     CACHE01-10 测试固化；usage 新增 cache_hit_tokens/cache_miss_tokens/token_cache_hit_ratio
     （hit/(hit+miss)，不采用模糊平均命中），Usage 页展示。
-  - 测试门禁：STORAGE01-16 / NAV01-10 / SCROLL01-10 / CACHE01-10 全部通过；
-    特别真实验证 8 项 PASS（含 022-A black-screen、022-B usage attribution）；
-    production build 通过；后端 92 测试 + 前端 45 测试全绿。
+  - 测试门禁：STORAGE01-23 / NAV01-10 / SCROLL01-10（含额外满缓冲区回归）/
+    CACHE01-10 全部通过；受影响后端回归 147 PASS + 1 条既有 SKIP，前端 36 PASS，
+    Ruff/Mypy/lint 全绿；production installer SHA-256
+    `7EFDF07DEBC0594EB218FC579154A0DE1D968CCC52943270F064E0268E44AE62`。
+  - 真实产品验证：Conversation 0 model calls；SIMPLE REAL completed（3 calls/3419 tokens/0 rework）；
+    固定 STANDARD PRODUCT-02/B15 REAL completed（4 calls/5155 tokens/0 rework）。STANDARD 四次
+    Provider REPORTED input/cache-hit/cache-miss/output 分别为 1062/0/1062/293、
+    1057/0/1057/33、1137/0/1137/41、1291/0/1291/241；总量与任务 Usage 完全一致。
   - 依据本文件"已知问题 #1 / Deferred"稳定 STANDARD/COMPLEX 真实编排是下一步候选
     （PRODUCT_BASELINE_VALIDATED 前提）；CLEAN_INSTALL 仍需外部干净 Windows 环境。
 
