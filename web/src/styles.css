@@ -647,7 +647,7 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 }
 /* UX-03 JARVIS workspace: conversation is primary; operational pages keep their existing density. */
 .jarvis-workspace {
-  height: calc(100vh - 28px);
+  height: 100%;
   min-height: 620px;
   max-width: 1180px;
   margin: 0 auto;
@@ -660,10 +660,13 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
   gap: 22px;
   height: 100%;
 }
+.jarvis-columns.inspector-closed { grid-template-columns: minmax(0, 1fr); }
 .jarvis-center {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .jarvis-topbar {
@@ -858,11 +861,15 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 .app-shell-three .main { padding-left: 20px; }
 
 .right-inspector {
-  min-width: 0; height: 100%; display: flex; flex-direction: column;
+  position: relative; min-width: 0; height: 100%; display: flex; flex-direction: column;
   border: 1px solid var(--border); border-radius: 14px; background: var(--bg2);
   overflow: hidden;
 }
-.inspector-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--border); }
+.inspector-close, .inspector-open { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; }
+.inspector-close { position: absolute; right: 5px; top: 5px; z-index: 2; width: 24px; height: 24px; border-radius: 7px; }
+.inspector-open { width: 30px; height: 30px; border-radius: 8px; }
+.inspector-close:hover, .inspector-open:hover { color: var(--text); border-color: var(--accent); }
+.inspector-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding-right: 32px; border-bottom: 1px solid var(--border); }
 .inspector-tabs button {
   display: flex; align-items: center; justify-content: center; gap: 5px; padding: 10px 4px;
   background: transparent; border: 0; border-bottom: 2px solid transparent; color: var(--muted);

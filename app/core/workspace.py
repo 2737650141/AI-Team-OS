@@ -118,9 +118,9 @@ class WorkspaceError(Exception):
 class WorkspaceManager:
     """沙箱工作区管理（007 4.1/4.2）。"""
 
-    def __init__(self, runtime_dir: Path) -> None:
+    def __init__(self, runtime_dir: Path, workspace_root: Path | None = None) -> None:
         self._runtime = runtime_dir
-        self._workspaces = runtime_dir / "workspaces"
+        self._workspaces = workspace_root or runtime_dir / "workspaces"
         self._workspaces.mkdir(parents=True, exist_ok=True)
 
     def resolve_project_alias(self, alias: str, allowed_roots: list[Path]) -> Path:

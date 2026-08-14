@@ -296,6 +296,35 @@ def _open_conn(data_dir: Path) -> sqlite3.Connection:
     return sqlite3.connect(str(data_dir / "checkpoints.db"), check_same_thread=False)
 
 
+def _project_storage_roots(data_dir: Path, project_id: str | None = None) -> tuple[Path, Path]:
+    from app.core.storage import StorageRegistry
+
+    storage = StorageRegistry(data_dir)
+    return storage.workspace_root(project_id), storage.artifact_root(project_id)
+
+
+def _all_project_storage_roots(data_dir: Path) -> tuple[list[Path], list[Path]]:
+    from app.core.storage import StorageRegistry
+
+    storage = StorageRegistry(data_dir)
+    workspace_roots = {storage.resolve("workspace")}
+    artifact_roots = {storage.resolve("artifact")}
+    for profile in storage.project_profiles():
+        if profile.get("workspace_path"):
+            workspace_roots.add(Path(profile["workspace_path"]))
+        if profile.get("artifact_path"):
+            artifact_roots.add(Path(profile["artifact_path"]))
+    return sorted(workspace_roots), sorted(artifact_roots)
+
+
+def _workspace_root_for_task(data_dir: Path, task_id: str) -> Path:
+    workspace_roots, _artifact_roots = _all_project_storage_roots(data_dir)
+    for root in workspace_roots:
+        if (root / task_id / "manifest.json").exists():
+            return root
+    return workspace_roots[0]
+
+
 def _failure_code_from_provider(code: str) -> str:
     """ProviderErrorCode → FailureCode 映射（PRODUCT-01 真实门禁修复：
     未知 code 直接写入 state.failure_code 会被 TaskState 校验拒绝导致崩溃）。"""
@@ -518,7 +547,8 @@ def _build_sandbox_context(
     from app.core.workspace import WorkspaceError, WorkspaceManager
     from app.tools.sandbox_tools import SandboxToolset, build_sandbox_tools
 
-    ws_mgr = WorkspaceManager(data_dir / "runtime")
+    workspace_root, artifact_root = _project_storage_roots(data_dir, state.project_id)
+    ws_mgr = WorkspaceManager(data_dir / "runtime", workspace_root=workspace_root)
     try:
         manifest = ws_mgr.load_manifest(state.task_id)
     except WorkspaceError:
@@ -528,9 +558,14 @@ def _build_sandbox_context(
         source = ws_mgr.resolve_project_alias(alias, allowed_read_roots(settings))
         manifest = ws_mgr.create_workspace(state.task_id, alias, source)
     worktree = Path(manifest.worktree_path)
-    task_dir = data_dir / "runtime" / "workspaces" / state.task_id
+    task_dir = workspace_root / state.task_id
     approval = ApprovalService(storage_path=task_dir / "approvals.jsonl")
-    artifacts = ArtifactWriter(data_dir / "runtime", state.task_id)
+    artifacts = ArtifactWriter(
+        data_dir / "runtime",
+        state.task_id,
+        workspace_root=workspace_root,
+        artifact_root=artifact_root,
+    )
     command_runner = SandboxCommandRunner(CommandPolicy(), worktree, logs_dir=task_dir / "logs")
     sandbox = SandboxContext(
         worktree=worktree,
@@ -896,8 +931,11 @@ def resume_task(
             # 先落审批决策（持久化），恢复后 Executor 再验证并执行/终止
             from app.core.approval import ApprovalService
 
+            workspace_root, _artifact_root = _project_storage_roots(
+                data_dir, state.project_id
+            )
             approval = ApprovalService(
-                storage_path=data_dir / "runtime" / "workspaces" / state.task_id / "approvals.jsonl"
+                storage_path=workspace_root / state.task_id / "approvals.jsonl"
             )
             if payload.approval_id != state.pending_approval_id:
                 chosen = approval.get(payload.approval_id)
@@ -1460,16 +1498,24 @@ def workspaces(data_dir: Path | None = None) -> list[dict]:
     """007 十六：列出全部任务工作区（manifest 摘要）。"""
     from app.core.workspace import WorkspaceManager
 
-    return WorkspaceManager((data_dir or Path("data")) / "runtime").workspaces()
+    data_dir = data_dir or Path("data")
+    workspace_roots, _artifact_roots = _all_project_storage_roots(data_dir)
+    return [
+        item
+        for root in workspace_roots
+        for item in WorkspaceManager(data_dir / "runtime", workspace_root=root).workspaces()
+    ]
 
 
 def workspace_status(task_id: str, data_dir: Path | None = None) -> dict:
     """007 十六：单个工作区状态（manifest + 目录结构）。"""
     from app.core.workspace import WorkspaceManager
 
-    mgr = WorkspaceManager((data_dir or Path("data")) / "runtime")
+    data_dir = data_dir or Path("data")
+    workspace_root = _workspace_root_for_task(data_dir, task_id)
+    mgr = WorkspaceManager(data_dir / "runtime", workspace_root=workspace_root)
     manifest = mgr.load_manifest(task_id)
-    base = (data_dir or Path("data")) / "runtime" / "workspaces" / task_id
+    base = workspace_root / task_id
     return {
         "manifest": manifest.to_dict(),
         "dirs": {
@@ -1489,8 +1535,9 @@ def approvals_of(run_id: str, data_dir: Path | None = None) -> list[dict]:
     data_dir = data_dir or Path("data")
     checkpoint = _load_checkpoint(run_id, data_dir)
     state = TaskState.model_validate(checkpoint)
+    workspace_root, _artifact_root = _project_storage_roots(data_dir, state.project_id)
     approval = ApprovalService(
-        storage_path=data_dir / "runtime" / "workspaces" / state.task_id / "approvals.jsonl"
+        storage_path=workspace_root / state.task_id / "approvals.jsonl"
     )
     return [r.model_dump() for r in approval.all(state.task_id)]
 
@@ -1500,11 +1547,13 @@ def approval_show(approval_id: str, data_dir: Path | None = None) -> dict:
     from app.core.approval import ApprovalService
 
     data_dir = data_dir or Path("data")
-    for path in sorted(data_dir.glob("runtime/workspaces/*/approvals.jsonl")):
-        svc = ApprovalService(storage_path=path)
-        req = svc.get(approval_id)
-        if req is not None:
-            return req.model_dump()
+    workspace_roots, _artifact_roots = _all_project_storage_roots(data_dir)
+    for root in workspace_roots:
+        for path in sorted(root.glob("*/approvals.jsonl")):
+            svc = ApprovalService(storage_path=path)
+            req = svc.get(approval_id)
+            if req is not None:
+                return req.model_dump()
     raise KeyError(f"approval not found: {approval_id}")
 
 
@@ -1515,7 +1564,13 @@ def diff_of(run_id: str, data_dir: Path | None = None) -> dict:
     data_dir = data_dir or Path("data")
     checkpoint = _load_checkpoint(run_id, data_dir)
     state = TaskState.model_validate(checkpoint)
-    writer = ArtifactWriter(data_dir / "runtime", state.task_id)
+    workspace_root, artifact_root = _project_storage_roots(data_dir, state.project_id)
+    writer = ArtifactWriter(
+        data_dir / "runtime",
+        state.task_id,
+        workspace_root=workspace_root,
+        artifact_root=artifact_root,
+    )
     diffs = [a for a in writer.load_all(state.task_id) if a.artifact_type == "diff"]
     if not diffs:
         return {"ok": False, "error": "no diff artifact found"}
@@ -1556,7 +1611,13 @@ def artifacts_of(run_id: str, data_dir: Path | None = None) -> list[dict]:
     data_dir = data_dir or Path("data")
     checkpoint = _load_checkpoint(run_id, data_dir)
     state = TaskState.model_validate(checkpoint)
-    writer = ArtifactWriter(data_dir / "runtime", state.task_id)
+    workspace_root, artifact_root = _project_storage_roots(data_dir, state.project_id)
+    writer = ArtifactWriter(
+        data_dir / "runtime",
+        state.task_id,
+        workspace_root=workspace_root,
+        artifact_root=artifact_root,
+    )
     return [r.model_dump() for r in writer.load_all(state.task_id)]
 
 
@@ -1565,11 +1626,23 @@ def artifact_show(artifact_id: str, data_dir: Path | None = None) -> dict:
     from app.core.artifacts import ArtifactWriter
 
     data_dir = data_dir or Path("data")
-    for task_dir in sorted(data_dir.glob("runtime/workspaces/*")):
-        writer = ArtifactWriter(data_dir / "runtime", task_dir.name)
-        rec = writer.get(artifact_id, task_dir.name)
-        if rec is not None:
-            return {"artifact": rec.model_dump(), "content": writer.read_content(rec)}
+    workspace_roots, artifact_roots = _all_project_storage_roots(data_dir)
+    for artifact_root in artifact_roots:
+        for index in sorted(artifact_root.glob("artifacts-*.jsonl")):
+            task_id = index.stem.removeprefix("artifacts-")
+            workspace_root = next(
+                (root for root in workspace_roots if (root / task_id).exists()),
+                workspace_roots[0],
+            )
+            writer = ArtifactWriter(
+                data_dir / "runtime",
+                task_id,
+                workspace_root=workspace_root,
+                artifact_root=artifact_root,
+            )
+            rec = writer.get(artifact_id, task_id)
+            if rec is not None:
+                return {"artifact": rec.model_dump(), "content": writer.read_content(rec)}
     raise KeyError(f"artifact not found: {artifact_id}")
 
 
@@ -1593,10 +1666,11 @@ def rollback(
     data_dir = data_dir or Path("data")
     checkpoint = _load_checkpoint(run_id, data_dir)
     state = TaskState.model_validate(checkpoint)
-    ws_mgr = WorkspaceManager(data_dir / "runtime")
+    workspace_root, artifact_root = _project_storage_roots(data_dir, state.project_id)
+    ws_mgr = WorkspaceManager(data_dir / "runtime", workspace_root=workspace_root)
     manifest = ws_mgr.load_manifest(state.task_id)
     worktree = Path(manifest.worktree_path)
-    base = data_dir / "runtime" / "workspaces" / state.task_id
+    base = workspace_root / state.task_id
     approval = ApprovalService(storage_path=base / "approvals.jsonl")
     if approval_id is None:
         request = approval.create(
@@ -1620,7 +1694,12 @@ def rollback(
         base / "input",
         worktree.parent / "backups",
         worktree.parent / "trash",
-        ArtifactWriter(data_dir / "runtime", state.task_id),
+        ArtifactWriter(
+            data_dir / "runtime",
+            state.task_id,
+            workspace_root=workspace_root,
+            artifact_root=artifact_root,
+        ),
         approval,
         state.task_id,
     )

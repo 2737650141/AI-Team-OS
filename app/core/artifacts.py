@@ -62,9 +62,20 @@ class ArtifactRecord(BaseModel):
 class ArtifactWriter:
     """Artifact 固化器：写入 artifacts/ 目录 + 记录索引（JSONL）。线程安全。"""
 
-    def __init__(self, runtime_dir: Path, task_id: str) -> None:
-        self._artifacts_dir = runtime_dir / "artifacts"
-        self._task_dir = runtime_dir / "workspaces" / task_id / "artifacts"
+    def __init__(
+        self,
+        runtime_dir: Path,
+        task_id: str,
+        *,
+        workspace_root: Path | None = None,
+        artifact_root: Path | None = None,
+    ) -> None:
+        self._artifacts_dir = artifact_root or runtime_dir / "artifacts"
+        self._task_dir = (
+            self._artifacts_dir / task_id
+            if artifact_root is not None
+            else (workspace_root or runtime_dir / "workspaces") / task_id / "artifacts"
+        )
         self._task_dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self._artifacts_dir / f"artifacts-{task_id}.jsonl"
         self._artifacts_dir.mkdir(parents=True, exist_ok=True)

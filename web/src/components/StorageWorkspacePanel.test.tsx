@@ -22,6 +22,7 @@ const summary: StorageSummary = {
     { key: "log", path: "C:\\Users\\me\\AppData\\Roaming\\ai-team-os\\runtime\\logs", default_path: "C:\\Users\\me\\AppData\\Roaming\\ai-team-os\\runtime\\logs", exists: false, size_bytes: null, user_selectable: false, cleanable: true, readonly: false },
   ],
   project_workspace_overrides: { "project-a": "D:\\ws\\project-a" },
+  project_profiles: [{ project_id: "project-a", name: "Project A", workspace_path: "D:\\ws\\project-a", memory_scope: "project", artifact_path: "D:\\artifacts\\project-a" }],
   secret_policy: { storage: "windows_secure_store_dpapi", migration: "encrypted_blobs_only" },
   app_install_readonly: true,
 };
@@ -87,19 +88,17 @@ describe("StorageWorkspacePanel", () => {
     expect(await screen.findByText(/已清理/)).toBeInTheDocument();
   });
 
-  it("sets and clears a project workspace override", async () => {
+  it("sets and clears a complete project storage profile", async () => {
     vi.spyOn(api, "storageStatus").mockResolvedValue(summary);
     const setOverride = vi.spyOn(api, "setWorkspaceOverride").mockResolvedValue({ project_id: "project-a", workspace: "D:\\ws\\project-a" });
     renderPanel();
-    // 已存在的 override 显示并可清除
-    expect(await screen.findByText("project-a")).toBeInTheDocument();
-    // 设置新 override
-    const inputs = screen.getAllByLabelText(/项目 ID|Project ID/);
-    await userEvent.type(inputs[0], "project-b");
-    const targets = screen.getAllByLabelText(/工作区目录|Workspace directory/);
-    await userEvent.type(targets[0], "D:\\ws\\project-b");
-    await userEvent.click(screen.getAllByRole("button", { name: "设置" })[0]);
-    await waitFor(() => expect(setOverride).toHaveBeenCalledWith("project-b", "D:\\ws\\project-b"));
+    expect(await screen.findByText("Project A")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("项目 ID"), "project-b");
+    await userEvent.type(screen.getByLabelText("项目名称"), "Project B");
+    await userEvent.type(screen.getByLabelText("Workspace 路径"), "D:\\ws\\project-b");
+    await userEvent.type(screen.getByLabelText("Artifact 路径"), "D:\\artifacts\\project-b");
+    await userEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(setOverride).toHaveBeenCalledWith("project-b", "D:\\ws\\project-b", "Project B", "project", "D:\\artifacts\\project-b"));
   });
 
   it("shows the secret migration policy", async () => {

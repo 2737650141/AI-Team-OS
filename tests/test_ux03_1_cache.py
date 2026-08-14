@@ -8,7 +8,6 @@ token_cache_hit_ratio = hit / (hit + miss)）。
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -68,6 +67,37 @@ def test_cache01_tool_schema_deterministic() -> None:
     assert first.encode() == second.encode()
 
 
+def test_cache01b_tool_field_order_is_canonical(tmp_path: Path) -> None:
+    from app.gateway.audit import AuditLog
+    from app.tools.spec import RiskLevel, ToolSpec
+
+    def handler(alpha: str, beta: int) -> dict:
+        return {"alpha": alpha, "beta": beta}
+
+    outputs = []
+    for index, schema in enumerate(
+        (
+            {"alpha": "str", "beta": "int"},
+            {"beta": "int", "alpha": "str"},
+        )
+    ):
+        gateway = ToolGateway(
+            audit=AuditLog(tmp_path / f"audit-{index}.jsonl"), task_id="cache-t1"
+        )
+        gateway.register(
+            ToolSpec(
+                name="ordered_tool",
+                description="stable",
+                input_schema=schema,
+                risk_level=RiskLevel.SAFE,
+                read_only=True,
+                handler=handler,
+            )
+        )
+        outputs.append(gateway.describe_tools())
+    assert outputs[0].encode() == outputs[1].encode()
+
+
 # CACHE02：相同 Agent 的连续请求生成相同固定前缀（system 前缀稳定）
 def test_cache02_stable_system_prefix() -> None:
     prefix = "[planner.plan v2.0] Return exactly one JSON object immediately."
@@ -83,6 +113,21 @@ def test_cache03_no_timestamp_in_prefix() -> None:
     assert not re.search(r"\d{4}-\d{2}-\d{2}", prefix)  # 无日期
     assert not re.search(r"\d{2}:\d{2}:\d{2}", prefix)  # 无时间
     assert "uuid" not in prefix.lower()
+
+
+def test_cache03b_request_ids_do_not_pollute_message_prefix() -> None:
+    from app.agents.llm_agents import _new_request
+    from app.core.config import AppSettings
+
+    messages = [
+        {"role": "system", "content": "stable system contract"},
+        {"role": "user", "content": "dynamic goal"},
+    ]
+    first = _new_request("task", "run", "planner", "planner", "model", messages, {}, AppSettings())
+    second = _new_request("task", "run", "planner", "planner", "model", messages, {}, AppSettings())
+    assert first.request_id != second.request_id
+    assert first.messages == second.messages
+    assert first.request_id not in str(first.messages)
 
 
 # CACHE04：user 后缀为动态部分（goal 不同 → user 不同，system 不变）
@@ -132,19 +177,32 @@ def test_cache05_repair_appends_not_rebuilds(monkeypatch: pytest.MonkeyPatch, tm
     request = _request(
         [
             {"role": "system", "content": "[planner.plan v2.0] stable"},
-            {"role": "user", "content": "目标 A"},
+            {"role": "user", "content": "目标 A" + ("x" * 5000)},
         ]
+    ).model_copy(
+        update={
+            "metadata": {
+                "critical_context": {
+                    "user_goal": "目标 A",
+                    "constraints": ["read_only"],
+                    "current_task": "create plan",
+                }
+            }
+        }
     )
     settings = AppSettings()
     settings.max_output_repair_attempts = 3
     result = generate_structured(gateway, request, {"goal": {"type": "str"}}, settings)
     assert result == {"goal": "ok"}
-    # 第一次调用 messages = 原始（2 条）；第二次 = 原始 + assistant + repair user（4 条）
+    # 第二次只保留稳定 system 与最小动态修复上下文，不重发巨大原始 user prompt。
     assert len(provider.calls[0]) == 2
     assert provider.calls[1][0] == provider.calls[0][0]  # system 前缀保留
     assert provider.calls[1][0]["content"] == "[planner.plan v2.0] stable"
-    assert provider.calls[1][1] == provider.calls[0][1]  # user 保留
-    assert len(provider.calls[1]) == 4  # 追加了 assistant + repair
+    assert len(provider.calls[1]) == 4
+    assert "目标 A" in provider.calls[1][1]["content"]
+    assert "x" * 5000 not in provider.calls[1][1]["content"]
+    assert sum(len(item["content"]) for item in provider.calls[1]) < 2500
+    assert "Schema:" in provider.calls[1][-1]["content"]
 
 
 def _usage_row(input_tokens: int, cached: int | None, ts: str) -> dict:
@@ -283,3 +341,33 @@ def test_cache10_agent_prefix_stability_across_calls(monkeypatch: pytest.MonkeyP
     # user 后缀确实不同（每次 goal 不同 → 动态后缀生效）
     user_contents = {msg[1]["content"] for msg in provider.seen}
     assert len(user_contents) == 3
+
+
+def test_cache10b_role_context_excludes_unrelated_task_history() -> None:
+    from types import SimpleNamespace
+
+    from app.core.config import AppSettings
+    from app.core.context_builder import ContextBuilder
+
+    subtask = SimpleNamespace(
+        subtask_id="research-1",
+        objective="compare projects",
+        input_refs=["evidence-1"],
+        acceptance_criteria=["cite sources"],
+        rework_count=0,
+        review_history=[],
+        unrelated_history="must not be serialized",
+    )
+    context = ContextBuilder(AppSettings()).researcher_context(
+        subtask,
+        [{"id": "evidence-1", "tool": "github", "summary": "verified"}],
+    )
+    assert set(context["subtask"]) == {
+        "subtask_id",
+        "objective",
+        "input_refs",
+        "acceptance_criteria",
+        "rework_count",
+        "review_feedback",
+    }
+    assert "unrelated_history" not in str(context)

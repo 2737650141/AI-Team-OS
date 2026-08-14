@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { FileDiff, Files, GitCompare, ListVideo } from "lucide-react";
+import { FileDiff, Files, GitCompare, ListVideo, X } from "lucide-react";
 import { useState } from "react";
 
 import { api } from "../api/client";
@@ -9,12 +9,13 @@ import { ActivityFeed } from "./ActivityFeed";
 
 type Tab = "overview" | "files" | "changes" | "activity";
 
-export function RightInspector({ runId, task, usage, events, connected }: {
+export function RightInspector({ runId, task, usage, events, connected, onClose }: {
   runId: string | undefined;
   task: TaskDetail | undefined;
   usage: UsageSummary | undefined;
   events: RuntimeEvent[];
   connected: boolean;
+  onClose?: () => void;
 }) {
   const { lang } = useI18n();
   const zh = lang === "zh";
@@ -32,13 +33,14 @@ export function RightInspector({ runId, task, usage, events, connected }: {
   ];
   return (
     <aside className="right-inspector" aria-label={zh ? "检查器" : "Inspector"}>
+      {onClose && <button className="inspector-close" onClick={onClose} aria-label={zh ? "关闭检查器" : "Close Inspector"}><X size={13} /></button>}
       <div className="inspector-tabs" role="tablist">
         {tabs.map(({ key, label, icon: Icon }) => (
           <button key={key} role="tab" aria-selected={tab === key} className={tab === key ? "on" : ""} onClick={() => setTab(key)}><Icon size={13} />{label}</button>
         ))}
       </div>
       <div className="inspector-body">
-        {tab === "overview" && <OverviewTab task={task} usage={usage} zh={zh} />}
+        {tab === "overview" && <OverviewTab task={task} usage={usage} events={events} zh={zh} />}
         {tab === "files" && <FilesTab diff={diff.data} zh={zh} />}
         {tab === "changes" && <ChangesTab diff={diff.data} zh={zh} />}
         {tab === "activity" && <ActivityTab events={events} connected={connected} zh={zh} />}
@@ -47,14 +49,22 @@ export function RightInspector({ runId, task, usage, events, connected }: {
   );
 }
 
-function OverviewTab({ task, usage, zh }: { task?: TaskDetail; usage?: UsageSummary; zh: boolean }) {
+function OverviewTab({ task, usage, events, zh }: { task?: TaskDetail; usage?: UsageSummary; events: RuntimeEvent[]; zh: boolean }) {
   if (!task) return <Empty label={zh ? "运行任务后这里会显示概览。" : "Run a task to see its overview here."} />;
+  const currentAgent = task.subtasks.find((item) => ["running", "working", "in_progress"].includes(item.status))?.role
+    ?? [...events].reverse().find((event) => event.actor_type === "agent")?.actor_id
+    ?? usage?.by_agent?.[0]?.name
+    ?? (zh ? "无" : "None");
   return <dl className="inspector-overview">
     <div><dt>{zh ? "状态" : "Status"}</dt><dd>{task.current_status}</dd></div>
     <div><dt>{zh ? "目标" : "Goal"}</dt><dd className="wrap">{task.goal}</dd></div>
     <div><dt>Model</dt><dd>{task.model_identity?.badge ?? task.model_mode} · {task.model_identity?.provider ?? "—"}</dd></div>
+    <div><dt>{zh ? "当前 Agent" : "Current agent"}</dt><dd>{currentAgent}</dd></div>
+    <div><dt>Context</dt><dd>{usage?.context?.percentage == null ? "Unavailable" : `${Math.round(usage.context.percentage * 100)}%`}</dd></div>
     <div><dt>{zh ? "Token 预算" : "Token budget"}</dt><dd>{formatTokens(task.token_budget)}</dd></div>
     <div><dt>{zh ? "已用 Token" : "Tokens used"}</dt><dd>{formatTokens(usage?.total_tokens)}</dd></div>
+    <div><dt>{zh ? "费用" : "Cost"}</dt><dd>{usage?.cost_total == null ? "Unavailable" : `$${usage.cost_total.toFixed(4)}`}</dd></div>
+    <div><dt>{zh ? "运行时间" : "Runtime"}</dt><dd>{formatRuntime(usage?.runtime_ms)}</dd></div>
     <div><dt>{zh ? "子任务" : "Subtasks"}</dt><dd>{task.subtasks.length}</dd></div>
     <div><dt>{zh ? "返工" : "Rework"}</dt><dd>{task.rework_count}</dd></div>
   </dl>;
@@ -83,4 +93,9 @@ function Empty({ label }: { label: string }) {
 function formatTokens(value?: number | null) {
   if (value == null) return "—";
   return value >= 1000 ? `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}K` : String(value);
+}
+
+function formatRuntime(value?: number | null) {
+  if (value == null) return "Unavailable";
+  return value >= 60_000 ? `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1000)}s` : `${Math.round(value / 1000)}s`;
 }

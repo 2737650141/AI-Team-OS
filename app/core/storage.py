@@ -26,11 +26,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +114,24 @@ def dir_size_bytes(path: Path) -> int | None:
     return total
 
 
+def _dir_manifest(path: Path) -> dict[str, tuple[int, str]]:
+    if not path.exists():
+        return {}
+    manifest: dict[str, tuple[int, str]] = {}
+    for file_path in sorted(path.rglob("*")):
+        if not file_path.is_file() or file_path.is_symlink():
+            continue
+        digest = hashlib.sha256()
+        with file_path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        manifest[file_path.relative_to(path).as_posix()] = (
+            file_path.stat().st_size,
+            digest.hexdigest(),
+        )
+    return manifest
+
+
 class StorageRegistry:
     """集中路径注册表：解析根目录、原子迁移、安全清理。"""
 
@@ -128,6 +147,7 @@ class StorageRegistry:
         self._lock = threading.RLock()
         self._overrides: dict[str, str] = {}  # root_key -> absolute path
         self._project_workspace_overrides: dict[str, str] = {}  # project_id -> path
+        self._project_profiles: dict[str, dict[str, str]] = {}
         self._load()
 
     # ---- 默认值 ----
@@ -164,9 +184,19 @@ class StorageRegistry:
     def workspace_root(self, project_id: str | None = None) -> Path:
         """Workspace 根：Project override 优先，其次全局默认 Workspace。"""
         with self._lock:
+            profile = self._project_profiles.get(project_id or "")
+            if profile and profile.get("workspace_path"):
+                return Path(profile["workspace_path"])
             if project_id and project_id in self._project_workspace_overrides:
                 return Path(self._project_workspace_overrides[project_id])
         return self.resolve("workspace")
+
+    def artifact_root(self, project_id: str | None = None) -> Path:
+        with self._lock:
+            profile = self._project_profiles.get(project_id or "")
+            if profile and profile.get("artifact_path"):
+                return Path(profile["artifact_path"])
+        return self.resolve("artifact")
 
     def roots(self) -> list[StorageRoot]:
         """全部根目录状态（含大小）。"""
@@ -192,12 +222,17 @@ class StorageRegistry:
         return {
             "roots": [r.to_dict() for r in self.roots()],
             "project_workspace_overrides": dict(self._project_workspace_overrides),
+            "project_profiles": list(self._project_profiles.values()),
             "secret_policy": {
                 "storage": "windows_secure_store_dpapi",
                 "migration": "encrypted_blobs_only",  # 迁移只移动密文，不转明文
             },
             "app_install_readonly": True,
         }
+
+    def project_profiles(self) -> list[dict[str, str]]:
+        with self._lock:
+            return [dict(profile) for profile in self._project_profiles.values()]
 
     # ---- 持久化 ----
     def _load(self) -> None:
@@ -216,12 +251,35 @@ class StorageRegistry:
             for k, v in (data.get("project_workspace_overrides") or {}).items()
             if isinstance(v, str)
         }
+        self._project_profiles = {
+            str(item["project_id"]): {
+                "project_id": str(item["project_id"]),
+                "name": str(item.get("name") or item["project_id"]),
+                "workspace_path": str(item.get("workspace_path") or ""),
+                "memory_scope": str(item.get("memory_scope") or "project"),
+                "artifact_path": str(item.get("artifact_path") or ""),
+            }
+            for item in (data.get("project_profiles") or [])
+            if isinstance(item, dict) and item.get("project_id")
+        }
+        for project_id, path in self._project_workspace_overrides.items():
+            self._project_profiles.setdefault(
+                project_id,
+                {
+                    "project_id": project_id,
+                    "name": project_id,
+                    "workspace_path": path,
+                    "memory_scope": "project",
+                    "artifact_path": "",
+                },
+            )
 
     def _save(self) -> None:
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "overrides": dict(self._overrides),
             "project_workspace_overrides": dict(self._project_workspace_overrides),
+            "project_profiles": list(self._project_profiles.values()),
         }
         tmp = self._config_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -232,6 +290,8 @@ class StorageRegistry:
     def _validate_target(key: str, target: Path, app_install: Path) -> None:
         if key not in USER_SELECTABLE:
             raise StorageError(f"root is not user-selectable: {key}")
+        if not target.is_absolute():
+            raise StorageError("storage path must be absolute")
         resolved = target.resolve()
         # 空/相对路径不允许
         if not str(resolved):
@@ -280,6 +340,8 @@ class StorageRegistry:
             if str(resolved).startswith(str(current) + os.sep):
                 raise StorageError("target path must not be inside the current root directory")
             target_created = not resolved.exists()
+            previous_override = self._overrides.get(key)
+            current_manifest = _dir_manifest(current)
 
             def _restore() -> None:
                 # 回滚：只删除本次迁移创建的目标目录；配置尚未切换，旧目录保持原状。
@@ -292,7 +354,10 @@ class StorageRegistry:
                             shutil.rmtree(child, ignore_errors=True)
                         else:
                             child.unlink(missing_ok=True)
-                self._overrides.pop(key, None)
+                if previous_override is None:
+                    self._overrides.pop(key, None)
+                else:
+                    self._overrides[key] = previous_override
                 self._save()
 
             try:
@@ -306,7 +371,9 @@ class StorageRegistry:
                 # 3) 校验复制完整性（文件计数 + 总字节）
                 current_size = dir_size_bytes(current) or 0
                 new_size = dir_size_bytes(resolved) or 0
-                if current.exists() and current_size != new_size:
+                if current.exists() and (
+                    current_size != new_size or current_manifest != _dir_manifest(resolved)
+                ):
                     _restore()
                     raise StorageError("migration verification failed: size mismatch")
                 # 4) 切换配置
@@ -335,15 +402,26 @@ class StorageRegistry:
             path = self.resolve(key)
             if not path.exists():
                 return {"key": key, "cleaned": True, "removed_bytes": 0}
-            before = dir_size_bytes(path) or 0
-            for child in path.iterdir():
+            children = list(path.iterdir())
+            if key == "snapshot":
+                children = [
+                    child
+                    for child in children
+                    if (child.is_dir() and (child / ".obsolete").exists())
+                    or (child.is_file() and child.name.endswith(".obsolete"))
+                ]
+            removed_bytes = sum(
+                (dir_size_bytes(child) or 0) if child.is_dir() else child.stat().st_size
+                for child in children
+            )
+            for child in children:
                 if child.is_symlink():
                     continue
                 if child.is_dir():
                     shutil.rmtree(child, ignore_errors=True)
                 else:
                     child.unlink(missing_ok=True)
-            return {"key": key, "cleaned": True, "removed_bytes": before}
+            return {"key": key, "cleaned": True, "removed_bytes": removed_bytes}
 
     # ---- Workspace Project override ----
     def set_project_workspace(
@@ -355,8 +433,49 @@ class StorageRegistry:
         with self._lock:
             if target is None:
                 self._project_workspace_overrides.pop(project_id, None)
+                self._project_profiles.pop(project_id, None)
             else:
                 self._validate_target("workspace", target, self._app_install)
                 self._project_workspace_overrides[project_id] = str(target.resolve())
+                if project_id in self._project_profiles:
+                    self._project_profiles[project_id]["workspace_path"] = str(
+                        target.resolve()
+                    )
             self._save()
         return {"project_id": project_id, "workspace": self.workspace_root(project_id).as_posix()}
+
+    def set_project_profile(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        workspace_path: Path,
+        memory_scope: str,
+        artifact_path: Path,
+    ) -> dict[str, str]:
+        if not project_id.strip() or not name.strip():
+            raise StorageError("project_id and project name are required")
+        if memory_scope not in {"project", "global"}:
+            raise StorageError("memory_scope must be project or global")
+        self._validate_target("workspace", workspace_path, self._app_install)
+        self._validate_target("workspace", artifact_path, self._app_install)
+        profile = {
+            "project_id": project_id.strip(),
+            "name": name.strip(),
+            "workspace_path": str(workspace_path.resolve()),
+            "memory_scope": memory_scope,
+            "artifact_path": str(artifact_path.resolve()),
+        }
+        with self._lock:
+            self._project_profiles[profile["project_id"]] = profile
+            self._project_workspace_overrides[profile["project_id"]] = profile[
+                "workspace_path"
+            ]
+            self._save()
+        return profile
+
+    def remove_project_profile(self, project_id: str) -> None:
+        with self._lock:
+            self._project_profiles.pop(project_id, None)
+            self._project_workspace_overrides.pop(project_id, None)
+            self._save()

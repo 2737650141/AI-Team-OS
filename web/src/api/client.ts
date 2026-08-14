@@ -113,10 +113,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ key }),
     }),
-  setWorkspaceOverride: (projectId: string, target: string | null) =>
-    request<{ project_id: string; workspace: string }>("/settings/storage/workspace-override", {
+  setWorkspaceOverride: (projectId: string, target: string | null, projectName?: string, memoryScope: "project" | "global" = "project", artifactPath?: string) =>
+    request<{ project_id: string; workspace?: string; workspace_path?: string }>("/settings/storage/workspace-override", {
       method: "PUT",
-      body: JSON.stringify({ project_id: projectId, target }),
+      body: JSON.stringify({ project_id: projectId, target, project_name: projectName, memory_scope: memoryScope, artifact_path: artifactPath }),
     }),
   interactionSettings: () => request<import("./types").InteractionSettings>("/settings/interaction"),
   saveInteractionSettings: (body: import("./types").InteractionSettings) =>

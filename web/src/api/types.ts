@@ -369,6 +369,13 @@ export interface StorageRoot {
 export interface StorageSummary {
   roots: StorageRoot[];
   project_workspace_overrides: Record<string, string>;
+  project_profiles: Array<{
+    project_id: string;
+    name: string;
+    workspace_path: string;
+    memory_scope: "project" | "global";
+    artifact_path: string;
+  }>;
   secret_policy: {
     storage: string;
     migration: string;

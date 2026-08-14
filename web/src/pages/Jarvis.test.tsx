@@ -141,6 +141,13 @@ it("renders real task usage, execution summary and final result in the same thre
   expect(screen.queryByText(/execution_summary/)).not.toBeInTheDocument();
   expect(await screen.findByText("依据 1 个来源")).toBeInTheDocument();
   expect(screen.getByText("研究员")).toBeInTheDocument();
+  expect(screen.getAllByText("14%").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("$0.0010").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("18s").length).toBeGreaterThanOrEqual(1);
+  fireEvent.click(screen.getByLabelText("关闭检查器"));
+  expect(screen.queryByLabelText("检查器")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText("打开检查器"));
+  expect(screen.getByLabelText("检查器")).toBeInTheDocument();
 });
 
 it("steers a running task without creating a duplicate task", async () => {

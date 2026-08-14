@@ -3,12 +3,62 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { JarvisSession } from "../api/types";
 
-const NEAR_BOTTOM_THRESHOLD = 120; // px：距底部低于该值视为"在底部"
+const NEAR_BOTTOM_THRESHOLD = 120; // px：距底部低于该值视为“在底部”
+const TRANSIENT_SCROLL_PREFIX = "ai-team-os.conversation-scroll.";
 
 export interface ScrollState {
   scrollTop: number;
   anchorMessageId: string | null;
   wasNearBottom: boolean;
+}
+
+function captureScrollState(el: HTMLDivElement): ScrollState {
+  const wasNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD;
+  const anchor = Array.from(el.querySelectorAll<HTMLElement>("[data-message-id]")).find(
+    (item) => item.offsetTop + item.offsetHeight >= el.scrollTop,
+  );
+  return {
+    scrollTop: Math.max(0, Math.round(el.scrollTop)),
+    anchorMessageId: anchor?.dataset.messageId ?? null,
+    wasNearBottom,
+  };
+}
+
+function transientKey(sessionId: string) {
+  return `${TRANSIENT_SCROLL_PREFIX}${sessionId}`;
+}
+
+function loadTransientScrollState(sessionId: string): ScrollState | null {
+  try {
+    const raw = window.sessionStorage.getItem(transientKey(sessionId));
+    if (!raw) return null;
+    const value = JSON.parse(raw) as Partial<ScrollState>;
+    if (typeof value.scrollTop !== "number" || typeof value.wasNearBottom !== "boolean") {
+      return null;
+    }
+    return {
+      scrollTop: Math.max(0, Math.round(value.scrollTop)),
+      anchorMessageId: typeof value.anchorMessageId === "string" ? value.anchorMessageId : null,
+      wasNearBottom: value.wasNearBottom,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveScrollState(sessionId: string, state: ScrollState) {
+  try {
+    window.sessionStorage.setItem(transientKey(sessionId), JSON.stringify(state));
+  } catch {
+    /* Backend persistence remains the durable fallback when sessionStorage is unavailable. */
+  }
+  void api.saveJarvisScroll(sessionId, {
+    scroll_top: state.scrollTop,
+    anchor_message_id: state.anchorMessageId,
+    was_near_bottom: state.wasNearBottom,
+  }).catch(() => {
+    /* Saving scroll state must never interrupt the conversation. */
+  });
 }
 
 /**
@@ -26,23 +76,28 @@ export function useConversationScroll(
   sessionId: string,
   session: JarvisSession | undefined,
   messageCount: number,
+  messageVersion = "",
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const stateRef = useRef<ScrollState>({ scrollTop: 0, anchorMessageId: null, wasNearBottom: true });
   const sessionRef = useRef(sessionId);
   const prevCountRef = useRef(0);
+  const prevVersionRef = useRef("");
   const pendingRestoreRef = useRef<ScrollState | null>(null);
   const firstRenderRef = useRef(true);
 
   // conversation switch 状态隔离：切换会话时重置内部状态
   useEffect(() => {
     if (sessionRef.current !== sessionId) {
+      const el = containerRef.current;
+      saveScrollState(sessionRef.current, el ? captureScrollState(el) : stateRef.current);
       sessionRef.current = sessionId;
       stateRef.current = { scrollTop: 0, anchorMessageId: null, wasNearBottom: true };
       pendingRestoreRef.current = null;
       setUnreadCount(0);
       prevCountRef.current = 0;
+      prevVersionRef.current = "";
       firstRenderRef.current = true;
     }
   }, [sessionId]);
@@ -51,35 +106,35 @@ export function useConversationScroll(
   useEffect(() => {
     if (!session?.scroll || firstRenderRef.current === false) return;
     firstRenderRef.current = false;
-    pendingRestoreRef.current = {
+    const transient = loadTransientScrollState(sessionId);
+    pendingRestoreRef.current = transient ?? {
       scrollTop: session.scroll.scroll_top ?? 0,
       anchorMessageId: session.scroll.anchor_message_id ?? null,
       wasNearBottom: session.scroll.was_near_bottom ?? true,
     };
-  }, [session]);
+  }, [session, sessionId]);
 
   // 滚动监听：记录当前滚动位置 + 是否在底部
   const onScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD;
-    stateRef.current = {
-      scrollTop: Math.max(0, el.scrollTop),
-      anchorMessageId: null,
-      wasNearBottom: nearBottom,
-    };
-    if (nearBottom) setUnreadCount(0);
+    stateRef.current = captureScrollState(el);
+    if (stateRef.current.wasNearBottom) setUnreadCount(0);
   }, []);
 
   // 消息数量变化时的行为
   useEffect(() => {
     const el = containerRef.current;
     const prevCount = prevCountRef.current;
+    const prevVersion = prevVersionRef.current;
     prevCountRef.current = messageCount;
+    prevVersionRef.current = messageVersion;
     if (prevCount === 0) return; // 首次挂载：只记录基准（ref 可能尚未挂载）
     if (!el || !session) return;
     const countDelta = messageCount - prevCount;
-    if (countDelta <= 0) return;
+    const versionChanged = Boolean(prevVersion && messageVersion && prevVersion !== messageVersion);
+    const incomingCount = countDelta > 0 ? countDelta : versionChanged ? 2 : 0;
+    if (incomingCount <= 0) return;
 
     // 规则 1：之前在底部（含初始态）→ 新消息自动跟随
     if (stateRef.current.wasNearBottom) {
@@ -88,8 +143,8 @@ export function useConversationScroll(
       return;
     }
     // 规则 4：看历史时新消息 → 不抢滚动，显示 “↓ N 条新消息”
-    setUnreadCount((n) => n + countDelta);
-  }, [messageCount, session]);
+    setUnreadCount((n) => n + incomingCount);
+  }, [messageCount, messageVersion, session]);
 
   // 路由返回/会话恢复：按保存状态恢复（规则 1/2/5）
   useEffect(() => {
@@ -100,10 +155,15 @@ export function useConversationScroll(
     requestAnimationFrame(() => {
       const el = containerRef.current;
       if (!el) return;
-      if (restore.wasNearBottom || restore.anchorMessageId === null) {
+      if (restore.wasNearBottom) {
         el.scrollTop = el.scrollHeight; // 之前在底部 → 最新消息
       } else {
-        el.scrollTop = restore.scrollTop; // 看历史 → 恢复原位置
+        const anchor = restore.anchorMessageId
+          ? Array.from(el.querySelectorAll<HTMLElement>("[data-message-id]")).find(
+              (item) => item.dataset.messageId === restore.anchorMessageId,
+            )
+          : null;
+        el.scrollTop = anchor?.offsetTop ?? restore.scrollTop; // 看历史 → 恢复原位置
       }
     });
   }, [session]);
@@ -112,24 +172,9 @@ export function useConversationScroll(
   useEffect(() => {
     return () => {
       const el = containerRef.current;
-      const state = el
-        ? {
-            scrollTop: Math.max(0, el.scrollTop),
-            anchorMessageId: null,
-            wasNearBottom:
-              el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD,
-          }
-        : stateRef.current;
+      const state = el ? captureScrollState(el) : stateRef.current;
       // 会话隔离：只保存当前会话
-      void api
-        .saveJarvisScroll(sessionRef.current, {
-          scroll_top: state.scrollTop,
-          anchor_message_id: state.anchorMessageId,
-          was_near_bottom: state.wasNearBottom,
-        })
-        .catch(() => {
-          /* 保存失败不影响会话使用 */
-        });
+      saveScrollState(sessionRef.current, state);
     };
   }, []);
 

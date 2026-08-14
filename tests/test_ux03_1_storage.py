@@ -158,6 +158,156 @@ def test_storage16_reject_nested_target(registry: StorageRegistry) -> None:
         registry.migrate("workspace", current / "nested")
 
 
+def test_storage17_rollback_preserves_existing_override(
+    registry: StorageRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "memory-first"
+    registry.migrate("memory", first)
+    (first / "memory.sqlite").write_bytes(b"existing")
+    second = tmp_path / "memory-second"
+
+    from app.core import storage as storage_module
+
+    real_size = storage_module.dir_size_bytes
+
+    def mismatched_size(path: Path) -> int | None:
+        value = real_size(path)
+        return (value or 0) + 1 if path.resolve() == second.resolve() else value
+
+    monkeypatch.setattr(storage_module, "dir_size_bytes", mismatched_size)
+    with pytest.raises(StorageError, match="verification failed"):
+        registry.migrate("memory", second)
+
+    assert registry.resolve("memory") == first.resolve()
+    saved = json.loads(registry._config_path.read_text(encoding="utf-8"))
+    assert saved["overrides"]["memory"] == str(first.resolve())
+    assert (first / "memory.sqlite").read_bytes() == b"existing"
+
+
+def test_storage18_reject_relative_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    registry = StorageRegistry(
+        tmp_path / "data", app_install_root=tmp_path / "app-install"
+    )
+    with pytest.raises(StorageError, match="absolute"):
+        registry.migrate("workspace", Path("relative-workspace"))
+
+
+def test_storage19_project_profile_has_required_fields(
+    registry: StorageRegistry, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "project-workspace"
+    artifacts = tmp_path / "project-artifacts"
+    profile = registry.set_project_profile(
+        "project-a",
+        name="Project A",
+        workspace_path=workspace,
+        memory_scope="project",
+        artifact_path=artifacts,
+    )
+    assert profile == {
+        "project_id": "project-a",
+        "name": "Project A",
+        "workspace_path": str(workspace.resolve()),
+        "memory_scope": "project",
+        "artifact_path": str(artifacts.resolve()),
+    }
+    assert registry.workspace_root("project-a") == workspace.resolve()
+    assert registry.artifact_root("project-a") == artifacts.resolve()
+    reloaded = StorageRegistry(registry._data_root, config_path=registry._config_path)
+    assert reloaded.config_summary()["project_profiles"] == [profile]
+
+
+def test_storage20_memory_service_uses_configured_root(tmp_path: Path) -> None:
+    from app.memory.service import MemoryService
+
+    data_root = tmp_path / "data"
+    memory_root = tmp_path / "memory-root"
+    StorageRegistry(data_root).migrate("memory", memory_root)
+    service = MemoryService.from_data_dir(data_root)
+    assert service.store.db_path == memory_root.resolve() / "memory.sqlite"
+
+
+def test_storage21_project_workspace_and_artifact_roots_are_consumed(
+    tmp_path: Path,
+) -> None:
+    from app.core.artifacts import ArtifactWriter
+    from app.core.workspace import WorkspaceManager
+    from app.runner import workspaces
+
+    data_root = tmp_path / "data"
+    workspace_root = tmp_path / "project-workspace"
+    artifact_root = tmp_path / "project-artifacts"
+    registry = StorageRegistry(data_root)
+    registry.set_project_profile(
+        "project-a",
+        name="Project A",
+        workspace_path=workspace_root,
+        memory_scope="project",
+        artifact_path=artifact_root,
+    )
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text("project")
+    manager = WorkspaceManager(
+        data_root / "runtime", workspace_root=registry.workspace_root("project-a")
+    )
+    manager.create_workspace("task-storage-1", "source", source)
+    writer = ArtifactWriter(
+        data_root / "runtime",
+        "task-storage-1",
+        workspace_root=registry.workspace_root("project-a"),
+        artifact_root=registry.artifact_root("project-a"),
+    )
+    artifact = writer.write(
+        artifact_type="final_report",
+        content="done",
+        task_id="task-storage-1",
+    )
+    assert Path(artifact.path).is_relative_to(artifact_root.resolve())
+    assert workspaces(data_root)[0]["task_id"] == "task-storage-1"
+
+
+def test_storage22_snapshot_cleanup_preserves_valid_snapshots(
+    registry: StorageRegistry,
+) -> None:
+    snapshots = registry.resolve("snapshot")
+    valid = snapshots / "task-valid"
+    obsolete = snapshots / "task-obsolete"
+    valid.mkdir(parents=True)
+    obsolete.mkdir(parents=True)
+    (valid / "evidence.json").write_text("valid")
+    (obsolete / "evidence.json").write_text("obsolete")
+    (obsolete / ".obsolete").write_text("")
+
+    registry.clean("snapshot")
+
+    assert (valid / "evidence.json").read_text() == "valid"
+    assert not obsolete.exists()
+
+
+def test_storage23_migration_verifies_content_not_only_size(
+    registry: StorageRegistry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core import storage as storage_module
+
+    current = registry.resolve("workspace")
+    current.mkdir(parents=True)
+    (current / "project.txt").write_text("ABCD")
+    target = tmp_path / "workspace-target"
+    real_copytree = storage_module.shutil.copytree
+
+    def corrupt_copytree(src: Path, dst: Path, **kwargs: object):
+        result = real_copytree(src, dst, **kwargs)
+        (Path(dst) / "project.txt").write_text("WXYZ")
+        return result
+
+    monkeypatch.setattr(storage_module.shutil, "copytree", corrupt_copytree)
+    with pytest.raises(StorageError, match="verification failed"):
+        registry.migrate("workspace", target)
+    assert (current / "project.txt").read_text() == "ABCD"
+
+
 # STORAGE10：Workspace 全局默认 + Project override；Secret 迁移规则为密文
 def test_storage10_project_override_and_secret_policy(
     registry: StorageRegistry, tmp_path: Path
@@ -248,6 +398,20 @@ def test_storage12_api_endpoints(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     )
     assert ov.status_code == 200
     assert ov.json()["workspace"] == (tmp_path / "ws-proj-a").resolve().as_posix()
+
+    profile = client.put(
+        "/settings/storage/workspace-override",
+        json={
+            "project_id": "proj-b",
+            "project_name": "Project B",
+            "target": str(tmp_path / "ws-proj-b"),
+            "memory_scope": "project",
+            "artifact_path": str(tmp_path / "artifacts-proj-b"),
+        },
+    )
+    assert profile.status_code == 200
+    assert profile.json()["name"] == "Project B"
+    assert profile.json()["memory_scope"] == "project"
 
     # 清理 cache
     cache = client.post("/settings/storage/cleanup", json={"key": "cache"})

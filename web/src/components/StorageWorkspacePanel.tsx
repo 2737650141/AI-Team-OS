@@ -56,8 +56,8 @@ export function StorageWorkspacePanel() {
   });
 
   const override = useMutation({
-    mutationFn: ({ projectId, target }: { projectId: string; target: string | null }) =>
-      api.setWorkspaceOverride(projectId, target),
+    mutationFn: ({ projectId, target, projectName, memoryScope, artifactPath }: { projectId: string; target: string | null; projectName?: string; memoryScope?: "project" | "global"; artifactPath?: string }) =>
+      api.setWorkspaceOverride(projectId, target, projectName, memoryScope, artifactPath),
     onSuccess: () => {
       setMessage(zh ? "Project Workspace override 已更新。" : "Project workspace override updated.");
       refresh();
@@ -89,7 +89,7 @@ export function StorageWorkspacePanel() {
         ))}
       </div>
 
-      <ProjectWorkspaceEditor overrides={data.project_workspace_overrides} zh={zh} onSave={(projectId, target) => override.mutate({ projectId, target })} />
+      <ProjectWorkspaceEditor profiles={data.project_profiles ?? []} zh={zh} onSave={(profile) => override.mutate(profile)} />
 
       <div className="storage-policy">
         <ShieldCheck size={15} />
@@ -153,31 +153,36 @@ function StorageRootRow({ root, zh, onMigrate, onClean, busy }: {
   );
 }
 
-function ProjectWorkspaceEditor({ overrides, zh, onSave }: {
-  overrides: Record<string, string>;
+function ProjectWorkspaceEditor({ profiles, zh, onSave }: {
+  profiles: StorageSummary["project_profiles"];
   zh: boolean;
-  onSave: (projectId: string, target: string | null) => void;
+  onSave: (profile: { projectId: string; target: string | null; projectName?: string; memoryScope?: "project" | "global"; artifactPath?: string }) => void;
 }) {
   const [projectId, setProjectId] = useState("");
+  const [projectName, setProjectName] = useState("");
   const [target, setTarget] = useState("");
-  const entries = Object.entries(overrides);
+  const [memoryScope, setMemoryScope] = useState<"project" | "global">("project");
+  const [artifactPath, setArtifactPath] = useState("");
   return (
     <div className="storage-project-overrides">
-      <div className="section-subheading"><strong>{zh ? "Project Workspace override" : "Project Workspace overrides"}</strong><p className="muted">{zh ? "每个项目可单独指定工作区目录；未设置时使用全局默认 Workspace。" : "Each project can pin its own workspace directory; unset projects use the global default Workspace."}</p></div>
-      {entries.length > 0 && (
+      <div className="section-subheading"><strong>{zh ? "项目存储范围" : "Project storage profiles"}</strong><p className="muted">{zh ? "为项目指定名称、Workspace、Memory 范围与 Artifact 路径。" : "Set a project name, Workspace path, Memory scope, and Artifact path."}</p></div>
+      {profiles.length > 0 && (
         <div className="override-list">
-          {entries.map(([project, path]) => (
-            <div key={project} className="override-row">
-              <strong>{project}</strong><code>{path}</code>
-              <button className="btn small" onClick={() => onSave(project, null)}>{zh ? "清除" : "Clear"}</button>
+          {profiles.map((profile) => (
+            <div key={profile.project_id} className="override-row">
+              <strong>{profile.name}</strong><code>{profile.workspace_path}</code><span>{profile.memory_scope}</span><code>{profile.artifact_path}</code>
+              <button className="btn small" onClick={() => onSave({ projectId: profile.project_id, target: null })}>{zh ? "清除" : "Clear"}</button>
             </div>
           ))}
         </div>
       )}
-      <form className="override-form" onSubmit={(event) => { event.preventDefault(); if (!projectId.trim() || !target.trim()) return; onSave(projectId.trim(), target.trim()); setProjectId(""); setTarget(""); }}>
+      <form className="override-form" onSubmit={(event) => { event.preventDefault(); if (!projectId.trim() || !projectName.trim() || !target.trim() || !artifactPath.trim()) return; onSave({ projectId: projectId.trim(), target: target.trim(), projectName: projectName.trim(), memoryScope, artifactPath: artifactPath.trim() }); setProjectId(""); setProjectName(""); setTarget(""); setArtifactPath(""); }}>
         <input value={projectId} onChange={(event) => setProjectId(event.target.value)} placeholder={zh ? "项目 ID" : "Project ID"} aria-label={zh ? "项目 ID" : "Project ID"} />
-        <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={zh ? "该项目的 Workspace 目录" : "Workspace directory for this project"} aria-label={zh ? "该项目的工作区目录" : "Workspace directory"} />
-        <button type="submit" className="btn small" disabled={!projectId.trim() || !target.trim()}>{zh ? "设置" : "Set"}</button>
+        <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder={zh ? "项目名称" : "Project name"} aria-label={zh ? "项目名称" : "Project name"} />
+        <input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={zh ? "Workspace 绝对路径" : "Workspace absolute path"} aria-label={zh ? "Workspace 路径" : "Workspace path"} />
+        <select value={memoryScope} onChange={(event) => setMemoryScope(event.target.value as "project" | "global")} aria-label={zh ? "Memory 范围" : "Memory scope"}><option value="project">Project</option><option value="global">Global</option></select>
+        <input value={artifactPath} onChange={(event) => setArtifactPath(event.target.value)} placeholder={zh ? "Artifact 绝对路径" : "Artifact absolute path"} aria-label={zh ? "Artifact 路径" : "Artifact path"} />
+        <button type="submit" className="btn small" disabled={!projectId.trim() || !projectName.trim() || !target.trim() || !artifactPath.trim()}>{zh ? "设置" : "Set"}</button>
       </form>
     </div>
   );

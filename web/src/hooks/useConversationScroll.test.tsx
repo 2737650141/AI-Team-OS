@@ -31,6 +31,7 @@ function makeContainer(scrollHeight = 1000, clientHeight = 400) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  window.sessionStorage.clear();
   vi.spyOn(api, "saveJarvisScroll").mockResolvedValue(session);
 });
 afterEach(() => vi.restoreAllMocks());
@@ -50,6 +51,16 @@ describe("ConversationScrollController", () => {
     const el = makeContainer(2000, 400);
     const { result } = renderHook(() =>
       useConversationScroll("s1", { ...session, scroll: { scroll_top: 500, anchor_message_id: "msg-3", was_near_bottom: false } }, 0),
+    );
+    act(() => { result.current.containerRef.current = el; });
+    await act(async () => { await new Promise((r) => requestAnimationFrame(r)); });
+    expect(el.scrollTop).toBe(500);
+  });
+
+  it("SCROLL-B2: history restore does not require an anchor id", async () => {
+    const el = makeContainer(2000, 400);
+    const { result } = renderHook(() =>
+      useConversationScroll("s1", { ...session, scroll: { scroll_top: 500, anchor_message_id: null, was_near_bottom: false } }, 0),
     );
     act(() => { result.current.containerRef.current = el; });
     await act(async () => { await new Promise((r) => requestAnimationFrame(r)); });
@@ -84,6 +95,23 @@ describe("ConversationScrollController", () => {
     expect(result.current.unreadCount).toBeGreaterThan(0); // ↓ N 条新消息
   });
 
+  it("SCROLL-D2: capped conversation detects incoming turn when message count is unchanged", () => {
+    const el = makeContainer(3000, 400);
+    const { result, rerender } = renderHook(
+      ({ version }: { version: string }) =>
+        useConversationScroll("capped", session, 20, version),
+      { initialProps: { version: "run-old" } },
+    );
+    act(() => {
+      result.current.containerRef.current = el;
+      el.scrollTop = 200;
+      result.current.onScroll();
+    });
+    rerender({ version: "run-new" });
+    expect(el.scrollTop).toBe(200);
+    expect(result.current.unreadCount).toBe(2);
+  });
+
   it("SCROLL-E: route switch 离开时保存滚动状态到后端", async () => {
     const el = makeContainer(1000, 400);
     el.scrollTop = 900; // 距底部 < 120 → 在底部
@@ -92,6 +120,43 @@ describe("ConversationScrollController", () => {
     act(() => { result.current.containerRef.current = el; });
     unmount();
     expect(save).toHaveBeenCalledWith("s1", expect.objectContaining({ was_near_bottom: true }));
+  });
+
+  it("SCROLL-E2: history save records the visible message anchor", () => {
+    const el = makeContainer(2000, 400);
+    el.scrollTop = 500;
+    const anchor = document.createElement("article");
+    anchor.dataset.messageId = "message-3";
+    Object.defineProperty(anchor, "offsetTop", { value: 450 });
+    Object.defineProperty(anchor, "offsetHeight", { value: 100 });
+    el.appendChild(anchor);
+    const save = vi.spyOn(api, "saveJarvisScroll").mockResolvedValue(session);
+    const { result, unmount } = renderHook(() => useConversationScroll("s1", session, 0));
+    act(() => { result.current.containerRef.current = el; result.current.onScroll(); });
+    unmount();
+    expect(save).toHaveBeenCalledWith("s1", expect.objectContaining({ anchor_message_id: "message-3", was_near_bottom: false }));
+  });
+
+  it("SCROLL-E3: fractional browser offsets persist as integers and beat stale route cache", async () => {
+    const first = makeContainer(2000, 400);
+    first.scrollTop = 500.4;
+    const save = vi.spyOn(api, "saveJarvisScroll").mockResolvedValue(session);
+    const initial = renderHook(() => useConversationScroll("route-cache", session, 2));
+    act(() => {
+      initial.result.current.containerRef.current = first;
+      initial.result.current.onScroll();
+    });
+    initial.unmount();
+    expect(save).toHaveBeenCalledWith(
+      "route-cache",
+      expect.objectContaining({ scroll_top: 500, was_near_bottom: false }),
+    );
+
+    const restored = makeContainer(2000, 400);
+    const returned = renderHook(() => useConversationScroll("route-cache", session, 2));
+    act(() => { returned.result.current.containerRef.current = restored; });
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+    expect(restored.scrollTop).toBe(500);
   });
 
   it("SCROLL-F: conversation switch 状态隔离（不同 session 互不覆盖）", async () => {
@@ -104,5 +169,6 @@ describe("ConversationScrollController", () => {
     // 切换到 conv-b：内部状态重置为默认
     rerender({ id: "conv-b" });
     expect(result.current.unreadCount).toBe(0);
+    expect(api.saveJarvisScroll).toHaveBeenCalledWith("conv-a", expect.any(Object));
   });
 });

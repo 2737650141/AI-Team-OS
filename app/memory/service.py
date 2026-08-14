@@ -41,7 +41,10 @@ class MemoryService:
 
     @classmethod
     def from_data_dir(cls, data_dir: Path) -> MemoryService:
-        return cls(MemoryStore(data_dir / "runtime" / "memory" / "memory.sqlite"))
+        from app.core.storage import StorageRegistry
+
+        memory_root = StorageRegistry(data_dir).resolve("memory")
+        return cls(MemoryStore(memory_root / "memory.sqlite"))
 
     def propose(
         self,

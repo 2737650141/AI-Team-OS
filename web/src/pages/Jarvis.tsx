@@ -6,6 +6,7 @@ import {
   Circle,
   LoaderCircle,
   Paperclip,
+  PanelRightOpen,
   Pause,
   Play,
   Send,
@@ -42,6 +43,7 @@ export function Jarvis() {
   const [params] = useSearchParams();
   const requestedSession = params.get("session");
   const requestedProject = params.get("project");
+  const [inspectorOpen, setInspectorOpen] = useState(true);
   // 024-B：会话/项目来自 URL query，随路由切换实时生效（三栏 Recent conversations 切换）
   const [session, setSession] = useState(() =>
     requestedSession && requestedSession !== "jarvis-desktop" ? requestedSession : sessionId(),
@@ -67,11 +69,17 @@ export function Jarvis() {
     queryKey: ["jarvis-session", session],
     queryFn: () => api.jarvisSession(session),
   });
+  const conversationMessages = conversation.data?.messages ?? [];
+  const latestMessage = conversationMessages.at(-1);
+  const messageVersion = latestMessage
+    ? latestMessage.run_id ?? `${latestMessage.role}:${latestMessage.content}`
+    : "";
   // 024-C ConversationScrollController：滚动状态按会话隔离并持久化
   const { containerRef, onScroll, unreadCount, jumpToLatest } = useConversationScroll(
     session,
     conversation.data,
-    conversation.data?.messages.length ?? 0,
+    conversationMessages.length,
+    messageVersion,
   );
   const dashboard = useQuery({
     queryKey: ["dashboard"],
@@ -222,7 +230,7 @@ export function Jarvis() {
 
   return (
     <div className="jarvis-workspace">
-      <div className="jarvis-columns">
+      <div className={`jarvis-columns ${inspectorOpen ? "" : "inspector-closed"}`}>
         <section className="jarvis-center">
           <header className="jarvis-topbar">
             <div className="jarvis-identity">
@@ -230,6 +238,7 @@ export function Jarvis() {
               <div><strong>JARVIS</strong><span role="status" aria-live="polite">{status.label[zh ? 0 : 1]}</span></div>
             </div>
             <RuntimeUsage task={task.data} usage={usage.data} zh={zh} />
+            {!inspectorOpen && <button className="inspector-open" onClick={() => setInspectorOpen(true)} aria-label={zh ? "打开检查器" : "Open Inspector"}><PanelRightOpen size={15} /></button>}
           </header>
 
           <main className="jarvis-scroll" ref={containerRef} onScroll={onScroll} aria-label={zh ? "JARVIS 对话" : "JARVIS conversation"}>
@@ -242,9 +251,10 @@ export function Jarvis() {
               <EmptyState zh={zh} onExample={(value) => setInput(value)} />
             ) : (
               <div className="jarvis-thread">
-                {messages.map((message, index) => (
-                  <Message key={`${message.role}-${index}-${message.content.slice(0, 18)}`} message={message} />
-                ))}
+                {messages.map((message, index) => {
+                  const messageId = stableMessageId(messages, index);
+                  return <Message key={messageId} message={message} messageId={messageId} />;
+                })}
               </div>
             )}
 
@@ -320,7 +330,7 @@ export function Jarvis() {
           </form>
         </section>
 
-        <RightInspector runId={runId} task={task.data} usage={usage.data} events={events} connected={connected} />
+        {inspectorOpen && <RightInspector runId={runId} task={task.data} usage={usage.data} events={events} connected={connected} onClose={() => setInspectorOpen(false)} />}
       </div>
     </div>
   );
@@ -337,10 +347,17 @@ function EmptyState({ zh, onExample }: { zh: boolean; onExample: (value: string)
   return <section className="jarvis-empty"><div className="empty-orb"><Bot size={30} /></div><h1>{zh ? "你好，我是 JARVIS。" : "Hello, I’m JARVIS."}</h1><p>{zh ? "你可以直接告诉我想完成什么。" : "Tell me what you want to accomplish."}</p><div className="jarvis-examples">{examples.map((item) => <button key={item} onClick={() => onExample(item)}>{item}</button>)}</div></section>;
 }
 
-function Message({ message }: { message: JarvisMessage }) {
+function stableMessageId(messages: JarvisMessage[], index: number) {
+  const message = messages[index];
+  const pairedRunId = message.role === "user" ? messages[index + 1]?.run_id : undefined;
+  const runId = message.run_id ?? pairedRunId;
+  return runId ? `${runId}-${message.role}` : `message-${index}`;
+}
+
+function Message({ message, messageId }: { message: JarvisMessage; messageId: string }) {
   if (!message.content) return null;
   const content = message.role === "assistant" ? humanizeFinalResult(message.content) : message.content;
-  return <article className={`jarvis-message ${message.role}`}><div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : "你"}</div><div className="message-body"><span className="message-name">{message.role === "assistant" ? "JARVIS" : "You"}</span><p>{content}</p></div></article>;
+  return <article className={`jarvis-message ${message.role}`} data-message-id={messageId}><div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : "你"}</div><div className="message-body"><span className="message-name">{message.role === "assistant" ? "JARVIS" : "You"}</span><p>{content}</p></div></article>;
 }
 
 function TaskCard({ task, summary, events, connected, usage, evidenceCount, expanded, setExpanded, zh, controlAction, controlBusy, onControl }: {

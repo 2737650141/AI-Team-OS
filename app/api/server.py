@@ -336,6 +336,9 @@ class StorageCleanBody(BaseModel):
 class WorkspaceOverrideBody(BaseModel):
     project_id: str = Field(min_length=1, max_length=200)
     target: str | None = Field(default=None, max_length=2000)
+    project_name: str | None = Field(default=None, max_length=200)
+    memory_scope: Literal["project", "global"] = "project"
+    artifact_path: str | None = Field(default=None, max_length=2000)
 
     model_config = {"extra": "forbid"}
 
@@ -916,7 +919,11 @@ def jarvis_sessions() -> dict[str, Any]:
     sessions_dir = _data_dir() / "runtime" / "sessions"
     result = []
     if sessions_dir.exists():
-        for path in sorted(sessions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for path in sorted(
+            sessions_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
             session_id = path.stem
             if not _JARVIS_SESSION_ID.fullmatch(session_id):
                 continue
@@ -1359,8 +1366,9 @@ def _decide_pending_approval(
 
     # Supplemental approvals can outlive a completed run. Preserve the existing
     # decision-on-record behavior, but report that the graph cannot be resumed.
+    workspace_root = _storage().workspace_root(snapshot.state.project_id)
     approval = ApprovalService(
-        storage_path=data_dir / "runtime" / "workspaces" / record["task_id"] / "approvals.jsonl"
+        storage_path=workspace_root / record["task_id"] / "approvals.jsonl"
     )
     try:
         approval.decide(approval_id, decision, reason)
@@ -1675,9 +1683,15 @@ def storage_migrate(body: StorageMigrateBody) -> dict[str, Any]:
     try:
         return _storage().migrate(body.key, Path(body.target))
     except StorageError as exc:
-        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "storage_error", "message": str(exc)},
+        ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": f"migration failed: {exc}"}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "storage_error", "message": f"migration failed: {exc}"},
+        ) from exc
 
 
 @app.post("/settings/storage/cleanup")
@@ -1688,7 +1702,10 @@ def storage_cleanup(body: StorageCleanBody) -> dict[str, Any]:
     try:
         return _storage().clean(body.key)
     except StorageError as exc:
-        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "storage_error", "message": str(exc)},
+        ) from exc
 
 
 @app.put("/settings/storage/workspace-override")
@@ -1697,11 +1714,22 @@ def workspace_override(body: WorkspaceOverrideBody) -> dict[str, Any]:
     from app.core.storage import StorageError
 
     try:
+        if body.target and (body.project_name or body.artifact_path):
+            return _storage().set_project_profile(
+                body.project_id,
+                name=body.project_name or body.project_id,
+                workspace_path=Path(body.target),
+                memory_scope=body.memory_scope,
+                artifact_path=Path(body.artifact_path or str(_storage().resolve("artifact"))),
+            )
         return _storage().set_project_workspace(
             body.project_id, Path(body.target) if body.target else None
         )
     except StorageError as exc:
-        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "storage_error", "message": str(exc)},
+        ) from exc
 
 
 def _format_sse_frame(sequence: int, data: dict) -> str:

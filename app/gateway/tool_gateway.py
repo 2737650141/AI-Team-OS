@@ -133,9 +133,19 @@ class ToolGateway:
         for name in self.available_tools():
             contract = self.tool_contract(name)
             lines.append(
-                f"{name}: {contract['description']}; required={contract['required']}; "
-                f"optional={contract['optional']}; types={contract['types']}; "
-                f"example={contract['example']}"
+                f"{name}: "
+                + json.dumps(
+                    {
+                        "description": contract["description"],
+                        "required": sorted(contract["required"]),
+                        "optional": sorted(contract["optional"]),
+                        "types": contract["types"],
+                        "example": contract["example"],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
             )
         return "; ".join(lines)
 
