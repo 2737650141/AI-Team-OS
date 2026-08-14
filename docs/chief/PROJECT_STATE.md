@@ -85,6 +85,11 @@
    add_constraint 而非 stop 邮箱；建议把停止类短语并入 STOP/PAUSE 精确集合（下阶段 024 处理）。
    nits：RESUME 分支 `resume_task` 未捕获 RuntimeError（建议 409）；`_voice_supervisor` 改用统一
    "jarvis-desktop" 会话需产品确认。
+6. **UX-03 收口 security_review（2026-08-14，verdict warn，2 medium/3 low，无 blocking）**：
+   - medium：`jarvis_turn` 默认 `real` 模型——无 token 开发模式（非 Tauri origin）下可能直接消耗真实模型费用；建议默认 `fake` 或仅 Tauri origin 放行 `real`。
+   - medium：`_steering_kind` 意图分类边界（与 #5 同源，server.py:346 附近）。
+   - low：无 token 开发模式可用全部交互端点（loopback 绑定已限制）；通知权限新增（capabilities 最小化内）；其余 low 项按审计记录。
+   - 已确认通过：审批/权限/预算治理未被绕过（resume_task 状态机 + ApprovalPayload + run_task 权限覆盖禁止）；会话 ID 正则 + run_id/project_id 无路径拼接；web 无 dangerouslySetInnerHTML/eval；desktop token 仅内存；capabilities 仅 notification。
 
 ## Deferred（下阶段候选）
 
