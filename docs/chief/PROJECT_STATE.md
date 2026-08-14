@@ -80,6 +80,11 @@
 3. **真实模型 10-turn 复验未做**：ConversationSession 为确定性层，fake/real 行为一致但未跑真实调用。
 4. 低风险遗留：并行 Send 写 `replan_reason` 竞态（仅影响日志）；superseded 旧 subtask 的 pending
    approval 残留（real 审批流相关）；langgraph 反序列化未注册类型警告（未来版本会变 error）。
+5. **UX-03 收口 review（2026-08-14）should-fix**：`app/api/server.py:346` `_steering_kind` 的
+   CHANGE_SCOPE 正则过宽（"不要/别/仅/范围"任意命中）——"不要继续查了"类停止意图会走
+   add_constraint 而非 stop 邮箱；建议把停止类短语并入 STOP/PAUSE 精确集合（下阶段 024 处理）。
+   nits：RESUME 分支 `resume_task` 未捕获 RuntimeError（建议 409）；`_voice_supervisor` 改用统一
+   "jarvis-desktop" 会话需产品确认。
 
 ## Deferred（下阶段候选）
 
