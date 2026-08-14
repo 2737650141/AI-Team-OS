@@ -51,9 +51,9 @@
 ## 当前分支 / HEAD
 
 - 分支：`phase-6p2/desktop-usage-observatory`
-- HEAD：`6d3f1cb`（feat: add jarvis interaction workspace），父 `d892fe3`
-  （docs: record final M6-P2 release evidence）
-- 工作区：干净（checkpoint 已提交）
+- HEAD：`4352d38`（feat: UX-03.1 product efficiency & ergonomics (024)）
+- 024：VALIDATED
+- 工作区：干净
 
 ## 关键真实门禁
 
@@ -99,9 +99,9 @@
 - 真实模型 10-turn 复验 + REAL COMPLEX 产品集（待 #1 缓解后，受 `max_real_requests` 费用上限约束）。
 - CLEAN_INSTALL（需外部干净 Windows 环境）。
 
-## 下一阶段 024
+## 024 执行记录（VALIDATED）
 
-- **总管令 024 UX-03.1（2026-08-14 执行，READY FOR CHIEF REVIEW）**：
+- **总管令 024 UX-03.1（2026-08-14 执行，VALIDATED）**：
   - A. STORAGE：`app/core/storage.py` StorageRegistry（8 类根目录：app_install/data/memory/workspace/
     artifact/snapshot/cache/log；App 安装目录只读禁止写用户数据；memory/workspace 用户可选；
     全局默认 Workspace + Project override；原子迁移 + 校验 + 失败回滚；非空/文件/嵌套目标拒绝；
@@ -123,3 +123,7 @@
     production build 通过；后端 92 测试 + 前端 45 测试全绿。
   - 依据本文件"已知问题 #1 / Deferred"稳定 STANDARD/COMPLEX 真实编排是下一步候选
     （PRODUCT_BASELINE_VALIDATED 前提）；CLEAN_INSTALL 仍需外部干净 Windows 环境。
+
+## 下一阶段
+
+- **M7-A Agent + Skill Library**（024 已完成并 VALIDATED 后的下一阶段方向；未开始实现）。
