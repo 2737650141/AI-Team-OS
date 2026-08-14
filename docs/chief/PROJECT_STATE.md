@@ -101,6 +101,25 @@
 
 ## 下一阶段 024
 
-- 总管令 024 尚未下发；PROJECT_STATE 收口时（2026-08-14）的待办方向：
-  - 依据本文件"已知问题 #1 / Deferred"稳定 STANDARD/COMPLEX 真实编排（这是 PRODUCT_BASELINE_VALIDATED 的前提）；
-  - 或按 024 具体指令执行（以总管令为准）。
+- **总管令 024 UX-03.1（2026-08-14 执行，READY FOR CHIEF REVIEW）**：
+  - A. STORAGE：`app/core/storage.py` StorageRegistry（8 类根目录：app_install/data/memory/workspace/
+    artifact/snapshot/cache/log；App 安装目录只读禁止写用户数据；memory/workspace 用户可选；
+    全局默认 Workspace + Project override；原子迁移 + 校验 + 失败回滚；非空/文件/嵌套目标拒绝；
+    cache/log/snapshot 安全清理；Secret 仅 DPAPI 密文迁移不转明文）+ `/settings/storage` 端点
+    + Settings → Storage & Workspace 面板。
+  - B. NAVIGATION：三栏信息架构（LEFT：新对话/Projects/Recent conversations/Control Center 收纳
+    Tasks-Agents-Approvals-Evidence-Usage-Memory-Tools-Logs/设置；CENTER：JARVIS Conversation/Task/
+    Composer；RIGHT INSPECTOR：Overview|Files|Changes|Activity）。原页面路由全部保留；
+    Computer/Voice/Permission 顶部轻量快捷入口；Design System 未重做。
+  - C. SCROLL：ConversationScrollController（ConversationSession 持久化 scroll_top/anchor_message_id/
+    was_near_bottom + PUT scroll 端点 + 会话级锁防竞态；前端 useConversationScroll hook 实现 6 条规则：
+    回到底部→最新、看历史→恢复、新消息跟随/不抢滚动+↓N 条、route switch 不回到顶部、会话隔离）。
+  - D. CACHE：ModelGateway prompt 组装核查——已是 stable static prefix + dynamic suffix
+    （system 前缀固定、tool schema 确定性排序、repair append 不重建、messages 无时间戳），
+    CACHE01-10 测试固化；usage 新增 cache_hit_tokens/cache_miss_tokens/token_cache_hit_ratio
+    （hit/(hit+miss)，不采用模糊平均命中），Usage 页展示。
+  - 测试门禁：STORAGE01-16 / NAV01-10 / SCROLL01-10 / CACHE01-10 全部通过；
+    特别真实验证 8 项 PASS（含 022-A black-screen、022-B usage attribution）；
+    production build 通过；后端 92 测试 + 前端 45 测试全绿。
+  - 依据本文件"已知问题 #1 / Deferred"稳定 STANDARD/COMPLEX 真实编排是下一步候选
+    （PRODUCT_BASELINE_VALIDATED 前提）；CLEAN_INSTALL 仍需外部干净 Windows 环境。

@@ -226,6 +226,9 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "cached_input_tokens": None,
             "cache_write_tokens": None,
             "other_tokens": None,
+            "cache_hit_tokens": None,
+            "cache_miss_tokens": None,
+            "token_cache_hit_ratio": None,
             "cost_total": None,
             "currency": None,
             "cache_hit_rate": None,
@@ -247,16 +250,21 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     costs = [row["cost_total"] for row in rows if row["cost_total"] is not None]
     latencies = [row["latency_ms"] for row in rows if row["latency_ms"] is not None]
+    # 024-D Token cache 指标：cache_hit = 缓存命中 token 总和；cache_miss =
+    # 未命中 token 总和（input - cached，仅对两者都有报告的行计）；
+    # token_cache_hit_ratio = hit / (hit + miss)，不使用含义模糊的平均命中。
     cached_rows = [
         row
         for row in rows
         if row["cached_input_tokens"] is not None and row["input_tokens"] is not None
     ]
-    eligible = sum(row["input_tokens"] for row in cached_rows)
-    cache_hit = (
-        (sum(row["cached_input_tokens"] for row in cached_rows) / eligible)
-        if eligible
-        else (0.0 if cached_rows else None)
+    cache_hit_tokens = sum(row["cached_input_tokens"] for row in cached_rows)
+    cache_miss_tokens = sum(
+        max(0, row["input_tokens"] - row["cached_input_tokens"]) for row in cached_rows
+    )
+    cache_eligible = cache_hit_tokens + cache_miss_tokens
+    token_cache_hit_ratio = (
+        (cache_hit_tokens / cache_eligible) if cache_eligible else (0.0 if cached_rows else None)
     )
     parsed = [datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")) for row in rows]
     runtime_ms = (
@@ -311,9 +319,12 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "cached_input_tokens": summed("cached_input_tokens"),
         "cache_write_tokens": summed("cache_write_tokens"),
         "other_tokens": summed("other_tokens"),
+        "cache_hit_tokens": cache_hit_tokens,
+        "cache_miss_tokens": cache_miss_tokens,
+        "token_cache_hit_ratio": token_cache_hit_ratio,
         "cost_total": sum(costs) if len(costs) == len(rows) else None,
         "currency": rows[0]["currency"] if costs else None,
-        "cache_hit_rate": cache_hit,
+        "cache_hit_rate": token_cache_hit_ratio,
         "runtime_ms": runtime_ms,
         "average_latency_ms": int(sum(latencies) / len(latencies)) if latencies else None,
         "usage_source": aggregate_source,

@@ -60,8 +60,24 @@ class ConversationSession:
     pending_plan: PendingPlan | None = None
     current_task_reference: str | None = None
     no_write: bool = False
+    # 024-C ConversationScrollController：每个 conversation 保存的滚动状态
+    scroll_top: int = 0
+    anchor_message_id: str | None = None
+    was_near_bottom: bool = True
     created_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
     updated_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S"))
+
+    def set_scroll_state(
+        self, *, scroll_top: int, anchor_message_id: str | None, was_near_bottom: bool
+    ) -> None:
+        """024-C：保存会话滚动状态（离开会话前调用）。
+
+        不刷新 updated_at：滚动保存是 UI 位置记录，不应改变"会话最后活跃时间"
+        （否则每次滚动都会让会话在 Recent conversations 中跳到顶部）。
+        """
+        self.scroll_top = max(0, int(scroll_top))
+        self.anchor_message_id = anchor_message_id
+        self.was_near_bottom = bool(was_near_bottom)
 
     # ---- 持久化 ----
     def to_dict(self) -> dict[str, Any]:

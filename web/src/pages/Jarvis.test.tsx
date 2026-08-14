@@ -44,6 +44,17 @@ function renderJarvis() {
   return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><I18nProvider><MemoryRouter><Jarvis /></MemoryRouter></I18nProvider></QueryClientProvider>);
 }
 
+it("loads the session from the ?session= query param (three-column recent conversations switch)", async () => {
+  const load = vi.spyOn(api, "jarvisSession").mockResolvedValue({ ...emptySession, session_id: "conv-a", messages: [{ role: "assistant", content: "MetaGPT 研究报告要点", status: "completed" }] });
+  render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <I18nProvider><MemoryRouter initialEntries={["/?session=conv-a"]}><Jarvis /></MemoryRouter></I18nProvider>
+    </QueryClientProvider>,
+  );
+  await waitFor(() => expect(load).toHaveBeenCalledWith("conv-a"));
+  expect(await screen.findByText("MetaGPT 研究报告要点")).toBeInTheDocument();
+});
+
 it("shows a conversation-first empty state and sends a direct conversation", async () => {
   vi.spyOn(api, "jarvisTurn").mockResolvedValue({
     session: { ...emptySession, messages: [{ role: "user", content: "你好" }, { role: "assistant", content: "你好，我是 JARVIS。", status: "completed", run_id: "conv-run" }] },
@@ -106,7 +117,8 @@ it("restores the latest conversation run instead of an older stopped task", asyn
   vi.spyOn(api, "taskUsage").mockResolvedValue({ total_tokens: 100, by_agent: [], context: { percentage: null } } as unknown as UsageSummary);
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream({ start() {} }), { status: 200 }));
   renderJarvis();
-  expect(await screen.findByText("详细研究 FoundationAgents/MetaGPT")).toBeInTheDocument();
+  // 该 goal 会同时出现在任务卡片与右侧 Inspector 的 Overview（三栏架构），允许出现多次
+  expect((await screen.findAllByText("详细研究 FoundationAgents/MetaGPT")).length).toBeGreaterThanOrEqual(1);
   expect(screen.queryByText("旧任务")).not.toBeInTheDocument();
 });
 
@@ -115,7 +127,7 @@ it("renders real task usage, execution summary and final result in the same thre
   vi.spyOn(api, "jarvisSession").mockResolvedValue(session);
   vi.spyOn(api, "dashboard").mockResolvedValue({ ...dashboard, recent_tasks: [{ task_id: "task-1", run_id: "run-1", status: "completed", run_kind: "user_task", goal: "研究 Agent 项目", project_id: "default", model_mode: "real", tokens: 4441, cost: 0.001, tool_calls: 1, started_at: "2026-08-14T00:00:00Z", duration_s: 18 }] });
   const task = { task_id: "task-1", run_id: "run-1", current_status: "completed", run_kind: "user_task", failure_code: null, model_mode: "real", goal: "研究 Agent 项目", plan: { goal: "研究", subtasks: [] }, subtasks: [{ subtask_id: "s1", title: "检索候选项目", role: "researcher", status: "completed", rework_count: 0, dependencies: [], token_budget: 5000, tool_call_budget: 2, evidence_refs: ["e1"] }], token_budget: 10000, cost_budget: 1, budget_usage: { tokens: 4441 }, rework_count: 0, final_result: JSON.stringify({ summary: "### 推荐项目 A。", decision: "accept", execution_summary: { tool_call_count: 1 } }), model_identity: { badge: "REAL", provider: "DeepSeek Official", default_model: "deepseek-v4-flash", role_models: { researcher: "deepseek-v4-flash" } } } satisfies TaskDetail;
-  const usage = { has_data: true, requests: 3, total_tokens: 4441, input_tokens: 4000, output_tokens: 441, reasoning_tokens: null, cached_input_tokens: null, cache_write_tokens: null, other_tokens: null, cost_total: 0.001, currency: "USD", cache_hit_rate: null, runtime_ms: 18000, average_latency_ms: 6000, usage_source: "REPORTED", last_compression: null, context: { current_tokens: 140000, limit: 1000000, percentage: .14, status: "AMPLE", compression_threshold: .8, compression_threshold_tokens: 800000, until_compression: 660000, source: "REPORTED", role: "researcher", model: "deepseek-v4-flash" }, by_agent: [{ name: "researcher", requests: 3, tokens: 4441, latency_ms: 18000, cost: .001, cost_available: true }], by_model: [], by_provider: [], by_task: [], timeline: [] } satisfies UsageSummary;
+  const usage = { has_data: true, requests: 3, total_tokens: 4441, input_tokens: 4000, output_tokens: 441, reasoning_tokens: null, cached_input_tokens: null, cache_write_tokens: null, other_tokens: null, cost_total: 0.001, currency: "USD", cache_hit_rate: null, cache_hit_tokens: null, cache_miss_tokens: null, token_cache_hit_ratio: null, runtime_ms: 18000, average_latency_ms: 6000, usage_source: "REPORTED", last_compression: null, context: { current_tokens: 140000, limit: 1000000, percentage: .14, status: "AMPLE", compression_threshold: .8, compression_threshold_tokens: 800000, until_compression: 660000, source: "REPORTED", role: "researcher", model: "deepseek-v4-flash" }, by_agent: [{ name: "researcher", requests: 3, tokens: 4441, latency_ms: 18000, cost: .001, cost_available: true }], by_model: [], by_provider: [], by_task: [], timeline: [] } satisfies UsageSummary;
   vi.spyOn(api, "task").mockResolvedValue(task);
   vi.spyOn(api, "taskUsage").mockResolvedValue(usage);
   vi.spyOn(api, "approvals").mockResolvedValue([]);

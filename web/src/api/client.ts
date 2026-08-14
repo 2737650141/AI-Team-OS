@@ -60,6 +60,17 @@ export const api = {
   dashboard: () => request<import("./types").DashboardData>("/dashboard"),
   jarvisSession: (sessionId: string) =>
     request<import("./types").JarvisSession>(`/jarvis/sessions/${encodeURIComponent(sessionId)}`),
+  jarvisSessions: () =>
+    request<{ sessions: import("./types").JarvisSessionSummary[] }>("/jarvis/sessions"),
+  clearJarvisSession: (sessionId: string) =>
+    request<import("./types").JarvisSession>(`/jarvis/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "DELETE",
+    }),
+  saveJarvisScroll: (sessionId: string, body: { scroll_top: number; anchor_message_id: string | null; was_near_bottom: boolean }) =>
+    request<import("./types").JarvisSession>(`/jarvis/sessions/${encodeURIComponent(sessionId)}/scroll`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   jarvisTurn: (sessionId: string, body: {
     user_input: string;
     model_mode?: "fake" | "real";
@@ -91,6 +102,22 @@ export const api = {
     context: import("./types").UsageSummary["context"] | null;
   }>("/usage/active-context"),
   usageSettings: () => request<{ retention: "7" | "30" | "90" | "forever" }>("/settings/usage"),
+  storageStatus: () => request<import("./types").StorageSummary>("/settings/storage"),
+  migrateStorageRoot: (key: "memory" | "workspace", target: string) =>
+    request<{ key: string; migrated: boolean; from: string; to: string; size_bytes: number | null }>(
+      "/settings/storage/roots",
+      { method: "PUT", body: JSON.stringify({ key, target }) },
+    ),
+  cleanupStorageRoot: (key: "cache" | "log" | "snapshot") =>
+    request<{ key: string; cleaned: boolean; removed_bytes: number }>("/settings/storage/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ key }),
+    }),
+  setWorkspaceOverride: (projectId: string, target: string | null) =>
+    request<{ project_id: string; workspace: string }>("/settings/storage/workspace-override", {
+      method: "PUT",
+      body: JSON.stringify({ project_id: projectId, target }),
+    }),
   interactionSettings: () => request<import("./types").InteractionSettings>("/settings/interaction"),
   saveInteractionSettings: (body: import("./types").InteractionSettings) =>
     request<import("./types").InteractionSettings>("/settings/interaction", { method: "PUT", body: JSON.stringify(body) }),

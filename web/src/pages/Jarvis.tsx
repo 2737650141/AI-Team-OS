@@ -12,14 +12,17 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { JarvisMessage, TaskDetail, TaskSummary } from "../api/types";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { RightInspector } from "../components/RightInspector";
 import { StatusBadge } from "../components/StatusBadge";
 import { useEvents } from "../hooks/useEvents";
+import { useConversationScroll } from "../hooks/useConversationScroll";
 import { useI18n } from "../i18n";
 import { displayLabel } from "../i18n/labels";
 
@@ -36,7 +39,18 @@ export function Jarvis() {
   const { lang } = useI18n();
   const zh = lang === "zh";
   const qc = useQueryClient();
-  const session = useRef(sessionId()).current;
+  const [params] = useSearchParams();
+  const requestedSession = params.get("session");
+  const requestedProject = params.get("project");
+  // 024-B：会话/项目来自 URL query，随路由切换实时生效（三栏 Recent conversations 切换）
+  const [session, setSession] = useState(() =>
+    requestedSession && requestedSession !== "jarvis-desktop" ? requestedSession : sessionId(),
+  );
+  const [projectContext, setProjectContext] = useState<string | undefined>(requestedProject ?? undefined);
+  useEffect(() => {
+    setSession(requestedSession && requestedSession !== "jarvis-desktop" ? requestedSession : sessionId());
+    setProjectContext(requestedProject ?? undefined);
+  }, [requestedSession, requestedProject]);
   const [input, setInput] = useState("");
   const [optimistic, setOptimistic] = useState<JarvisMessage[]>([]);
   const [focusedRun, setFocusedRun] = useState<string | undefined>(() => {
@@ -53,6 +67,12 @@ export function Jarvis() {
     queryKey: ["jarvis-session", session],
     queryFn: () => api.jarvisSession(session),
   });
+  // 024-C ConversationScrollController：滚动状态按会话隔离并持久化
+  const { containerRef, onScroll, unreadCount, jumpToLatest } = useConversationScroll(
+    session,
+    conversation.data,
+    conversation.data?.messages.length ?? 0,
+  );
   const dashboard = useQuery({
     queryKey: ["dashboard"],
     queryFn: api.dashboard,
@@ -119,7 +139,7 @@ export function Jarvis() {
   });
 
   const submit = useMutation({
-    mutationFn: (user_input: string) => api.jarvisTurn(session, { user_input, model_mode: "real" }),
+    mutationFn: (user_input: string) => api.jarvisTurn(session, { user_input, model_mode: "real", ...(projectContext ? { project_id: projectContext } : {}) }),
     onMutate: (user_input) => {
       setStartingTurn(true);
       setOptimistic([{ role: "user", content: user_input }]);
@@ -202,95 +222,106 @@ export function Jarvis() {
 
   return (
     <div className="jarvis-workspace">
-      <header className="jarvis-topbar">
-        <div className="jarvis-identity">
-          <span className={`jarvis-orb ${status.tone}`} aria-hidden="true" />
-          <div><strong>JARVIS</strong><span role="status" aria-live="polite">{status.label[zh ? 0 : 1]}</span></div>
-        </div>
-        <RuntimeUsage task={task.data} usage={usage.data} zh={zh} />
-      </header>
-
-      <main className="jarvis-scroll" aria-label={zh ? "JARVIS 对话" : "JARVIS conversation"}>
-        {messages.length === 0 && !conversation.isLoading ? (
-          <EmptyState zh={zh} onExample={(value) => setInput(value)} />
-        ) : (
-          <div className="jarvis-thread">
-            {messages.map((message, index) => (
-              <Message key={`${message.role}-${index}-${message.content.slice(0, 18)}`} message={message} />
-            ))}
-          </div>
-        )}
-
-        {isUserTask && task.data && (
-          <TaskCard
-            task={task.data}
-            summary={activeSummary ?? recentSummary}
-            events={events}
-            connected={connected}
-            usage={usage.data}
-            evidenceCount={evidence.data?.length ?? 0}
-            expanded={expanded}
-            setExpanded={setExpanded}
-            zh={zh}
-            controlAction={control.data?.action}
-            controlBusy={steering.isPending}
-            onControl={(instruction) => steering.mutate(instruction)}
-          />
-        )}
-
-        {pendingApproval && <div className="jarvis-inline-approval"><ApprovalCard approval={pendingApproval} onDecision={() => { void approvals.refetch(); void task.refetch(); }} /></div>}
-
-        {taskMemory.data && taskMemory.data.usage.length > 0 && <MemoryExplanation usage={taskMemory.data.usage} zh={zh} onForget={async (memoryId) => { await api.forgetMemory(memoryId); await taskMemory.refetch(); }} />}
-
-        {isUserTask && task.data?.current_status === "failed" && (
-          <HumanizedFailure task={task.data} events={events} zh={zh} onRetry={() => { setFocusedRun(undefined); setFocusedKind(undefined); submit.mutate(task.data!.goal); }} />
-        )}
-
-        {isUserTask && task.data?.final_result && (
-          <section className="jarvis-final" aria-label={zh ? "最终结果" : "Final result"}>
-            <div className="message-avatar"><Sparkles size={16} /></div>
-            <div className="message-body">
-              <span className="message-name">JARVIS</span>
-              <div className="final-summary"><strong>{zh ? "完成" : "Completed"}</strong><p>{humanizeFinalResult(task.data.final_result)}</p></div>
-              {evidence.data && evidence.data.length > 0 && (
-                <details className="evidence-summary"><summary>{zh ? `依据 ${evidence.data.length} 个来源` : `Based on ${evidence.data.length} sources`}</summary>{evidence.data.slice(0, 12).map((item) => <div key={item.evidence_id}>{item.title || item.source_type || item.tool || (zh ? "已验证来源" : "Verified source")}</div>)}</details>
-              )}
-              {patchApproval && <div className="undo-row"><button disabled={undo.isPending || !!undoMessage} onClick={() => undo.mutate()}>{zh ? "撤销这次更改" : "Undo these changes"}</button><span>{undoMessage}</span></div>}
-              {!patchApproval && task.data.goal.startsWith("sandbox_") && <p className="muted undo-unavailable">{zh ? "此操作没有可用的自动撤销快照。" : "No automatic rollback snapshot is available for this action."}</p>}
+      <div className="jarvis-columns">
+        <section className="jarvis-center">
+          <header className="jarvis-topbar">
+            <div className="jarvis-identity">
+              <span className={`jarvis-orb ${status.tone}`} aria-hidden="true" />
+              <div><strong>JARVIS</strong><span role="status" aria-live="polite">{status.label[zh ? 0 : 1]}</span></div>
             </div>
-          </section>
-        )}
-      </main>
+            <RuntimeUsage task={task.data} usage={usage.data} zh={zh} />
+          </header>
 
-      {(voice.data?.state !== "idle" || computer.data?.control === "on") && <div className="jarvis-capability-strip">
-        {voice.data?.state !== "idle" && <span><span className="live-dot" />{voiceLabel(voice.data?.state, zh)}</span>}
-        {computer.data?.control === "on" && <span>{zh ? "正在操作电脑" : "Using computer"}{computer.data.active_window?.title ? ` · ${computer.data.active_window.title}` : ""}{computer.data.current_task?.action_plan?.[computer.data.current_task.current_step]?.tool ? ` · ${computer.data.current_task.action_plan[computer.data.current_task.current_step].tool}` : ""}</span>}
-      </div>}
+          <main className="jarvis-scroll" ref={containerRef} onScroll={onScroll} aria-label={zh ? "JARVIS 对话" : "JARVIS conversation"}>
+            {unreadCount > 0 && (
+              <button className="jarvis-unread-jump" onClick={jumpToLatest}>
+                ↓ {zh ? `${unreadCount} 条新消息` : `${unreadCount} new messages`}
+              </button>
+            )}
+            {messages.length === 0 && !conversation.isLoading ? (
+              <EmptyState zh={zh} onExample={(value) => setInput(value)} />
+            ) : (
+              <div className="jarvis-thread">
+                {messages.map((message, index) => (
+                  <Message key={`${message.role}-${index}-${message.content.slice(0, 18)}`} message={message} />
+                ))}
+              </div>
+            )}
 
-      <form className="jarvis-composer" onSubmit={send}>
-        <button type="button" className="composer-icon" disabled title={zh ? "文件与图片支持即将接入" : "File and image support is not connected yet"} aria-label={zh ? "添加附件（尚未接入）" : "Add attachment (not connected)"}><Paperclip size={18} /></button>
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder={placeholder}
-          aria-label={zh ? "给 JARVIS 发消息" : "Message JARVIS"}
-          rows={1}
-        />
-        <button
-          className="composer-send"
-          disabled={!input.trim() || steering.isPending || (submit.isPending && !(runId && isUserTask && task.data && !taskIsTerminal))}
-          aria-label={zh ? "发送" : "Send"}
-        >
-          {steering.isPending || (submit.isPending && !(runId && isUserTask && task.data && !taskIsTerminal)) ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
-        </button>
-        {interaction.data?.mode === "minimal_interruption" && <span className="interaction-mode-indicator">{zh ? "少打扰" : "Minimal"}</span>}
-      </form>
+            {isUserTask && task.data && (
+              <TaskCard
+                task={task.data}
+                summary={activeSummary ?? recentSummary}
+                events={events}
+                connected={connected}
+                usage={usage.data}
+                evidenceCount={evidence.data?.length ?? 0}
+                expanded={expanded}
+                setExpanded={setExpanded}
+                zh={zh}
+                controlAction={control.data?.action}
+                controlBusy={steering.isPending}
+                onControl={(instruction) => steering.mutate(instruction)}
+              />
+            )}
+
+            {pendingApproval && <div className="jarvis-inline-approval"><ApprovalCard approval={pendingApproval} onDecision={() => { void approvals.refetch(); void task.refetch(); }} /></div>}
+
+            {taskMemory.data && taskMemory.data.usage.length > 0 && <MemoryExplanation usage={taskMemory.data.usage} zh={zh} onForget={async (memoryId) => { await api.forgetMemory(memoryId); await taskMemory.refetch(); }} />}
+
+            {isUserTask && task.data?.current_status === "failed" && (
+              <HumanizedFailure task={task.data} events={events} zh={zh} onRetry={() => { setFocusedRun(undefined); setFocusedKind(undefined); submit.mutate(task.data!.goal); }} />
+            )}
+
+            {isUserTask && task.data?.final_result && (
+              <section className="jarvis-final" aria-label={zh ? "最终结果" : "Final result"}>
+                <div className="message-avatar"><Sparkles size={16} /></div>
+                <div className="message-body">
+                  <span className="message-name">JARVIS</span>
+                  <div className="final-summary"><strong>{zh ? "完成" : "Completed"}</strong><p>{humanizeFinalResult(task.data.final_result)}</p></div>
+                  {evidence.data && evidence.data.length > 0 && (
+                    <details className="evidence-summary"><summary>{zh ? `依据 ${evidence.data.length} 个来源` : `Based on ${evidence.data.length} sources`}</summary>{evidence.data.slice(0, 12).map((item) => <div key={item.evidence_id}>{item.title || item.source_type || item.tool || (zh ? "已验证来源" : "Verified source")}</div>)}</details>
+                  )}
+                  {patchApproval && <div className="undo-row"><button disabled={undo.isPending || !!undoMessage} onClick={() => undo.mutate()}>{zh ? "撤销这次更改" : "Undo these changes"}</button><span>{undoMessage}</span></div>}
+                  {!patchApproval && task.data.goal.startsWith("sandbox_") && <p className="muted undo-unavailable">{zh ? "此操作没有可用的自动撤销快照。" : "No automatic rollback snapshot is available for this action."}</p>}
+                </div>
+              </section>
+            )}
+          </main>
+
+          {(voice.data?.state !== "idle" || computer.data?.control === "on") && <div className="jarvis-capability-strip">
+            {voice.data?.state !== "idle" && <span><span className="live-dot" />{voiceLabel(voice.data?.state, zh)}</span>}
+            {computer.data?.control === "on" && <span>{zh ? "正在操作电脑" : "Using computer"}{computer.data.active_window?.title ? ` · ${computer.data.active_window.title}` : ""}{computer.data.current_task?.action_plan?.[computer.data.current_task.current_step]?.tool ? ` · ${computer.data.current_task.action_plan[computer.data.current_task.current_step].tool}` : ""}</span>}
+          </div>}
+
+          <form className="jarvis-composer" onSubmit={send}>
+            <button type="button" className="composer-icon" disabled title={zh ? "文件与图片支持即将接入" : "File and image support is not connected yet"} aria-label={zh ? "添加附件（尚未接入）" : "Add attachment (not connected)"}><Paperclip size={18} /></button>
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder={placeholder}
+              aria-label={zh ? "给 JARVIS 发消息" : "Message JARVIS"}
+              rows={1}
+            />
+            <button
+              className="composer-send"
+              disabled={!input.trim() || steering.isPending || (submit.isPending && !(runId && isUserTask && task.data && !taskIsTerminal))}
+              aria-label={zh ? "发送" : "Send"}
+            >
+              {steering.isPending || (submit.isPending && !(runId && isUserTask && task.data && !taskIsTerminal)) ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
+            </button>
+            {interaction.data?.mode === "minimal_interruption" && <span className="interaction-mode-indicator">{zh ? "少打扰" : "Minimal"}</span>}
+          </form>
+        </section>
+
+        <RightInspector runId={runId} task={task.data} usage={usage.data} events={events} connected={connected} />
+      </div>
     </div>
   );
 }

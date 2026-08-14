@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -95,6 +96,22 @@ _voice_cache = None
 
 def _data_dir() -> Path:
     return Path(os.environ.get("AI_TEAM_OS_DATA_DIR", "data"))
+
+
+_storage_registry: Any = None
+_storage_registry_lock = threading.Lock()
+
+
+def _storage() -> Any:
+    """StorageRegistry 单例（按 data root 复用）。"""
+    global _storage_registry
+    if _storage_registry is None:
+        with _storage_registry_lock:
+            if _storage_registry is None:
+                from app.core.storage import StorageRegistry
+
+                _storage_registry = StorageRegistry(_data_dir())
+    return _storage_registry
 
 
 def _settings() -> AppSettings:
@@ -299,6 +316,26 @@ class JarvisTurnBody(BaseModel):
     cost_budget: float = Field(default=1.0, gt=0, le=100.0)
     project_id: str = Field(default="default", max_length=200)
     project_alias: str | None = Field(default=None, max_length=200)
+
+    model_config = {"extra": "forbid"}
+
+
+class StorageMigrateBody(BaseModel):
+    key: str = Field(pattern="^(memory|workspace)$")
+    target: str = Field(min_length=1, max_length=2000)
+
+    model_config = {"extra": "forbid"}
+
+
+class StorageCleanBody(BaseModel):
+    key: str = Field(pattern="^(cache|log|snapshot)$")
+
+    model_config = {"extra": "forbid"}
+
+
+class WorkspaceOverrideBody(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    target: str | None = Field(default=None, max_length=2000)
 
     model_config = {"extra": "forbid"}
 
@@ -856,6 +893,11 @@ def _jarvis_session_payload(session) -> dict[str, Any]:
         "current_task_reference": session.current_task_reference,
         "current_project": session.current_project,
         "no_write": session.no_write,
+        "scroll": {
+            "scroll_top": session.scroll_top,
+            "anchor_message_id": session.anchor_message_id,
+            "was_near_bottom": session.was_near_bottom,
+        },
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     }
@@ -864,6 +906,35 @@ def _jarvis_session_payload(session) -> dict[str, Any]:
 def _validate_jarvis_session_id(session_id: str) -> None:
     if not _JARVIS_SESSION_ID.fullmatch(session_id):
         raise HTTPException(status_code=400, detail="invalid JARVIS session id")
+
+
+@app.get("/jarvis/sessions")
+def jarvis_sessions() -> dict[str, Any]:
+    """列出所有 JARVIS 会话摘要（LEFT 栏 Recent conversations）。"""
+    from app.conversation.session import ConversationSession
+
+    sessions_dir = _data_dir() / "runtime" / "sessions"
+    result = []
+    if sessions_dir.exists():
+        for path in sorted(sessions_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+            session_id = path.stem
+            if not _JARVIS_SESSION_ID.fullmatch(session_id):
+                continue
+            session = ConversationSession.load(_data_dir(), session_id)
+            if session is None:
+                continue
+            result.append({
+                "session_id": session.session_id,
+                "current_goal": session.current_goal,
+                "current_project": session.current_project,
+                "updated_at": session.updated_at,
+                "message_count": len(session.recent_user_turns),
+                "last_summary": (
+                    str(session.recent_assistant_results[-1].get("summary") or "")[:120]
+                    if session.recent_assistant_results else ""
+                ),
+            })
+    return {"sessions": result[:50]}
 
 
 @app.get("/jarvis/sessions/{session_id}")
@@ -877,6 +948,64 @@ def jarvis_session(session_id: str) -> dict[str, Any]:
     return _jarvis_session_payload(session)
 
 
+@app.delete("/jarvis/sessions/{session_id}")
+def jarvis_session_clear(session_id: str) -> dict[str, Any]:
+    """新对话：清空会话（重建空 ConversationSession，保留同一 session_id）。"""
+    from app.conversation.session import ConversationSession
+
+    _validate_jarvis_session_id(session_id)
+    session = ConversationSession(session_id=session_id)
+    session.save(_data_dir())
+    return _jarvis_session_payload(session)
+
+
+class JarvisScrollBody(BaseModel):
+    scroll_top: int = Field(default=0, ge=0)
+    anchor_message_id: str | None = Field(default=None, max_length=200)
+    was_near_bottom: bool = True
+
+    model_config = {"extra": "forbid"}
+
+
+_scroll_locks: dict[str, threading.Lock] = {}
+_scroll_locks_guard = threading.Lock()
+
+
+def _scroll_lock(session_id: str) -> threading.Lock:
+    with _scroll_locks_guard:
+        lock = _scroll_locks.get(session_id)
+        if lock is None:
+            lock = threading.Lock()
+            _scroll_locks[session_id] = lock
+        return lock
+
+
+@app.put("/jarvis/sessions/{session_id}/scroll")
+def jarvis_session_scroll(session_id: str, body: JarvisScrollBody) -> dict[str, Any]:
+    """024-C：保存会话滚动状态（ConversationScrollController 持久化）。
+
+    会话级锁串行化：滚动保存与对话轮次都做 load→modify→save 全文件写，
+    不加锁时滚动保存可能覆盖并发写入的新消息。锁内先重新 load 最新状态，
+    再合并滚动字段，尽量保留并发 turn 写入的内容。
+    """
+    from app.conversation.session import ConversationSession
+
+    _validate_jarvis_session_id(session_id)
+    with _scroll_lock(session_id):
+        # 重新 load 最新状态：避免覆盖此前的并发 turn/scroll 写入
+        session = ConversationSession.load(_data_dir(), session_id) or ConversationSession(
+            session_id=session_id
+        )
+        session.set_scroll_state(
+            scroll_top=body.scroll_top,
+            anchor_message_id=body.anchor_message_id,
+            was_near_bottom=body.was_near_bottom,
+        )
+        session.save(_data_dir())
+        payload = _jarvis_session_payload(session)
+    return payload
+
+
 @app.post("/jarvis/sessions/{session_id}/turns")
 def jarvis_turn(session_id: str, body: JarvisTurnBody) -> dict[str, Any]:
     """Thin UI adapter over the validated ConversationSession/runtime path."""
@@ -884,23 +1013,27 @@ def jarvis_turn(session_id: str, body: JarvisTurnBody) -> dict[str, Any]:
     from app.core.run_kind import classify_run_kind
 
     _validate_jarvis_session_id(session_id)
-    try:
-        session, result = run_conversation_turn(
-            session_id,
-            body.user_input,
-            _data_dir(),
-            model_mode=body.model_mode,
-            token_budget=body.token_budget,
-            cost_budget=body.cost_budget,
-            project_id=body.project_id,
-            project_alias=body.project_alias,
-        )
-    except ProviderError as exc:
-        raise HTTPException(status_code=400, detail=exc.safe_message) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 与 scroll PUT 共用会话级锁：turn 写入（load→modify→save）与滚动保存串行，
+    # 避免滚动保存覆盖并发 turn 产生的新消息（024-C 竞态防护）
+    with _scroll_lock(session_id):
+        try:
+            session, result = run_conversation_turn(
+                session_id,
+                body.user_input,
+                _data_dir(),
+                model_mode=body.model_mode,
+                token_budget=body.token_budget,
+                cost_budget=body.cost_budget,
+                project_id=body.project_id,
+                project_alias=body.project_alias,
+            )
+        except ProviderError as exc:
+            raise HTTPException(status_code=400, detail=exc.safe_message) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload = _jarvis_session_payload(session)
     return {
-        "session": _jarvis_session_payload(session),
+        "session": payload,
         "result": result,
         "run_kind": classify_run_kind(body.user_input).value,
     }
@@ -1526,6 +1659,49 @@ def settings_status() -> dict[str, Any]:
         "network_isolation": "Best Effort",
         "sandbox": {"status": "Online" if allowed_read_roots() else "Disabled"},
     }
+
+
+@app.get("/settings/storage")
+def storage_status() -> dict[str, Any]:
+    """Storage & Workspace 状态（024-A）：根目录 + 大小 + 覆盖 + Secret 规则。"""
+    return _storage().config_summary()
+
+
+@app.put("/settings/storage/roots")
+def storage_migrate(body: StorageMigrateBody) -> dict[str, Any]:
+    """迁移可用户选择根目录（memory/workspace）：原子迁移 + 校验 + 失败回滚。"""
+    from app.core.storage import StorageError
+
+    try:
+        return _storage().migrate(body.key, Path(body.target))
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": f"migration failed: {exc}"}) from exc
+
+
+@app.post("/settings/storage/cleanup")
+def storage_cleanup(body: StorageCleanBody) -> dict[str, Any]:
+    """安全清理 cache/log/snapshot（不触碰 SQLite/凭据/记忆/工作区）。"""
+    from app.core.storage import StorageError
+
+    try:
+        return _storage().clean(body.key)
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
+
+
+@app.put("/settings/storage/workspace-override")
+def workspace_override(body: WorkspaceOverrideBody) -> dict[str, Any]:
+    """设置/清除某个 Project 的 Workspace override（全局默认 + Project override）。"""
+    from app.core.storage import StorageError
+
+    try:
+        return _storage().set_project_workspace(
+            body.project_id, Path(body.target) if body.target else None
+        )
+    except StorageError as exc:
+        raise HTTPException(status_code=400, detail={"code": "storage_error", "message": str(exc)}) from exc
 
 
 def _format_sse_frame(sequence: int, data: dict) -> str:

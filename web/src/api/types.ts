@@ -230,6 +230,21 @@ export interface JarvisMessage {
   run_id?: string | null;
 }
 
+export interface JarvisScrollState {
+  scroll_top: number;
+  anchor_message_id: string | null;
+  was_near_bottom: boolean;
+}
+
+export interface JarvisSessionSummary {
+  session_id: string;
+  current_goal: string | null;
+  current_project: string;
+  updated_at: string;
+  message_count: number;
+  last_summary: string;
+}
+
 export interface JarvisSession {
   session_id: string;
   messages: JarvisMessage[];
@@ -237,6 +252,7 @@ export interface JarvisSession {
   current_task_reference: string | null;
   current_project: string;
   no_write: boolean;
+  scroll?: JarvisScrollState;
   created_at: string;
   updated_at: string;
 }
@@ -297,6 +313,9 @@ export interface UsageSummary {
   cost_total: number | null;
   currency: string | null;
   cache_hit_rate: number | null;
+  cache_hit_tokens: number | null;
+  cache_miss_tokens: number | null;
+  token_cache_hit_ratio: number | null;
   runtime_ms: number | null;
     average_latency_ms: number | null;
     usage_source: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";
@@ -334,6 +353,27 @@ export interface UsageSummary {
       compression_tokens_before: number | null;
       compression_tokens_after: number | null;
     }>;
+}
+
+export interface StorageRoot {
+  key: string;
+  path: string;
+  default_path: string;
+  exists: boolean;
+  size_bytes: number | null;
+  user_selectable: boolean;
+  cleanable: boolean;
+  readonly: boolean;
+}
+
+export interface StorageSummary {
+  roots: StorageRoot[];
+  project_workspace_overrides: Record<string, string>;
+  secret_policy: {
+    storage: string;
+    migration: string;
+  };
+  app_install_readonly: boolean;
 }
 
 export type PermissionMode = "safe" | "standard" | "maximum";
