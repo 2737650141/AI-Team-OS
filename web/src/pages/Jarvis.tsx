@@ -357,7 +357,7 @@ function stableMessageId(messages: JarvisMessage[], index: number) {
 function Message({ message, messageId }: { message: JarvisMessage; messageId: string }) {
   if (!message.content) return null;
   const content = message.role === "assistant" ? humanizeFinalResult(message.content) : message.content;
-  return <article className={`jarvis-message ${message.role}`} data-message-id={messageId}><div className="message-avatar">{message.role === "assistant" ? <Sparkles size={15} /> : "你"}</div><div className="message-body"><span className="message-name">{message.role === "assistant" ? "JARVIS" : "You"}</span><p>{content}</p></div></article>;
+  return <article className={`jarvis-message ${message.role}`} data-message-id={messageId}>{message.role === "assistant" && <div className="message-avatar" aria-hidden="true"><Sparkles size={15} /></div>}<div className="message-body"><span className="message-name">{message.role === "assistant" ? "JARVIS" : "You"}</span><p>{content}</p></div></article>;
 }
 
 function TaskCard({ task, summary, events, connected, usage, evidenceCount, expanded, setExpanded, zh, controlAction, controlBusy, onControl }: {
@@ -396,8 +396,18 @@ function TaskCard({ task, summary, events, connected, usage, evidenceCount, expa
 
 function RuntimeUsage({ task, usage, zh }: { task?: TaskDetail; usage?: import("../api/types").UsageSummary; zh: boolean }) {
   const context = usage?.context;
-  const contextPercent = context?.percentage == null ? null : Math.round(context.percentage * 100);
-  return <div className="jarvis-runtime-usage" aria-label={zh ? "当前用量" : "Current usage"}><span>{task?.model_identity?.badge ?? "REAL"} · {task?.model_identity?.default_model || task?.model_identity?.provider || (zh ? "等待任务" : "Ready")}</span>{contextPercent != null && <span>Context {contextPercent}%{contextPercent >= 70 ? (zh ? " · 即将整理" : " · compaction soon") : ""}</span>}<span>{formatTokens(usage?.total_tokens)} tokens</span><span>{usage?.cost_total == null || usage?.by_agent.some((item) => item.cost_available === false) ? (zh ? "费用不可用" : "Cost unavailable") : `$${usage.cost_total.toFixed(4)}`}</span></div>;
+  return <div className="jarvis-runtime-usage" aria-label={zh ? "当前用量" : "Current usage"}>
+    <span className="runtime-model"><b className={`mode-badge ${(task?.model_identity?.badge ?? "REAL").toLowerCase()}`}>{task?.model_identity?.badge ?? "REAL"}</b><strong>{task?.model_identity?.default_model || task?.model_identity?.provider || (zh ? "等待任务" : "Ready")}</strong></span>
+    <span>Context {formatContextPercent(context?.percentage, zh)}{context?.percentage != null && context.percentage >= .7 ? (zh ? " · 即将整理" : " · compaction soon") : ""}</span>
+    <span>{formatTokens(usage?.total_tokens)} tokens</span>
+    <span>{usage?.cost_total == null || usage?.by_agent.some((item) => item.cost_available === false) ? (zh ? "费用不可用" : "Cost unavailable") : `$${usage.cost_total.toFixed(4)}`}</span>
+  </div>;
+}
+
+function formatContextPercent(value: number | null | undefined, _zh: boolean) {
+  if (value == null) return "Unavailable";
+  if (value > 0 && value < 0.01) return "<1%";
+  return `${Math.round(value * 100)}%`;
 }
 
 function taskStages(task: TaskDetail, zh: boolean) {

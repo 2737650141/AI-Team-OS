@@ -50,19 +50,20 @@ export function RightInspector({ runId, task, usage, events, connected, onClose 
 }
 
 function OverviewTab({ task, usage, events, zh }: { task?: TaskDetail; usage?: UsageSummary; events: RuntimeEvent[]; zh: boolean }) {
+  const [goalExpanded, setGoalExpanded] = useState(false);
   if (!task) return <Empty label={zh ? "运行任务后这里会显示概览。" : "Run a task to see its overview here."} />;
   const currentAgent = task.subtasks.find((item) => ["running", "working", "in_progress"].includes(item.status))?.role
     ?? [...events].reverse().find((event) => event.actor_type === "agent")?.actor_id
     ?? usage?.by_agent?.[0]?.name
     ?? (zh ? "无" : "None");
+  const goalNeedsToggle = task.goal.length > 120;
   return <dl className="inspector-overview">
     <div><dt>{zh ? "状态" : "Status"}</dt><dd>{task.current_status}</dd></div>
-    <div><dt>{zh ? "目标" : "Goal"}</dt><dd className="wrap">{task.goal}</dd></div>
+    <div><dt>{zh ? "目标" : "Goal"}</dt><dd className="wrap"><div className={`inspector-goal ${goalExpanded ? "expanded" : ""}`}>{task.goal}</div>{goalNeedsToggle && <button className="inspector-goal-toggle" type="button" aria-expanded={goalExpanded} onClick={() => setGoalExpanded((expanded) => !expanded)}>{goalExpanded ? (zh ? "收起目标" : "Show less") : (zh ? "查看完整目标" : "View full goal")}</button>}</dd></div>
     <div><dt>Model</dt><dd>{task.model_identity?.badge ?? task.model_mode} · {task.model_identity?.provider ?? "—"}</dd></div>
     <div><dt>{zh ? "当前 Agent" : "Current agent"}</dt><dd>{currentAgent}</dd></div>
-    <div><dt>Context</dt><dd>{usage?.context?.percentage == null ? "Unavailable" : `${Math.round(usage.context.percentage * 100)}%`}</dd></div>
-    <div><dt>{zh ? "Token 预算" : "Token budget"}</dt><dd>{formatTokens(task.token_budget)}</dd></div>
-    <div><dt>{zh ? "已用 Token" : "Tokens used"}</dt><dd>{formatTokens(usage?.total_tokens)}</dd></div>
+    <div><dt>Context</dt><dd>{formatContextPercent(usage?.context?.percentage, zh)}</dd></div>
+    <div><dt>{zh ? "Tokens" : "Tokens"}</dt><dd>{formatTokens(usage?.total_tokens)}{task.token_budget != null ? ` / ${formatTokens(task.token_budget)}` : ""}</dd></div>
     <div><dt>{zh ? "费用" : "Cost"}</dt><dd>{usage?.cost_total == null ? "Unavailable" : `$${usage.cost_total.toFixed(4)}`}</dd></div>
     <div><dt>{zh ? "运行时间" : "Runtime"}</dt><dd>{formatRuntime(usage?.runtime_ms)}</dd></div>
     <div><dt>{zh ? "子任务" : "Subtasks"}</dt><dd>{task.subtasks.length}</dd></div>
@@ -88,6 +89,12 @@ function ActivityTab({ events, connected, zh }: { events: RuntimeEvent[]; connec
 
 function Empty({ label }: { label: string }) {
   return <p className="inspector-empty">{label}</p>;
+}
+
+function formatContextPercent(value: number | null | undefined, _zh: boolean) {
+  if (value == null) return "Unavailable";
+  if (value > 0 && value < 0.01) return "<1%";
+  return `${Math.round(value * 100)}%`;
 }
 
 function formatTokens(value?: number | null) {

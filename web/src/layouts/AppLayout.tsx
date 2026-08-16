@@ -87,7 +87,7 @@ export function AppLayout() {
         </button>
 
         <nav className="left-nav">
-          <div className="left-nav-group">
+          <div className="left-nav-group project-nav-group">
             <span className="left-nav-label">{lang === "zh" ? "项目" : "Projects"}</span>
             {projects.length === 0 ? (
               <span className="left-nav-empty">{lang === "zh" ? "暂无项目" : "No projects yet"}</span>
@@ -101,7 +101,7 @@ export function AppLayout() {
             )}
           </div>
 
-          <div className="left-nav-group">
+          <div className="left-nav-group recent-nav-group">
             <span className="left-nav-label">{lang === "zh" ? "最近对话" : "Recent conversations"}</span>
             {recent.length === 0 ? (
               <span className="left-nav-empty">{lang === "zh" ? "暂无对话" : "No conversations yet"}</span>
@@ -152,15 +152,15 @@ export function AppLayout() {
       </aside>
 
       <main className="main main-center">
-        <div className="top-quick-status">
+        <div className="top-right-actions top-quick-status" aria-label={lang === "zh" ? "快捷操作" : "Quick actions"}>
           <Link className={`global-permission-badge ${permission.data?.mode ?? "standard"}`} to="/settings#security-permissions">{lang === "zh" ? `权限：${permission.data?.mode === "maximum" ? "最高" : permission.data?.mode === "safe" ? "安全" : "标准"}` : `Permissions: ${permission.data?.mode ?? "standard"}`}</Link>
           <Link className="quick-status-link" to="/computer" title={lang === "zh" ? "电脑控制" : "Computer control"}><MonitorCog size={14} />{lang === "zh" ? "电脑" : "Computer"}</Link>
           <Link className="quick-status-link" to="/voice" title="Voice"><Mic size={14} />{lang === "zh" ? "语音" : "Voice"}</Link>
           {activeContext.data?.active && activeContext.data.context?.percentage !== null && <Link className="active-context-badge" to={`/usage?run=${activeContext.data.run_id}`}><span>Context</span><strong>{Math.round((activeContext.data.context?.percentage ?? 0) * 100)}%</strong>{(activeContext.data.context?.percentage ?? 0) >= .8 && <em>· Compacting</em>}</Link>}
-        </div>
-        <div className="lang-switch" title={t("lang.label")}>
-          <button className={lang === "zh" ? "lang-btn on" : "lang-btn"} onClick={() => setLang("zh" as Lang)}>简体中文</button>
-          <button className={lang === "en" ? "lang-btn on" : "lang-btn"} onClick={() => setLang("en" as Lang)}>English</button>
+          <div className="lang-switch" title={t("lang.label")}>
+            <button className={lang === "zh" ? "lang-btn on" : "lang-btn"} onClick={() => setLang("zh" as Lang)}>简体中文</button>
+            <button className={lang === "en" ? "lang-btn on" : "lang-btn"} onClick={() => setLang("en" as Lang)}>English</button>
+          </div>
         </div>
         <Outlet />
       </main>

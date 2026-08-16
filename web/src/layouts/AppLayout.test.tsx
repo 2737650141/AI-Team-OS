@@ -6,11 +6,10 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../api/client";
-import type { DashboardData } from "../api/types";
+import type { DashboardData, RuntimeEvent, TaskDetail, UsageSummary } from "../api/types";
 import { I18nProvider } from "../i18n";
 import { AppLayout } from "./AppLayout";
 import { RightInspector } from "../components/RightInspector";
-import type { RuntimeEvent } from "../api/types";
 
 const qc = () => new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
@@ -113,6 +112,18 @@ describe("NAV · 三栏信息架构", () => {
     expect(await screen.findByText("电脑")).toBeInTheDocument();
   });
 
+  it("UI-POLISH01/02: TopRightActions owns permission, quick actions, and language switch", async () => {
+    const { container } = renderLayout();
+    const actions = await screen.findByLabelText("快捷操作");
+    expect(actions).toHaveClass("top-right-actions");
+    expect(actions).toContainElement(screen.getByText("权限：标准"));
+    expect(actions).toContainElement(screen.getByText("电脑"));
+    expect(actions).toContainElement(screen.getByText("语音"));
+    expect(actions).toContainElement(screen.getByRole("button", { name: "简体中文" }));
+    expect(actions).toContainElement(screen.getByRole("button", { name: "English" }));
+    expect(container.querySelectorAll(".lang-switch")).toHaveLength(1);
+  });
+
   it("NAV08: 既有页面路由未删除（/usage 可达）", async () => {
     renderLayout();
     await userEvent.click(await screen.findByRole("button", { name: "控制中心" }));
@@ -145,6 +156,41 @@ describe("NAV · RightInspector", () => {
     expect(screen.getByRole("tab", { name: /动态/ })).toBeInTheDocument();
     // 无任务时 Overview 显示空态
     expect(screen.getByText(/运行任务后这里会显示概览/)).toBeInTheDocument();
+  });
+
+  it("UI-POLISH03/04/06/07: context semantics and long Goal disclosure stay UI-only", async () => {
+    const goal = "详细审阅这个长期任务目标，保留所有现有约束、证据要求、权限边界和最终交付格式，并确保检查器默认只展示两到三行摘要，用户明确展开后才能查看全部内容。".repeat(2);
+    const task = {
+      task_id: "t1", run_id: "run-1", current_status: "completed", run_kind: "user_task", failure_code: null, model_mode: "real", goal,
+      plan: null, subtasks: [], token_budget: 20_000, cost_budget: 1, budget_usage: {}, rework_count: 0, final_result: null,
+    } as TaskDetail;
+    const usage = {
+      total_tokens: 5200,
+      cost_total: 0.0008,
+      runtime_ms: 1000,
+      by_agent: [],
+      context: { percentage: 0.005 },
+    } as unknown as UsageSummary;
+    render(
+      <QueryClientProvider client={qc()}>
+        <I18nProvider><RightInspector runId="run-1" task={task} usage={usage} events={[]} connected={false} /></I18nProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("<1%")).toBeInTheDocument();
+    expect(screen.getByText("5.2K / 20K")).toBeInTheDocument();
+    const goalBlock = screen.getByText(goal);
+    expect(goalBlock).toHaveClass("inspector-goal");
+    const toggle = screen.getByRole("button", { name: "查看完整目标" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(goalBlock).toHaveClass("expanded");
+    expect(screen.getByRole("button", { name: "收起目标" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("UI-POLISH04: unavailable Context remains explicit", () => {
+    const task = { task_id: "t1", run_id: "run-1", current_status: "completed", run_kind: "user_task", failure_code: null, model_mode: "real", goal: "goal", plan: null, subtasks: [], token_budget: 20_000, cost_budget: 1, budget_usage: {}, rework_count: 0, final_result: null } as TaskDetail;
+    render(<QueryClientProvider client={qc()}><I18nProvider><RightInspector runId="run-1" task={task} usage={undefined} events={[]} connected={false} /></I18nProvider></QueryClientProvider>);
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(1);
   });
 
   it("Activity tab 显示事件流", async () => {

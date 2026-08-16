@@ -184,6 +184,27 @@ it("shows security approval inline", async () => {
   expect(screen.getByText("拒绝")).toBeInTheDocument();
 });
 
+it("UI-POLISH03/04/05/08: compact header semantics, user identity dedup, and inspector close hold", async () => {
+  const session = { ...emptySession, messages: [{ role: "user" as const, content: "一句短消息" }, { role: "assistant" as const, content: "一段简短回复。", status: "completed", run_id: "run-polish", task_id: "task-polish" }] };
+  vi.spyOn(api, "jarvisSession").mockResolvedValue(session);
+  vi.spyOn(api, "dashboard").mockResolvedValue({ ...dashboard, recent_tasks: [{ task_id: "task-polish", run_id: "run-polish", status: "completed", run_kind: "user_task", goal: "视觉检查", project_id: "default", model_mode: "real", tokens: 5200, cost: 0.0008, tool_calls: 0, started_at: null, duration_s: 1 }] });
+  vi.spyOn(api, "task").mockResolvedValue({ task_id: "task-polish", run_id: "run-polish", current_status: "completed", run_kind: "user_task", failure_code: null, model_mode: "real", goal: "视觉检查", plan: null, subtasks: [], token_budget: 20_000, cost_budget: 1, budget_usage: {}, rework_count: 0, final_result: null, model_identity: { badge: "REAL", provider: "DeepSeek Official", default_model: "deepseek-v4-flash", role_models: {} } } as TaskDetail);
+  vi.spyOn(api, "taskUsage").mockResolvedValue({ total_tokens: 5200, cost_total: 0.0008, by_agent: [], context: { percentage: 0.005 } } as unknown as UsageSummary);
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream({ start() {} }), { status: 200 }));
+
+  const { container } = renderJarvis();
+  expect(await screen.findByText("一句短消息")).toBeInTheDocument();
+  const userMessage = container.querySelector(".jarvis-message.user");
+  expect(userMessage?.querySelector(".message-avatar")).toBeNull();
+  expect(userMessage).toHaveTextContent("You");
+  expect(screen.getByText("Context <1%", { exact: false })).toBeInTheDocument();
+  expect(screen.getByText("REAL")).toHaveClass("mode-badge");
+  const columns = container.querySelector(".jarvis-columns");
+  fireEvent.click(screen.getByLabelText("关闭检查器"));
+  expect(columns).toHaveClass("inspector-closed");
+  expect(screen.getByLabelText("打开检查器")).toBeInTheDocument();
+});
+
 it("turns a runtime failure into recovery choices with optional technical detail", async () => {
   vi.spyOn(api, "jarvisSession").mockResolvedValue({ ...emptySession, messages: [{ role: "user", content: "研究项目", run_id: "run-1" }] });
   vi.spyOn(api, "dashboard").mockResolvedValue({ ...dashboard, recent_tasks: [{ task_id: "task-1", run_id: "run-1", status: "failed", run_kind: "user_task", goal: "研究项目", project_id: "default", model_mode: "real", tokens: 10, cost: 0, tool_calls: 0, started_at: null, duration_s: null }] });
