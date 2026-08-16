@@ -51,8 +51,8 @@
 ## 当前分支 / HEAD
 
 - 分支：`phase-6p2/desktop-usage-observatory`
-- 024 实现 HEAD：`533a437`（fix: collapse control center navigation）
-- 024：VALIDATED
+- 024 实现 HEAD：`1eaa69c`（feat: add multi-provider cache intelligence）
+- 024-C MULTI-PROVIDER CACHE INTELLIGENCE：VALIDATED
 - 工作区：干净
 
 ## 关键真实门禁
