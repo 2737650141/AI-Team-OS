@@ -30,6 +30,7 @@ from app.gateway.multi_provider import (
     SupervisorArbitrator,
     TeamRoutingStore,
 )
+from app.usage.store import UsageStore
 
 
 def _store(tmp_path: Path) -> TeamRoutingStore:
@@ -383,6 +384,63 @@ def test_gt_mp12_performance_profile_is_observational_only(tmp_path: Path) -> No
     assert profile.latency_ms_avg == 11
     assert profile.cost == 0.001
     assert RoleModelRouter(store).resolve("reviewer").model == "review-model"
+
+
+def test_outer_gateway_attributes_explicit_fallback_to_effective_provider(
+    tmp_path: Path,
+) -> None:
+    class Secondary(_RawProvider):
+        provider_name = "secondary-adapter"
+
+        def cache_identity(self, _request: ModelRequest) -> dict[str, object]:
+            return {
+                "provider_name": self.provider_name,
+                "endpoint": "https://secondary.example/v1/chat/completions",
+                "api_mode": "openai_compatible",
+            }
+
+        def generate(self, request: ModelRequest) -> ModelResponse:
+            response = super().generate(request)
+            response.cached_input_tokens = 2
+            response.cache_miss_tokens = 1
+            response.usage_source = "REPORTED"
+            return response
+
+    store = _store(tmp_path)
+    store.set_route(
+        ModelRoute(
+            role="executor",
+            provider_id="primary",
+            model="primary-model",
+            fallback_provider_id="secondary",
+            fallback_model="secondary-model",
+        )
+    )
+    routed = MultiProviderRoutedProvider(
+        RoleModelRouter(store),
+        {"primary": _FailingProvider(), "secondary": Secondary()},
+        store,
+    )
+    usage = UsageStore(tmp_path)
+    gateway = ModelGateway(
+        routed,
+        BudgetController(10_000, 1.0, max_calls=4),
+        AuditLog(tmp_path / "fallback-audit.jsonl"),
+        "task-mp",
+        "run-mp",
+        usage_store=usage,
+    )
+    response = gateway.generate(_request(), max_retries=0)
+    assert response.provider_id == "secondary"
+    assert response.model == "secondary-model"
+    assert response.cache_diagnostics is not None
+    assert response.cache_diagnostics["provider_id"] == "secondary"
+    assert response.cache_diagnostics["model_id"] == "secondary-model"
+    with usage._connect() as conn:  # noqa: SLF001
+        row = conn.execute(
+            "SELECT provider_id, model_id FROM model_usage WHERE call_id='req-executor'"
+        ).fetchone()
+    assert tuple(row) == ("secondary", "secondary-model")
 
 
 def test_role_cost_budget_fails_before_provider_call(tmp_path: Path) -> None:

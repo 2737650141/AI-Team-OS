@@ -40,6 +40,7 @@ class ModelResponse(BaseModel):
     total_tokens: int | None = None
     cached_tokens: int | None = None
     cached_input_tokens: int | None = None
+    cache_miss_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
     other_tokens: int | None = None
@@ -49,7 +50,11 @@ class ModelResponse(BaseModel):
     latency_ms: int = 0
     finish_reason: str | None = None
     provider_request_id: str | None = None
+    provider_id: str | None = None
+    provider_identity: dict[str, Any] | None = Field(default=None, exclude=True)
     retry_count: int = 0
+    # Hashes, sizes, and classified cache evidence only; never prompt or credentials.
+    cache_diagnostics: dict[str, Any] | None = None
 
 
 class ProviderErrorCode(str, Enum):

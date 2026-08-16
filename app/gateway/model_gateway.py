@@ -104,6 +104,9 @@ class ModelGateway:
         self._run_id = run_id
         self._usage_store = usage_store
         self._workflow_governor = workflow_governor
+        from app.gateway.cache_intelligence import CacheIntelligence
+
+        self._cache_intelligence = CacheIntelligence()
 
     @property
     def budget(self) -> BudgetSnapshot:
@@ -303,6 +306,15 @@ class ModelGateway:
                     },
                 )
 
+        cache_preparation = None
+        try:
+            cache_preparation = self._cache_intelligence.prepare(self._provider, request)
+            request = cache_preparation.request
+        except Exception:  # noqa: BLE001
+            # Cache diagnostics are additive observability and must never alter the
+            # governed model path if a diagnostic-only adapter fact is malformed.
+            cache_preparation = None
+
         event_emit(
             task_id=self._task_id,
             run_id=request.run_id or self._run_id,
@@ -370,6 +382,18 @@ class ModelGateway:
                 cost = cost_input + cost_output
                 cost_source = "PRICE_TABLE"
         self._budget.record(resp.input_tokens or 0, resp.output_tokens or 0, cost or 0.0)
+        cache_observation = None
+        cache_telemetry = None
+        if cache_preparation is not None:
+            try:
+                cache_observation = self._cache_intelligence.complete(cache_preparation, resp)
+                from app.gateway.cache_intelligence import safe_cache_telemetry
+
+                cache_telemetry = safe_cache_telemetry(cache_observation.telemetry())
+                resp.cache_diagnostics = cache_telemetry
+            except Exception:  # noqa: BLE001
+                cache_observation = None
+                cache_telemetry = None
         prompt_hash = hashlib.sha256(
             json.dumps(request.messages, ensure_ascii=False, default=str).encode()
         ).hexdigest()[:16]
@@ -385,6 +409,7 @@ class ModelGateway:
             cost_available=cost is not None,
             total_tokens=resp.total_tokens,
             cached_tokens=resp.cached_tokens,
+            cache_diagnostics=cache_telemetry,
             usage_available=resp.usage_available,
             prompt_hash=prompt_hash,
             retry_count=resp.retry_count,
@@ -404,6 +429,7 @@ class ModelGateway:
                 "input_tokens": resp.input_tokens,
                 "output_tokens": resp.output_tokens,
                 "cached_tokens": resp.cached_tokens,
+                "cache_diagnostics": cache_telemetry,
                 "total_tokens": resp.total_tokens,
                 "latency_ms": resp.latency_ms,
                 "finish_reason": resp.finish_reason,
@@ -420,7 +446,8 @@ class ModelGateway:
             from app.usage.reconciler import UsageReconciler
 
             capability = self._usage_store.capability(
-                str(request.metadata.get("provider_id") or resp.provider), resp.model
+                str(resp.provider_id or request.metadata.get("provider_id") or resp.provider),
+                resp.model,
             )
             if capability is None:
                 from app.usage.models import verified_model_profile
@@ -440,6 +467,17 @@ class ModelGateway:
                 compression=compression,
             )
             self._usage_store.record(normalized)
+            if (
+                cache_observation is not None
+                and hasattr(self._usage_store, "record_cache_observation")
+            ):
+                self._usage_store.record_cache_observation(
+                    request.request_id,
+                    normalized.scope,
+                    normalized.task_id,
+                    normalized.run_id,
+                    cache_telemetry,
+                )
         return resp
 
     def _call_provider(self, request: ModelRequest, attempt: int) -> ModelResponse:

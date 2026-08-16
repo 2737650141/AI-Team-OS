@@ -31,7 +31,8 @@ class UsageStore:
                     call_id TEXT NOT NULL UNIQUE, role TEXT NOT NULL, agent_id TEXT NOT NULL,
                     provider_id TEXT NOT NULL, provider_name TEXT NOT NULL, model_id TEXT NOT NULL,
                     input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
-                    cached_input_tokens INTEGER, cache_write_tokens INTEGER, other_tokens INTEGER,
+                    cached_input_tokens INTEGER, cache_miss_tokens INTEGER,
+                    cache_write_tokens INTEGER, other_tokens INTEGER,
                     total_tokens INTEGER, usage_source TEXT NOT NULL,
                     estimated_input_tokens INTEGER, estimated_output_tokens INTEGER,
                     context_tokens_before INTEGER, context_tokens_after INTEGER,
@@ -61,6 +62,13 @@ class UsageStore:
                     freed_tokens INTEGER NOT NULL, duration_ms INTEGER NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS cache_observations (
+                    call_id TEXT PRIMARY KEY, scope TEXT NOT NULL DEFAULT 'user_task',
+                    task_id TEXT NOT NULL, run_id TEXT, observation_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_cache_observation_task
+                    ON cache_observations(task_id, created_at);
                 INSERT OR IGNORE INTO usage_settings(key, value, updated_at)
                     VALUES ('retention_days', '30', CURRENT_TIMESTAMP);
                 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
@@ -72,6 +80,11 @@ class UsageStore:
                 conn.execute(
                     "ALTER TABLE model_usage ADD COLUMN scope TEXT NOT NULL DEFAULT 'user_task'"
                 )
+            if "cache_miss_tokens" not in columns:
+                conn.execute(
+                    "ALTER TABLE model_usage ADD COLUMN cache_miss_tokens INTEGER"
+                )
+            conn.commit()
 
     def record_checkpoint(
         self, checkpoint, metrics: dict[str, Any], *, role: str, model: str
@@ -114,12 +127,42 @@ class UsageStore:
                 values,
             )
 
+    def record_cache_observation(
+        self,
+        call_id: str,
+        scope: str,
+        task_id: str,
+        run_id: str | None,
+        observation: dict[str, Any],
+    ) -> None:
+        """Persist only CacheDoctor hashes, sizes, and classified numeric evidence."""
+        if scope not in {"user_task", "conversation", "diagnostic", "system"}:
+            raise ValueError("invalid usage scope")
+        safe = _safe_cache_observation(observation)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO cache_observations
+                (call_id, scope, task_id, run_id, observation_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    call_id,
+                    scope,
+                    task_id,
+                    run_id,
+                    json.dumps(safe, ensure_ascii=False, sort_keys=True),
+                    utc_now(),
+                ),
+            )
+
     def set_scope(self, task_id: str, scope: str) -> int:
         if scope not in {"user_task", "conversation", "diagnostic", "system"}:
             raise ValueError("invalid usage scope")
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE model_usage SET scope=? WHERE task_id=?", (scope, task_id)
+            )
+            conn.execute(
+                "UPDATE cache_observations SET scope=? WHERE task_id=?", (scope, task_id)
             )
             return max(0, cursor.rowcount)
 
@@ -179,6 +222,9 @@ class UsageStore:
             cursor = conn.execute(
                 "DELETE FROM model_usage WHERE timestamp < ?", (cutoff.isoformat(),)
             )
+            conn.execute(
+                "DELETE FROM cache_observations WHERE created_at < ?", (cutoff.isoformat(),)
+            )
             return max(0, cursor.rowcount)
 
     def summary(
@@ -211,10 +257,129 @@ class UsageStore:
                     f"SELECT * FROM model_usage {where} ORDER BY timestamp", params
                 ).fetchall()
             ]
-        return _summarize(rows)
+            observation_rows = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT call_id, scope, task_id, run_id, observation_json "
+                    "FROM cache_observations"
+                ).fetchall()
+            ]
+        selected_usage = {
+            row.get("call_id"): (
+                row.get("scope"),
+                row.get("task_id"),
+                row.get("run_id"),
+            )
+            for row in rows
+        }
+        selected_observations: list[dict[str, Any]] = []
+        for observation_row in observation_rows:
+            identity = selected_usage.get(observation_row["call_id"])
+            if identity != (
+                observation_row["scope"],
+                observation_row["task_id"],
+                observation_row["run_id"],
+            ):
+                continue
+            try:
+                observation = json.loads(observation_row["observation_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            selected_observations.append(observation)
+            for row in rows:
+                if row.get("call_id") == observation_row["call_id"]:
+                    row["cache_diagnostics"] = observation
+                    break
+        return _summarize(rows, selected_observations)
 
 
-def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _safe_cache_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    from app.gateway.cache_intelligence import safe_cache_telemetry
+
+    return safe_cache_telemetry(observation)
+
+
+def _empty_cache_doctor() -> dict[str, Any]:
+    return {
+        "application_prefix": {
+            "stability": None,
+            "reusable_prefix_tokens": None,
+            "status": "Unavailable",
+        },
+        "provider_cache": {
+            "status": "Unavailable",
+            "hit_tokens": None,
+            "miss_tokens": None,
+            "write_tokens": None,
+            "hit_ratio": None,
+        },
+        "capability": {"source": "UNKNOWN", "confidence": "UNKNOWN", "strategy": "passive"},
+        "bust_reason": None,
+        "privacy": "HASHES_AND_SIZES_ONLY",
+    }
+
+
+def _cache_doctor_summary(
+    rows: list[dict[str, Any]], persisted: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Aggregate persisted hash-only observations without treating missing data as zero."""
+    observations: list[dict[str, Any]] = list(persisted or [])
+    if not observations:
+        for row in rows:
+            raw = row.get("cache_diagnostics")
+            if isinstance(raw, dict):
+                observations.append(raw)
+    if not observations:
+        return _empty_cache_doctor()
+    stable = [item for item in observations[1:] if item.get("status") == "STABLE"]
+    drifted = [item for item in observations[1:] if item.get("status") == "DRIFT"]
+    comparable_count = max(0, len(observations) - 1)
+    reusable = [item.get("estimated_prefix_tokens") for item in observations]
+    reusable_values = [int(value) for value in reusable if isinstance(value, (int, float))]
+    provider_reported = [
+        item for item in observations if item.get("provider_cache_availability") == "REPORTED"
+    ]
+    hit_values = [item.get("provider_cache_hit_tokens") for item in provider_reported]
+    miss_values = [item.get("provider_cache_miss_tokens") for item in provider_reported]
+    write_values = [item.get("provider_cache_write_tokens") for item in provider_reported]
+    hits = sum(int(value) for value in hit_values if isinstance(value, (int, float)))
+    misses = sum(int(value) for value in miss_values if isinstance(value, (int, float)))
+    hit_known = any(isinstance(value, (int, float)) for value in hit_values)
+    miss_known = any(isinstance(value, (int, float)) for value in miss_values)
+    ratio = hits / (hits + misses) if hit_known and miss_known and hits + misses else None
+    latest = observations[-1]
+    reasons = [reason for item in drifted for reason in item.get("reasons", [])]
+    return {
+        "application_prefix": {
+            "stability": len(stable) / comparable_count if comparable_count else None,
+            "reusable_prefix_tokens": max(reusable_values) if reusable_values else None,
+            "status": "AVAILABLE" if comparable_count else "Unavailable",
+        },
+        "provider_cache": {
+            "status": "REPORTED" if provider_reported else "Unavailable",
+            "hit_tokens": hits if hit_known else None,
+            "miss_tokens": misses if miss_known else None,
+            "write_tokens": sum(
+                int(value) for value in write_values if isinstance(value, (int, float))
+            )
+            if any(isinstance(value, (int, float)) for value in write_values)
+            else None,
+            "hit_ratio": ratio,
+        },
+        "capability": {
+            "source": latest.get("source", "UNKNOWN"),
+            "confidence": latest.get("confidence", "UNKNOWN"),
+            "strategy": latest.get("strategy", "passive"),
+        },
+        "bust_reason": reasons[-1] if reasons else None,
+        "privacy": "HASHES_AND_SIZES_ONLY",
+    }
+
+
+def _summarize(
+    rows: list[dict[str, Any]],
+    cache_observations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if not rows:
         return {
             "has_data": False,
@@ -229,6 +394,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "cache_hit_tokens": None,
             "cache_miss_tokens": None,
             "token_cache_hit_ratio": None,
+            "cache_doctor": _empty_cache_doctor(),
             "cost_total": None,
             "currency": None,
             "cache_hit_rate": None,
@@ -245,7 +411,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     def summed(key: str) -> int | None:
-        vals = [row[key] for row in rows if row[key] is not None]
+        vals = [row.get(key) for row in rows if row.get(key) is not None]
         return sum(vals) if vals else None
 
     costs = [row["cost_total"] for row in rows if row["cost_total"] is not None]
@@ -253,18 +419,47 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     # 024-D Token cache 指标：cache_hit = 缓存命中 token 总和；cache_miss =
     # 未命中 token 总和（input - cached，仅对两者都有报告的行计）；
     # token_cache_hit_ratio = hit / (hit + miss)，不使用含义模糊的平均命中。
-    cached_rows = [
+    reported_pairs = [
         row
         for row in rows
-        if row["cached_input_tokens"] is not None and row["input_tokens"] is not None
+        if row.get("cached_input_tokens") is not None
+        and row.get("cache_miss_tokens") is not None
     ]
-    cache_hit_tokens = sum(row["cached_input_tokens"] for row in cached_rows)
-    cache_miss_tokens = sum(
-        max(0, row["input_tokens"] - row["cached_input_tokens"]) for row in cached_rows
+    derived_pairs = [
+        row
+        for row in rows
+        if row.get("cached_input_tokens") is not None
+        and row.get("cache_miss_tokens") is None
+        and row.get("input_tokens") is not None
+    ]
+    cache_rows = [*reported_pairs, *derived_pairs]
+    cache_hit_tokens = (
+        sum(row.get("cached_input_tokens") or 0 for row in cache_rows)
+        if cache_rows
+        else None
     )
-    cache_eligible = cache_hit_tokens + cache_miss_tokens
+    cache_miss_tokens = (
+        sum(
+            row.get("cache_miss_tokens")
+            if row.get("cache_miss_tokens") is not None
+            else max(
+                0,
+                (row.get("input_tokens") or 0) - (row.get("cached_input_tokens") or 0),
+            )
+            for row in cache_rows
+        )
+        if cache_rows
+        else None
+    )
+    cache_eligible = (
+        cache_hit_tokens + cache_miss_tokens
+        if cache_hit_tokens is not None and cache_miss_tokens is not None
+        else None
+    )
     token_cache_hit_ratio = (
-        (cache_hit_tokens / cache_eligible) if cache_eligible else (0.0 if cached_rows else None)
+        cache_hit_tokens / cache_eligible
+        if cache_eligible
+        else (0.0 if cache_eligible == 0 else None)
     )
     parsed = [datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")) for row in rows]
     runtime_ms = (
@@ -298,7 +493,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         return sorted(grouped.values(), key=lambda item: item["tokens"], reverse=True)
 
     latest_context = next(
-        (row for row in reversed(rows) if row["context_tokens_after"] is not None), None
+        (row for row in reversed(rows) if row.get("context_tokens_after") is not None), None
     )
     sources = {row["usage_source"] for row in rows}
     aggregate_source = (
@@ -308,7 +503,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if "ESTIMATED" in sources or "UNAVAILABLE" in sources
         else "REPORTED"
     )
-    compressed = next((row for row in reversed(rows) if row["compression_triggered"]), None)
+    compressed = next((row for row in reversed(rows) if row.get("compression_triggered")), None)
     return {
         "has_data": True,
         "requests": len(rows),
@@ -317,6 +512,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "output_tokens": summed("output_tokens"),
         "reasoning_tokens": summed("reasoning_tokens"),
         "cached_input_tokens": summed("cached_input_tokens"),
+        "cache_miss_tokens_reported": summed("cache_miss_tokens"),
         "cache_write_tokens": summed("cache_write_tokens"),
         "other_tokens": summed("other_tokens"),
         "cache_hit_tokens": cache_hit_tokens,
@@ -345,6 +541,7 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if compressed
             else None
         ),
+        "cache_doctor": _cache_doctor_summary(rows, cache_observations),
         "by_agent": group("agent_id"),
         "by_model": group("model_id"),
         "by_provider": group("provider_name"),

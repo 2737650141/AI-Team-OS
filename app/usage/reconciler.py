@@ -105,13 +105,18 @@ class UsageReconciler:
             call_id=request.request_id,
             role=request.role_type,
             agent_id=request.agent_id,
-            provider_id=str(request.metadata.get("provider_id") or response.provider),
+            provider_id=str(
+                response.provider_id
+                or request.metadata.get("provider_id")
+                or response.provider
+            ),
             provider_name=response.provider,
             model_id=response.model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             reasoning_tokens=response.reasoning_tokens,
             cached_input_tokens=response.cached_input_tokens,
+            cache_miss_tokens=response.cache_miss_tokens,
             cache_write_tokens=response.cache_write_tokens,
             other_tokens=response.other_tokens,
             total_tokens=total,

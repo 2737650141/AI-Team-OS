@@ -96,6 +96,35 @@ def test_deepseek_structured_request_disables_default_thinking() -> None:
     assert captured["thinking"] == {"type": "disabled"}
 
 
+def test_unknown_compatible_model_names_do_not_receive_cache_controls() -> None:
+    captured: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(req.content))
+        return httpx.Response(200, json=_ok_body())
+
+    provider = _provider(handler, provider_name="Third-party gateway")
+    for model in ("gpt-5.6-sol", "claude-sonnet"):
+        provider.generate(_request(model))
+    assert len(captured) == 2
+    assert all("prompt_cache_key" not in body for body in captured)
+    assert all("cache_control" not in body for body in captured)
+
+
+def test_reported_cache_hit_and_miss_are_preserved() -> None:
+    body = _ok_body()
+    body["usage"].update(
+        {
+            "prompt_tokens": 100,
+            "prompt_cache_hit_tokens": 60,
+            "prompt_cache_miss_tokens": 25,
+        }
+    )
+    response = _provider(lambda req: httpx.Response(200, json=body)).generate(_request())
+    assert response.cached_input_tokens == 60
+    assert response.cache_miss_tokens == 25
+
+
 def test_real_stream_is_consumed_once_and_records_latency() -> None:
     class OneShotStream(httpx.SyncByteStream):
         def __iter__(self):

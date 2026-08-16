@@ -27,6 +27,13 @@ it("renders task totals and every breakdown from one usage response", async () =
     cache_hit_tokens: 400,
     cache_miss_tokens: 850,
     token_cache_hit_ratio: 0.32,
+    cache_doctor: {
+      application_prefix: { stability: 1, reusable_prefix_tokens: 100, status: "AVAILABLE" },
+      provider_cache: { status: "REPORTED", hit_tokens: 400, miss_tokens: 850, write_tokens: null, hit_ratio: 0.32 },
+      capability: { source: "OFFICIAL_PROFILE", confidence: "VERIFIED", strategy: "deepseek" },
+      bust_reason: null,
+      privacy: "HASHES_AND_SIZES_ONLY",
+    },
     runtime_ms: 5000,
     average_latency_ms: 1000,
     usage_source: "REPORTED",
@@ -52,4 +59,47 @@ it("renders task totals and every breakdown from one usage response", async () =
   expect(screen.getAllByText("deepseek-v4-flash").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText("DeepSeek Official")).toBeInTheDocument();
   expect(screen.getAllByText("1500").length).toBeGreaterThanOrEqual(3);
+  expect(screen.getByText("缓存诊断")).toBeInTheDocument();
+  expect(screen.getByText("100.0%")).toBeInTheDocument();
+  expect(screen.getByText("32.0% REPORTED")).toBeInTheDocument();
+  expect(screen.getByText("HASHES_AND_SIZES_ONLY")).toBeInTheDocument();
+});
+
+it("shows unavailable provider cache without presenting a zero ratio", async () => {
+  const summary = {
+    has_data: true,
+    requests: 1,
+    total_tokens: 10,
+    input_tokens: 8,
+    output_tokens: 2,
+    reasoning_tokens: null,
+    cached_input_tokens: null,
+    cache_write_tokens: null,
+    other_tokens: null,
+    cost_total: null,
+    currency: null,
+    cache_hit_rate: null,
+    cache_hit_tokens: null,
+    cache_miss_tokens: null,
+    token_cache_hit_ratio: null,
+    cache_doctor: {
+      application_prefix: { stability: 0.5, reusable_prefix_tokens: 20, status: "AVAILABLE" },
+      provider_cache: { status: "Unavailable", hit_tokens: null, miss_tokens: null, write_tokens: null, hit_ratio: null },
+      capability: { source: "UNKNOWN", confidence: "UNKNOWN", strategy: "passive" },
+      bust_reason: "TOOL_SCHEMA_CHANGED",
+      privacy: "HASHES_AND_SIZES_ONLY",
+    },
+    runtime_ms: 1,
+    average_latency_ms: 1,
+    usage_source: "REPORTED",
+    last_compression: null,
+    by_agent: [], by_model: [], by_provider: [], by_task: [], timeline: [],
+    context: { current_tokens: 8, limit: null, percentage: null, status: "UNKNOWN", compression_threshold: 0.8, compression_threshold_tokens: null, until_compression: null, source: "UNAVAILABLE", role: null, model: null },
+  } satisfies UsageSummary;
+  vi.spyOn(api, "usage").mockResolvedValue(summary);
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><I18nProvider><MemoryRouter><Usage /></MemoryRouter></I18nProvider></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByText("缓存诊断")).toBeInTheDocument());
+  expect(screen.getByText("不可用")).toBeInTheDocument();
+  expect(screen.getByText("TOOL_SCHEMA_CHANGED")).toBeInTheDocument();
+  expect(screen.queryByText("0.0% REPORTED")).not.toBeInTheDocument();
 });

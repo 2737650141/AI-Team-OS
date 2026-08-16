@@ -109,6 +109,7 @@ def _new_request(
     schema: dict[str, Any],
     settings: AppSettings,
     critical_context: dict[str, Any] | None = None,
+    cache_tools: list[dict[str, Any]] | None = None,
 ) -> ModelRequest:
     return ModelRequest(
         request_id=uuid.uuid4().hex[:16],
@@ -126,6 +127,7 @@ def _new_request(
             "prompt_id": "",
             "prompt_version": "",
             "critical_context": critical_context or {},
+            "cache_tools": cache_tools or [],
         },
     )
 
@@ -737,6 +739,7 @@ class LLMResearcher:
                 "current_task": "research tools",
                 "constraints": list(subtask.acceptance_criteria),
             },
+            cache_tools=self._tgw.cache_tool_manifest(),
         )
         data = generate_structured(self._gw, request, TOOL_PLAN_SCHEMA, self._settings)
         if not isinstance(data, dict):

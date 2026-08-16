@@ -435,6 +435,10 @@ class MultiProviderModelGateway:
             update={
                 "model": decision.model,
                 "max_output_tokens": min(request.max_output_tokens, decision.token_budget),
+                "metadata": {
+                    **request.metadata,
+                    "provider_id": decision.provider_id,
+                },
             }
         )
         return binding.gateway.generate(routed, max_retries=max_retries)
@@ -463,6 +467,30 @@ class MultiProviderRoutedProvider:
         self.project_id = project_id
         self.call_count = 0
 
+    def cache_identity(self, request: ModelRequest) -> dict[str, Any]:
+        """Resolve the selected adapter's non-secret identity before the outer gateway calls it."""
+        decision = self.router.resolve(request.role_type, project_id=self.project_id)
+        provider = self.providers.get(decision.provider_id)
+        if provider is None:
+            return {
+                "provider_id": decision.provider_id,
+                "provider_name": decision.provider_id,
+                "selected_model": decision.model,
+                "protocol_family": "unknown",
+            }
+        cache_identity = getattr(provider, "cache_identity", None)
+        raw = cache_identity(request) if callable(cache_identity) else {}
+        identity = dict(raw) if isinstance(raw, Mapping) else {}
+        identity.update(
+            {
+                "provider_id": decision.provider_id,
+                "provider_name": identity.get("provider_name")
+                or getattr(provider, "provider_name", decision.provider_id),
+                "selected_model": decision.model,
+            }
+        )
+        return identity
+
     def estimate_usage(self, request: ModelRequest):
         decision = self.router.resolve(request.role_type, project_id=self.project_id)
         provider = self.providers.get(decision.provider_id)
@@ -474,6 +502,10 @@ class MultiProviderRoutedProvider:
             update={
                 "model": decision.model,
                 "max_output_tokens": min(request.max_output_tokens, decision.token_budget),
+                "metadata": {
+                    **request.metadata,
+                    "provider_id": decision.provider_id,
+                },
             }
         )
         return provider.estimate_usage(routed)
@@ -482,6 +514,7 @@ class MultiProviderRoutedProvider:
         decision = self.router.resolve(request.role_type, project_id=self.project_id)
         try:
             response = self._call(decision, request)
+            response.provider_id = decision.provider_id
             self.store.record_call(
                 decision,
                 response,
@@ -502,6 +535,7 @@ class MultiProviderRoutedProvider:
                 }
             )
             response = self._call(fallback, request)
+            response.provider_id = fallback.provider_id
             self.store.record_call(
                 fallback,
                 response,
@@ -519,15 +553,40 @@ class MultiProviderRoutedProvider:
                 provider=decision.provider_id,
                 model=decision.model,
             )
+        routed_metadata = {
+            **request.metadata,
+            "provider_id": decision.provider_id,
+        }
+        prepared_provider = str(
+            (request.metadata.get("cache_intelligence") or {}).get("provider_id", "")
+        )
+        if prepared_provider and prepared_provider != decision.provider_id:
+            routed_metadata.pop("cache_provider_payload", None)
+            routed_metadata.pop("cache_intelligence", None)
         routed = request.model_copy(
             update={
                 "model": decision.model,
                 "max_output_tokens": min(request.max_output_tokens, decision.token_budget),
+                "metadata": routed_metadata,
             }
         )
         self._enforce_role_cost_budget(decision, provider, routed)
         self.call_count += 1
-        return provider.generate(routed)
+        response = provider.generate(routed)
+        response.provider_id = decision.provider_id
+        cache_identity = getattr(provider, "cache_identity", None)
+        raw_identity = cache_identity(routed) if callable(cache_identity) else {}
+        identity = dict(raw_identity) if isinstance(raw_identity, Mapping) else {}
+        identity.update(
+            {
+                "provider_id": decision.provider_id,
+                "provider_name": identity.get("provider_name")
+                or getattr(provider, "provider_name", decision.provider_id),
+                "selected_model": decision.model,
+            }
+        )
+        response.provider_identity = identity
+        return response
 
     def _enforce_role_cost_budget(
         self, decision: RouteDecision, provider: Any, request: ModelRequest

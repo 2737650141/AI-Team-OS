@@ -298,6 +298,28 @@ export interface UsageGroup {
   cost_available: boolean;
 }
 
+export interface CacheDoctorSummary {
+  application_prefix: {
+    stability: number | null;
+    reusable_prefix_tokens: number | null;
+    status: "AVAILABLE" | "Unavailable";
+  };
+  provider_cache: {
+    status: "REPORTED" | "Unavailable";
+    hit_tokens: number | null;
+    miss_tokens: number | null;
+    write_tokens: number | null;
+    hit_ratio: number | null;
+  };
+  capability: {
+    source: "OFFICIAL_PROFILE" | "OBSERVED" | "USER_CONFIGURED" | "UNKNOWN";
+    confidence: "VERIFIED" | "OBSERVED" | "ASSUMED" | "UNKNOWN";
+    strategy: string;
+  };
+  bust_reason: string | null;
+  privacy: "HASHES_AND_SIZES_ONLY";
+}
+
 export interface UsageSummary {
   task_id?: string;
   run_id?: string;
@@ -316,6 +338,7 @@ export interface UsageSummary {
   cache_hit_tokens: number | null;
   cache_miss_tokens: number | null;
   token_cache_hit_ratio: number | null;
+  cache_doctor: CacheDoctorSummary;
   runtime_ms: number | null;
     average_latency_ms: number | null;
     usage_source: "REPORTED" | "ESTIMATED" | "UNAVAILABLE";

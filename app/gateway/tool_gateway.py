@@ -149,6 +149,25 @@ class ToolGateway:
             )
         return "; ".join(lines)
 
+    def cache_tool_manifest(self) -> list[dict[str, Any]]:
+        """Return a deterministic, non-rendering tool schema manifest for diagnostics."""
+        manifest: list[dict[str, Any]] = []
+        for name in self.available_tools():
+            contract = self.tool_contract(name)
+            manifest.append(
+                {
+                    "name": name,
+                    "schema": {
+                        "description": contract["description"],
+                        "required": sorted(contract["required"]),
+                        "optional": sorted(contract["optional"]),
+                        "types": contract["types"],
+                        "allowed_values": contract["allowed_values"],
+                    },
+                }
+            )
+        return manifest
+
     def tool_contract(self, name: str) -> dict[str, Any]:
         """Complete, model-facing schema generated from ToolSpec and handler defaults."""
         spec = self._tools[name]

@@ -40,6 +40,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _reported_cache_miss(usage: dict) -> int | None:
+    value = usage.get("prompt_cache_miss_tokens")
+    if value is None:
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 class OpenAICompatibleProvider:
     """OpenAI Chat Completions 兼容 Provider（第一版协议，005 7.1）。"""
 
@@ -58,6 +68,7 @@ class OpenAICompatibleProvider:
         allow_local: bool = False,
         chat_endpoint: str = "/chat/completions",
         provider_name: str = "openai_compatible",
+        cache_capabilities: tuple[str, ...] = (),
     ) -> None:
         self.provider_name = provider_name
         self._base_url = base_url.rstrip("/")
@@ -69,6 +80,7 @@ class OpenAICompatibleProvider:
         self._temperature = temperature
         self._max_output_tokens = max_output_tokens
         self._allow_local = allow_local
+        self._cache_capabilities = tuple(cache_capabilities)
         self.call_count = 0
         # 显式超时 + 连接复用 + 不自动重定向（重定向后手动校验，7.2/7.3）
         self._client = httpx.Client(
@@ -77,6 +89,16 @@ class OpenAICompatibleProvider:
             headers={"User-Agent": USER_AGENT},
             transport=transport,  # 测试注入 mock transport；生产为 None
         )
+
+    def cache_identity(self, _request: ModelRequest | None = None) -> dict[str, object]:
+        """Expose non-secret adapter facts for cache capability resolution."""
+        configured = getattr(self, "_cache_capabilities", ())
+        return {
+            "provider_name": self.provider_name,
+            "endpoint": self._chat_url(),
+            "api_mode": "openai_compatible",
+            "adapter_capabilities": configured,
+        }
 
     # ---- 契约（005 6） ----
     def generate(self, request: ModelRequest) -> ModelResponse:
@@ -98,6 +120,14 @@ class OpenAICompatibleProvider:
             # together with an explicit JSON instruction, prevents free-form
             # output from reaching the deterministic parser.
             body["response_format"] = {"type": "json_object"}
+        cache_payload = request.metadata.get("cache_provider_payload")
+        if isinstance(cache_payload, dict):
+            # Strategies can only place values here after the adapter explicitly
+            # advertises support. This adapter currently advertises none, so
+            # unknown compatible endpoints remain byte-for-byte passive.
+            for key, value in cache_payload.items():
+                if key in {"prompt_cache_key"}:
+                    body[key] = value
         if (urlparse(self._base_url).hostname or "").lower().endswith("deepseek.com"):
             # DeepSeek V4 defaults to thinking mode. For bounded schema calls,
             # disable hidden reasoning so max_tokens remains available for the
@@ -358,6 +388,8 @@ class OpenAICompatibleProvider:
                 output_tokens = normalized["output_tokens"]
                 total_tokens = normalized["total_tokens"]
                 cached_tokens = normalized["cached_input_tokens"]
+                cache_write_tokens = normalized["cache_write_tokens"]
+                cache_miss_tokens = _reported_cache_miss(usage)
                 reasoning_tokens = normalized["reasoning_tokens"]
                 usage_available = True
                 usage_source = "REPORTED"
@@ -367,6 +399,8 @@ class OpenAICompatibleProvider:
                 output_tokens = request.max_output_tokens or 0
                 total_tokens = input_tokens + output_tokens
                 cached_tokens = None
+                cache_write_tokens = None
+                cache_miss_tokens = None
                 reasoning_tokens = None
                 usage_available = False
                 usage_source = "ESTIMATED"
@@ -387,6 +421,8 @@ class OpenAICompatibleProvider:
             total_tokens=total_tokens,
             cached_tokens=cached_tokens,
             cached_input_tokens=cached_tokens,
+            cache_miss_tokens=cache_miss_tokens,
+            cache_write_tokens=cache_write_tokens,
             reasoning_tokens=reasoning_tokens,
             usage_source=usage_source,
             usage_available=usage_available,

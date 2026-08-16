@@ -33,6 +33,7 @@ export function Usage() {
   return <div className="page usage-page">
     <UsageHeader zh={zh} days={days} setDays={(value) => setParams({ days: String(value) })} />
     <div className="usage-top-grid"><ContextCard data={data} zh={zh} /><section className="card usage-metrics"><span className="eyebrow">Session Metrics · {data.usage_source}</span><h2>{zh ? "会话指标" : "Session metrics"}</h2><div className="metric-grid"><Metric label={zh ? "累计 Tokens" : "Total tokens"} value={number(data.total_tokens, data.usage_source)} /><Metric label={zh ? "模型请求" : "Model requests"} value={String(data.requests)} /><Metric label={zh ? "运行时间" : "Runtime"} value={duration(data.runtime_ms)} /><Metric label={zh ? "平均模型延迟" : "Average latency"} value={duration(data.average_latency_ms)} /><Metric label={zh ? "缓存命中 Tokens" : "Cache hit tokens"} value={number(data.cache_hit_tokens)} /><Metric label={zh ? "缓存未命中 Tokens" : "Cache miss tokens"} value={number(data.cache_miss_tokens)} /><Metric label={zh ? "Token 缓存命中率" : "Token cache hit ratio"} value={data.token_cache_hit_ratio === null ? "–" : `${(data.token_cache_hit_ratio * 100).toFixed(1)}%`} /><Metric label={zh ? "会话费用" : "Session cost"} value={data.cost_total === null ? (zh ? "不可用" : "Unavailable") : `${data.currency === "USD" ? "$" : ""}${data.cost_total.toFixed(4)}`} /></div>{data.last_compression && <p className="muted">{zh ? "最近压缩" : "Last compaction"}: {number(data.last_compression.before_tokens)} → {number(data.last_compression.after_tokens)} · {number(data.last_compression.freed_tokens)} {zh ? "已释放" : "freed"}</p>}<p className="muted">{zh ? "缓存命中率定义：hit / (hit + miss)" : "Cache hit ratio definition: hit / (hit + miss)"}</p></section></div>
+    <CacheDoctorCard data={data} zh={zh} />
     <Composition data={data} zh={zh} />
     <div className="usage-breakdowns"><Breakdown title={zh ? "按 Agent" : "By agent"} items={data.by_agent} /><Breakdown title={zh ? "按模型" : "By model"} items={data.by_model} /><Breakdown title={zh ? "按 Provider" : "By provider"} items={data.by_provider} /></div>
     <section className="card"><span className="eyebrow">Usage Timeline</span><h2>{zh ? "调用时间线" : "Usage timeline"}</h2><div className="usage-timeline">{data.timeline.map((item, index) => <div key={`${item.timestamp}-${index}`}><time>{new Date(item.timestamp).toLocaleTimeString()}</time><strong>{item.scope === "diagnostic" ? (zh ? "诊断" : "Diagnostic") : item.agent}</strong><span>{item.model}</span><b>{number(item.tokens, item.source)}</b><small>{item.source}</small></div>)}</div></section>
@@ -46,6 +47,22 @@ function UsageHeader({ zh, days, setDays }: { zh: boolean; days: number; setDays
 function ContextCard({ data, zh }: { data: UsageSummary; zh: boolean }) {
   const c = data.context; const pct = c.percentage === null ? null : Math.min(100, c.percentage * 100);
   return <section className={`card context-card context-${c.status.toLowerCase()}`}><div className="context-title"><div><span className="eyebrow">Context Window</span><h2>{zh ? "上下文窗口" : "Context window"}</h2></div><strong>{number(c.current_tokens, c.source)} / {number(c.limit)}</strong></div><div className="context-status"><span>{c.status.replaceAll("_", " ")}</span><b>{pct === null ? "–" : `${pct.toFixed(1)}%`}</b></div><div className="context-track"><i style={{ width: `${pct ?? 0}%` }} /><em style={{ left: `${c.compression_threshold * 100}%` }} /></div><div className="context-foot"><span>{zh ? "压缩阈值" : "Compression"} <b>{Math.round(c.compression_threshold * 100)}%</b></span><span>{zh ? "距压缩" : "Until compaction"} <b>{number(c.until_compression)}</b></span></div><small>{c.source}{c.model ? ` · ${c.model}` : ""}</small></section>;
+}
+
+function CacheDoctorCard({ data, zh }: { data: UsageSummary; zh: boolean }) {
+  const doctor = data.cache_doctor;
+  const appRatio = doctor.application_prefix.stability;
+  const providerRatio = doctor.provider_cache.hit_ratio;
+  const unavailable = zh ? "不可用" : "Unavailable";
+  return <section className="card cache-doctor-card">
+    <div className="cache-doctor-head"><div><span className="eyebrow">Cache Doctor</span><h2>{zh ? "缓存诊断" : "Cache diagnostics"}</h2></div><small>{doctor.privacy}</small></div>
+    <div className="cache-doctor-grid">
+      <div><span>{zh ? "应用前缀稳定性" : "Application prefix stability"}</span><strong>{appRatio === null ? unavailable : `${(appRatio * 100).toFixed(1)}%`}</strong><small>{zh ? "可复用前缀" : "Reusable prefix"}: {number(doctor.application_prefix.reusable_prefix_tokens)} tokens</small></div>
+      <div><span>{zh ? "Provider 缓存" : "Provider cache"}</span><strong>{providerRatio === null ? doctor.provider_cache.status : `${(providerRatio * 100).toFixed(1)}% REPORTED`}</strong><small>{zh ? "命中 / 未命中" : "Hit / miss"}: {number(doctor.provider_cache.hit_tokens)} / {number(doctor.provider_cache.miss_tokens)}</small></div>
+      <div><span>{zh ? "能力来源" : "Capability source"}</span><strong>{doctor.capability.source}</strong><small>{doctor.capability.confidence} · {doctor.capability.strategy}</small></div>
+      <div><span>{zh ? "缓存失效原因" : "Cache bust reason"}</span><strong>{doctor.bust_reason || (zh ? "稳定或尚无对比" : "Stable or no comparison")}</strong><small>{zh ? "Provider 未报告不会显示为 0%" : "Unreported provider cache is never shown as 0%"}</small></div>
+    </div>
+  </section>;
 }
 
 function Composition({ data, zh }: { data: UsageSummary; zh: boolean }) {

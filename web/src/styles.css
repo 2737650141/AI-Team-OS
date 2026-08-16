@@ -590,6 +590,15 @@ code { background: var(--bg2); padding: 1px 6px; border-radius: 5px; font-size: 
 
 /* M6-P2 Token & Context Observatory */
 .usage-page { max-width: 1240px; }
+.cache-doctor-card { margin: 14px 0; }
+.cache-doctor-head { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.cache-doctor-head small { color: var(--muted); letter-spacing: .04em; }
+.cache-doctor-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.cache-doctor-grid > div { display: grid; gap: 5px; min-width: 0; }
+.cache-doctor-grid span, .cache-doctor-grid small { color: var(--muted); font-size: 12px; }
+.cache-doctor-grid strong { overflow-wrap: anywhere; }
+@media (max-width: 900px) { .cache-doctor-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .cache-doctor-grid { grid-template-columns: 1fr; } }
 .usage-header { display: flex; justify-content: space-between; gap: 24px; align-items: end; padding: 8px 2px; }
 .usage-header h1 { font-size: 28px; letter-spacing: -.03em; }
 .usage-header p { color: var(--muted); margin: 5px 0 0; }
