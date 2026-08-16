@@ -53,6 +53,7 @@
 - 分支：`phase-6p2/desktop-usage-observatory`
 - 024 实现 HEAD：`1eaa69c`（feat: add multi-provider cache intelligence）
 - 024-C MULTI-PROVIDER CACHE INTELLIGENCE：VALIDATED
+- UX-03.2 VISUAL POLISH：VALIDATED（`da496af`）
 - 工作区：干净
 
 ## 关键真实门禁
@@ -135,4 +136,4 @@
 
 ## 下一阶段
 
-- **M7-A Agent + Skill Library**（024 已完成并 VALIDATED 后的下一阶段方向；未开始实现）。
+- **M7-A1 Agent & Skill Foundation**（UX-03.2 已完成并 VALIDATED 后的下一阶段方向；未开始实现）。
