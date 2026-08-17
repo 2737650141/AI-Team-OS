@@ -42,20 +42,17 @@
 
 ## 5. 修复方式
 
-1. 物理隔离：工作树 `reasonix.toml` 移至 `D:\Reasonix\tmp\sec01-20260805\quarantine\`。
+1. 物理隔离：工作树 `reasonix.toml` 移至本机隔离目录（`<quarantine-dir>`，仓库外）。
 2. 安全备份：`git bundle create pre-rewrite-all.bundle --all`（完整对象+refs）。
 3. 历史重写：`git filter-branch --index-filter 'git rm --cached --ignore-unmatch reasonix.toml' --prune-empty -- --all`（仅重写含泄漏的提交链；main / 2 / 3a / 3b / delivery 分支 unchanged，已核实）。
 4. Reflog 清理：`git reflog expire --expire=now --all`；删除 `refs/original`。
 5. 垃圾回收：`git gc --prune=now --aggressive`（泄漏 Blob 从对象库移除）。
 6. 验证：`git log --all -- reasonix.toml` 空、reflog 无泄漏引用、`fsck --full --no-reflogs` clean、全量测试 301 passed。
 
-> **已知残留（sa_20260808_101318/102018/102311 记录）**：`.create_token`（blob `f2a6b6b2`，
-> 32 位 hex 凭据 `0c2527a6...`，由提交 1580c9c 引入、f67843d 从树中移除）存在于
-> **phase-3c/sandbox-execution 与宿主 delivery 分支**的历史。该文件不在本事件
-> （reasonix.toml）范围内，且为裸 hex（无 key=/token= 形式），**不在
-> `SECRET_PATTERNS` 覆盖内**（扫描边界：模式启发式，未覆盖的新形态不会拦截）。
-> 仓库无 remote、从未 push，本地暴露风险低；清理历史由总管决定
-> （涉及宿主分支时不得擅自重写）。
+> **历史残留已清除（2026-08-17）**：`.create_token`（32 位 hex 凭据）曾随 `.reasonix/`
+> 宿主状态目录残留在部分分支历史中。开源发布前已用 `git filter-repo` 将
+> `.reasonix/**` 从**全部 refs 的可达历史**中移除，并复核 `git rev-list --all --objects`
+> 无残留、全量 Blob 敏感模式扫描 CLEAN。公开仓库历史不再包含该文件。
 
 ## 6. 防复发措施（008 2.7）
 
@@ -99,6 +96,6 @@
 
 ## 10. 备份位置
 
-- `D:\Reasonix\tmp\sec01-20260805\pre-rewrite-all.bundle`（重写前完整对象库）
-- `D:\Reasonix\tmp\sec01-20260805\quarantine\reasonix.toml`（隔离的泄漏文件）
+- `<quarantine-dir>/pre-rewrite-all.bundle`（重写前完整对象库）
+- `<quarantine-dir>/reasonix.toml`（隔离的泄漏文件）
 - 凭据轮换确认后，按 008 2.4-8 彻底删除旧仓库备份。
