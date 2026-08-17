@@ -410,8 +410,12 @@ def _summarize(
             "timeline": [],
         }
 
-    def summed(key: str) -> int | None:
-        vals = [row.get(key) for row in rows if row.get(key) is not None]
+    def summed(key: str) -> int | float | None:
+        vals: list[int | float] = []
+        for row in rows:
+            value = row.get(key)
+            if isinstance(value, (int, float)):
+                vals.append(value)
         return sum(vals) if vals else None
 
     costs = [row["cost_total"] for row in rows if row["cost_total"] is not None]
@@ -440,11 +444,11 @@ def _summarize(
     )
     cache_miss_tokens = (
         sum(
-            row.get("cache_miss_tokens")
-            if row.get("cache_miss_tokens") is not None
+            int(row["cache_miss_tokens"])
+            if isinstance(row.get("cache_miss_tokens"), (int, float))
             else max(
                 0,
-                (row.get("input_tokens") or 0) - (row.get("cached_input_tokens") or 0),
+                int(row.get("input_tokens") or 0) - int(row.get("cached_input_tokens") or 0),
             )
             for row in cache_rows
         )
@@ -458,7 +462,7 @@ def _summarize(
     )
     token_cache_hit_ratio = (
         cache_hit_tokens / cache_eligible
-        if cache_eligible
+        if cache_hit_tokens is not None and cache_eligible
         else (0.0 if cache_eligible == 0 else None)
     )
     parsed = [datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")) for row in rows]

@@ -23,7 +23,9 @@ def _gateway() -> ToolGateway:
     from app.gateway.audit import AuditLog
     from app.tools.spec import RiskLevel
 
-    gateway = ToolGateway(audit=AuditLog(Path("data") / "audit-cache-test.jsonl"), task_id="cache-t1")
+    gateway = ToolGateway(
+        audit=AuditLog(Path("data") / "audit-cache-test.jsonl"), task_id="cache-t1"
+    )
     from app.tools.spec import ToolSpec
 
     def handler_a(path: str) -> dict:
@@ -33,10 +35,24 @@ def _gateway() -> ToolGateway:
         return {"ok": True, "query": query, "limit": limit}
 
     gateway.register(
-        ToolSpec(name="zeta_read", description="read zeta file", input_schema={"path": "str"}, risk_level=RiskLevel.SAFE, read_only=True, handler=handler_a)
+        ToolSpec(
+            name="zeta_read",
+            description="read zeta file",
+            input_schema={"path": "str"},
+            risk_level=RiskLevel.SAFE,
+            read_only=True,
+            handler=handler_a,
+        )
     )
     gateway.register(
-        ToolSpec(name="alpha_search", description="search alpha", input_schema={"query": "str", "limit": {"type": "int", "required": False}}, risk_level=RiskLevel.SAFE, read_only=True, handler=handler_b)
+        ToolSpec(
+            name="alpha_search",
+            description="search alpha",
+            input_schema={"query": "str", "limit": {"type": "int", "required": False}},
+            risk_level=RiskLevel.SAFE,
+            read_only=True,
+            handler=handler_b,
+        )
     )
     return gateway
 
@@ -132,14 +148,17 @@ def test_cache03b_request_ids_do_not_pollute_message_prefix() -> None:
 
 # CACHE04：user 后缀为动态部分（goal 不同 → user 不同，system 不变）
 def test_cache04_dynamic_suffix_only() -> None:
-    req_a = _request([{"role": "system", "content": "[planner.plan v2.0] x"}, {"role": "user", "content": "目标 A"}])
-    req_b = _request([{"role": "system", "content": "[planner.plan v2.0] x"}, {"role": "user", "content": "目标 B"}])
+    system = {"role": "system", "content": "[planner.plan v2.0] x"}
+    req_a = _request([system, {"role": "user", "content": "目标 A"}])
+    req_b = _request([system, {"role": "user", "content": "目标 B"}])
     assert req_a.messages[1] != req_b.messages[1]
     assert req_a.messages[0] == req_b.messages[0]  # 前缀保持稳定
 
 
 # CACHE05：structured repair 追加修复消息而非重建整个 prompt（前缀保留）
-def test_cache05_repair_appends_not_rebuilds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cache05_repair_appends_not_rebuilds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from app.core.config import AppSettings
     from app.gateway.contracts import ModelResponse
 
@@ -254,7 +273,8 @@ def test_cache06_usage_summary_fields() -> None:
     assert summary["token_cache_hit_ratio"] == pytest.approx(2000 / 3000)
 
 
-# CACHE07：token_cache_hit_ratio 定义严格为 hit / (hit + miss)（不是平均命中/不是 cached/input 全部）
+# CACHE07：token_cache_hit_ratio 定义严格为 hit / (hit + miss)
+# （不是平均命中/不是 cached/input 全部）
 def test_cache07_ratio_definition() -> None:
     from app.usage.store import _summarize
 
@@ -301,9 +321,11 @@ def test_cache09_usage_api(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
 
 # CACHE10：结构化生成全程不破坏确定性（同一 schema 两次调用 system 前缀稳定）
-def test_cache10_agent_prefix_stability_across_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from app.core.config import AppSettings
+def test_cache10_agent_prefix_stability_across_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from app.core.budget import BudgetController
+    from app.core.config import AppSettings
     from app.gateway.audit import AuditLog
     from app.gateway.contracts import ModelResponse
     from app.gateway.model_gateway import ModelGateway
@@ -330,7 +352,10 @@ def test_cache10_agent_prefix_stability_across_calls(monkeypatch: pytest.MonkeyP
     for goal in ("目标一", "目标二", "目标三"):
         req = _request(
             [
-                {"role": "system", "content": "[planner.plan v2.0] Return exactly one JSON object immediately."},
+                {
+                    "role": "system",
+                    "content": "[planner.plan v2.0] Return exactly one JSON object immediately.",
+                },
                 {"role": "user", "content": f"目标：{goal}"},
             ]
         )

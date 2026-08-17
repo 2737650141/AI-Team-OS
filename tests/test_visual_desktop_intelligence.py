@@ -479,10 +479,14 @@ def test_external_elements_cannot_forge_accessibility_identity_or_escape_capture
 def test_source_tree_contains_no_real_capture_files() -> None:
     project = Path(__file__).resolve().parents[1]
     source_roots = ["app", "docs", "fixtures", "scripts", "tests", "web/src"]
+    # docs/screenshots/ 是人工挑选的产品 UI 截图（e2e 断言无 sk-/reasonix/.create_token），
+    # 不属于真实桌面抓屏；其余任何位置禁止出现图片文件（防真实屏幕内容入库）。
+    exempt = project / "docs" / "screenshots"
     tracked_images = [
         path
         for root in source_roots
         for path in (project / root).rglob("*")
         if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        and not path.is_relative_to(exempt)
     ]
     assert tracked_images == []

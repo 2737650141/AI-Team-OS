@@ -98,20 +98,24 @@ def _data_dir() -> Path:
     return Path(os.environ.get("AI_TEAM_OS_DATA_DIR", "data"))
 
 
-_storage_registry: Any = None
+_storage_registries: dict[str, Any] = {}
 _storage_registry_lock = threading.Lock()
 
 
 def _storage() -> Any:
-    """StorageRegistry 单例（按 data root 复用）。"""
-    global _storage_registry
-    if _storage_registry is None:
-        with _storage_registry_lock:
-            if _storage_registry is None:
-                from app.core.storage import StorageRegistry
+    """StorageRegistry 按 data root 复用（每个数据根一个注册表）。
 
-                _storage_registry = StorageRegistry(_data_dir())
-    return _storage_registry
+    单例绑定首个 data dir 会导致跨数据目录（多实例/测试隔离）解析到错误路径；
+    改为按 `AI_TEAM_OS_DATA_DIR` 键控，生产环境（单一数据根）行为不变。
+    """
+    from app.core.storage import StorageRegistry
+
+    data_dir = str(_data_dir())
+    with _storage_registry_lock:
+        registry = _storage_registries.get(data_dir)
+        if registry is None:
+            registry = _storage_registries[data_dir] = StorageRegistry(Path(data_dir))
+    return registry
 
 
 def _settings() -> AppSettings:

@@ -50,6 +50,7 @@ web/tsconfig.tsbuildinfo
 build/
 dist/
 *.spec
+!ai-team-os-sidecar.spec
 src-tauri/target/
 src-tauri/binaries/*.exe
 src-tauri/gen/
@@ -61,3 +62,5 @@ src-tauri/icons/icon.icns
 src-tauri/icons/icon.png
 src-tauri/icons/Square*Logo.png
 src-tauri/icons/StoreLogo.png
+
+test-results-junit.xml

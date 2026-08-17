@@ -562,7 +562,7 @@ class ProviderCapabilityResolver:
     def _official_profile(
         self, identity: ProviderIdentity, model_id: str
     ) -> ProviderCapabilityProfile | None:
-        common = {
+        common: dict[str, Any] = {
             "provider_id": identity.provider_id,
             "endpoint_family": identity.endpoint_family,
             "endpoint_fingerprint": identity.endpoint_fingerprint,

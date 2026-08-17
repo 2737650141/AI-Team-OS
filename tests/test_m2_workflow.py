@@ -260,6 +260,9 @@ def test_app_has_no_network_imports() -> None:
         # Packaged desktop sidecar binds an ephemeral loopback-only port. It is never
         # imported by the default runtime path and cannot bind a public interface.
         root / "desktop_sidecar.py",
+        # cache_intelligence.py 仅用 urllib.parse.urlsplit 做字符串级 URL 归一化
+        # （缓存键），不发起任何网络 I/O。
+        root / "gateway" / "cache_intelligence.py",
     }
     banned = re.compile(
         r"^\s*(import|from)\s+(requests|urllib|http\.client|socket|aiohttp)\b", re.M
