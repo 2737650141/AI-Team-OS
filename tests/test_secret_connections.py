@@ -67,7 +67,7 @@ def test_resolver_env_fallback(monkeypatch) -> None:
     assert resolver.resolve("github.token", ["AI_TEAM_GITHUB_TOKEN"]) == "ghp_testtoken"
 
 
-@pytest.mark.skipif(sys.platform == "win32" and os.name != "nt", reason="requires Windows")
+@pytest.mark.skipif(sys.platform != "win32", reason="requires Windows")
 def test_windows_store_roundtrip(tmp_path: Path) -> None:
     """WindowsSecretStore round-trip（Windows DPAPI；非 Windows skip）。"""
     if os.name != "nt":
@@ -218,6 +218,7 @@ def test_github_test_provider_does_not_touch_real_github_credential(
 
 
 # ---------- 010-B：网页保存凭据驱动真实模式（build_provider 回退 + real 校验） ----------
+@pytest.mark.skipif(sys.platform != "win32", reason="secure store (DPAPI) requires Windows")
 def test_web_saved_credentials_drive_real_provider(tmp_path: Path) -> None:
     """网页保存的 openai_compatible 凭据对真实任务生效（build_provider 回退）。"""
     from app.core.config import AppSettings
@@ -244,6 +245,7 @@ def test_web_saved_credentials_drive_real_provider(tmp_path: Path) -> None:
     assert provider._enable_real is False
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="secure store (DPAPI) requires Windows")
 def test_web_saved_credentials_satisfy_real_gate(tmp_path: Path, monkeypatch) -> None:
     """runner：网页已保存凭据时，real 模式校验通过（无需 env 开关）。"""
     import app.core.events as _evmod

@@ -138,7 +138,11 @@ class CommandPolicy:
                 raise CommandError("argument too long")
             if _INJECTION_RE.search(arg):
                 raise CommandError(f"injection pattern rejected in argument: {arg[:40]}")
-            if arg.startswith(("-", "/")) and arg not in (
+            # 已存在的绝对路径是位置参数而非 flag（Windows C:\\... 历来放行，
+            # POSIX /tmp/... 需同等对待）；不存在或相对路径仍按 flag 规则拒绝。
+            if arg.startswith(("-", "/")) and not (
+                os.path.isabs(arg) and os.path.exists(arg)
+            ) and arg not in (
                 "-v",
                 "-q",
                 "--check",

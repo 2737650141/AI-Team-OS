@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -285,6 +286,23 @@ def test_no_shell_invocation(policy: CommandPolicy, worktree: Path) -> None:
 def test_injection_args_rejected(policy: CommandPolicy, arg: str) -> None:
     with pytest.raises(CommandError, match="injection|flag"):
         policy.resolve("python_pytest", [arg])
+
+
+def test_existing_absolute_path_arg_allowed(
+    policy: CommandPolicy, tmp_path: Path, monkeypatch
+) -> None:
+    """已存在的绝对路径是位置参数而非 flag（POSIX /tmp/... 与 Windows C:\\... 同等对待）。"""
+    # POSIX 风格绝对路径在 Windows 上不存在，monkeypatch exists 模拟已存在
+    monkeypatch.setattr(os.path, "exists", lambda p: str(p).startswith("/tmp/"))
+    argv = policy.resolve("git_diff", ["/tmp/worktree/file.txt"])
+    assert argv[-1] == "/tmp/worktree/file.txt"
+
+
+def test_nonexistent_absolute_path_still_rejected(policy: CommandPolicy, monkeypatch) -> None:
+    """不存在的绝对路径不得绕过 flag 校验。"""
+    monkeypatch.setattr(os.path, "exists", lambda p: False)
+    with pytest.raises(CommandError, match="flag not allowed"):
+        policy.resolve("git_diff", ["/tmp/not-there.txt"])
 
 
 # ---------- 35. cwd 固定 ----------
