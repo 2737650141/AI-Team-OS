@@ -60,8 +60,13 @@ target-version = "py311"
 select = ["E", "F", "I", "W"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = false
+
+# mss 是 ctypes 实现、无类型存根；仅在 win32 安装，CI(Linux) 上必然缺失
+[[tool.mypy.overrides]]
+module = "mss"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
