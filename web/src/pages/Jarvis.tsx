@@ -233,12 +233,15 @@ export function Jarvis() {
       <div className={`jarvis-columns ${inspectorOpen ? "" : "inspector-closed"}`}>
         <section className="jarvis-center">
           <header className="jarvis-topbar">
-            <div className="jarvis-identity">
-              <span className={`jarvis-orb ${status.tone}`} aria-hidden="true" />
-              <div><strong>JARVIS</strong><span role="status" aria-live="polite">{status.label[zh ? 0 : 1]}</span></div>
+            <div className="session-header-primary">
+              <div className="jarvis-identity">
+                <span className={`jarvis-orb ${status.tone}`} aria-hidden="true" />
+                <div><strong>JARVIS</strong><span role="status" aria-live="polite">{status.label[zh ? 0 : 1]}</span></div>
+              </div>
+              <RuntimeModel task={task.data} zh={zh} />
+              {!inspectorOpen && <button className="inspector-open" onClick={() => setInspectorOpen(true)} aria-label={zh ? "打开检查器" : "Open Inspector"}><PanelRightOpen size={15} /></button>}
             </div>
-            <RuntimeUsage task={task.data} usage={usage.data} zh={zh} />
-            {!inspectorOpen && <button className="inspector-open" onClick={() => setInspectorOpen(true)} aria-label={zh ? "打开检查器" : "Open Inspector"}><PanelRightOpen size={15} /></button>}
+            <RuntimeMetrics usage={usage.data} zh={zh} />
           </header>
 
           <main className="jarvis-scroll" ref={containerRef} onScroll={onScroll} aria-label={zh ? "JARVIS 对话" : "JARVIS conversation"}>
@@ -394,13 +397,17 @@ function TaskCard({ task, summary, events, connected, usage, evidenceCount, expa
   </section>;
 }
 
-function RuntimeUsage({ task, usage, zh }: { task?: TaskDetail; usage?: import("../api/types").UsageSummary; zh: boolean }) {
+function RuntimeModel({ task, zh }: { task?: TaskDetail; zh: boolean }) {
+  const badge = task?.model_identity?.badge ?? (task?.model_mode === "fake" ? "DEMO" : "REAL");
+  return <div className="runtime-model" aria-label={zh ? "当前模型" : "Current model"}><b className={`mode-badge ${badge.toLowerCase()}`}>{badge}</b><strong>{task?.model_identity?.default_model || task?.model_identity?.provider || (zh ? "等待任务" : "Ready")}</strong></div>;
+}
+
+function RuntimeMetrics({ usage, zh }: { usage?: import("../api/types").UsageSummary; zh: boolean }) {
   const context = usage?.context;
   return <div className="jarvis-runtime-usage" aria-label={zh ? "当前用量" : "Current usage"}>
-    <span className="runtime-model"><b className={`mode-badge ${(task?.model_identity?.badge ?? "REAL").toLowerCase()}`}>{task?.model_identity?.badge ?? "REAL"}</b><strong>{task?.model_identity?.default_model || task?.model_identity?.provider || (zh ? "等待任务" : "Ready")}</strong></span>
-    <span>Context {formatContextPercent(context?.percentage, zh)}{context?.percentage != null && context.percentage >= .7 ? (zh ? " · 即将整理" : " · compaction soon") : ""}</span>
-    <span>{formatTokens(usage?.total_tokens)} tokens</span>
-    <span>{usage?.cost_total == null || usage?.by_agent.some((item) => item.cost_available === false) ? (zh ? "费用不可用" : "Cost unavailable") : `$${usage.cost_total.toFixed(4)}`}</span>
+    <span>Context <strong>{formatContextPercent(context?.percentage, zh)}</strong>{context?.percentage != null && context.percentage >= .7 ? (zh ? " · 即将整理" : " · compaction soon") : ""}</span>
+    <span><strong>{formatTokens(usage?.total_tokens)}</strong> tokens</span>
+    <span><strong>{usage?.cost_total == null || usage?.by_agent.some((item) => item.cost_available === false) ? (zh ? "费用不可用" : "Cost unavailable") : `$${usage.cost_total.toFixed(4)}`}</strong></span>
   </div>;
 }
 

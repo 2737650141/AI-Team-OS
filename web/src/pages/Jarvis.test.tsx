@@ -197,7 +197,7 @@ it("UI-POLISH03/04/05/08: compact header semantics, user identity dedup, and ins
   const userMessage = container.querySelector(".jarvis-message.user");
   expect(userMessage?.querySelector(".message-avatar")).toBeNull();
   expect(userMessage).toHaveTextContent("You");
-  expect(screen.getByText("Context <1%", { exact: false })).toBeInTheDocument();
+  expect(screen.getByLabelText("当前用量")).toHaveTextContent("Context <1%");
   expect(screen.getByText("REAL")).toHaveClass("mode-badge");
   const columns = container.querySelector(".jarvis-columns");
   fireEvent.click(screen.getByLabelText("关闭检查器"));

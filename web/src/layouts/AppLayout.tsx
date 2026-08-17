@@ -95,7 +95,7 @@ export function AppLayout() {
               projects.map((project) => (
                 <NavLink key={project} to={`/?project=${encodeURIComponent(project)}`} className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}>
                   <FolderKanban size={15} />
-                  <span>{project}</span>
+                  <span className={`nav-project-name ${project === "default" ? "is-default" : ""}`}>{project}</span>
                 </NavLink>
               ))
             )}

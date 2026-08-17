@@ -11,6 +11,9 @@ import { VoiceSettingsPanel } from "../components/VoiceSettingsPanel";
 import { useI18n } from "../i18n";
 import { connectionLabel, displayLabel } from "../i18n/labels";
 
+declare const __APP_BUILD_SHA__: string;
+declare const __APP_BUILD_TIME__: string;
+
 const ROLE_KEYS = ["supervisor", "planner", "researcher", "executor", "reviewer"];
 
 export function Settings() {
@@ -151,6 +154,10 @@ export function Settings() {
                 ? "版本 0.1.0 · 本地优先的 Windows 桌面预览版"
                 : "Version 0.1.0 · Local-first Windows desktop preview"}
             </p>
+            <dl className="build-identity" aria-label={lang === "zh" ? "构建信息" : "Build identity"}>
+              <div><dt>{lang === "zh" ? "构建" : "Build"}</dt><dd><code>{__APP_BUILD_SHA__}</code></dd></div>
+              <div><dt>{lang === "zh" ? "前端构建时间" : "Frontend built"}</dt><dd>{__APP_BUILD_TIME__}</dd></div>
+            </dl>
           </div>
         </div>
       </section>

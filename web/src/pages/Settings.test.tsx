@@ -10,6 +10,9 @@ import { api } from "../api/client";
 import { I18nProvider } from "../i18n";
 import { Settings } from "./Settings";
 
+declare const __APP_BUILD_SHA__: string;
+declare const __APP_BUILD_TIME__: string;
+
 const qc = () =>
   new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 
@@ -46,6 +49,21 @@ describe("Settings · Connections", () => {
     // 安全显示：首屏只显示产品状态，不显示 base_url / storage 细节
     await waitFor(() => expect(screen.getAllByText("已连接").length).toBeGreaterThan(0));
     expect(screen.queryByText("http://127.0.0.1:11434")).not.toBeInTheDocument();
+  });
+
+  it("REALITY01: shows the build-time Git identity without backend data", async () => {
+    vi.spyOn(api, "settingsStatus").mockResolvedValue({});
+    vi.spyOn(api, "health").mockResolvedValue({ backend: "Online", langgraph: "Online", sqlite: "Online", event_store: "Online", model_provider: "Blocked", github: "Missing", mcp: "Disabled", sandbox: "Online", network_isolation: "Best Effort" });
+    vi.spyOn(api, "connections").mockResolvedValue({
+      openai_compatible: { provider: "openai_compatible", configured: false, base_url: "", models: {}, storage: "missing", health: "missing" },
+      github: { provider: "github", configured: false, base_url: "", models: {}, storage: "missing", health: "missing" },
+      ollama: { provider: "ollama", configured: false, base_url: "", models: {}, storage: "missing", health: "missing" },
+    });
+    render(<QueryClientProvider client={qc()}><I18nProvider><MemoryRouter><Settings /></MemoryRouter></I18nProvider></QueryClientProvider>);
+    const identity = await screen.findByLabelText("构建信息");
+    expect(identity).toHaveTextContent(__APP_BUILD_SHA__);
+    expect(identity).toHaveTextContent(__APP_BUILD_TIME__);
+    expect(__APP_BUILD_SHA__).toMatch(/^[0-9a-f]{7,12}$/);
   });
 
   it("submits api key via password field and never stores it in the DOM", async () => {

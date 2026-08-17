@@ -57,18 +57,25 @@ function OverviewTab({ task, usage, events, zh }: { task?: TaskDetail; usage?: U
     ?? usage?.by_agent?.[0]?.name
     ?? (zh ? "无" : "None");
   const goalNeedsToggle = task.goal.length > 120;
-  return <dl className="inspector-overview">
-    <div><dt>{zh ? "状态" : "Status"}</dt><dd>{task.current_status}</dd></div>
-    <div><dt>{zh ? "目标" : "Goal"}</dt><dd className="wrap"><div className={`inspector-goal ${goalExpanded ? "expanded" : ""}`}>{task.goal}</div>{goalNeedsToggle && <button className="inspector-goal-toggle" type="button" aria-expanded={goalExpanded} onClick={() => setGoalExpanded((expanded) => !expanded)}>{goalExpanded ? (zh ? "收起目标" : "Show less") : (zh ? "查看完整目标" : "View full goal")}</button>}</dd></div>
-    <div><dt>Model</dt><dd>{task.model_identity?.badge ?? task.model_mode} · {task.model_identity?.provider ?? "—"}</dd></div>
-    <div><dt>{zh ? "当前 Agent" : "Current agent"}</dt><dd>{currentAgent}</dd></div>
-    <div><dt>Context</dt><dd>{formatContextPercent(usage?.context?.percentage, zh)}</dd></div>
-    <div><dt>{zh ? "Tokens" : "Tokens"}</dt><dd>{formatTokens(usage?.total_tokens)}{task.token_budget != null ? ` / ${formatTokens(task.token_budget)}` : ""}</dd></div>
-    <div><dt>{zh ? "费用" : "Cost"}</dt><dd>{usage?.cost_total == null ? "Unavailable" : `$${usage.cost_total.toFixed(4)}`}</dd></div>
-    <div><dt>{zh ? "运行时间" : "Runtime"}</dt><dd>{formatRuntime(usage?.runtime_ms)}</dd></div>
-    <div><dt>{zh ? "子任务" : "Subtasks"}</dt><dd>{task.subtasks.length}</dd></div>
-    <div><dt>{zh ? "返工" : "Rework"}</dt><dd>{task.rework_count}</dd></div>
-  </dl>;
+  return <div className="inspector-overview">
+    <dl className="inspector-primary">
+      <div><dt>{zh ? "状态" : "Status"}</dt><dd>{task.current_status}</dd></div>
+      <div><dt>{zh ? "当前 Agent" : "Current agent"}</dt><dd>{currentAgent}</dd></div>
+      <div><dt>Model</dt><dd>{task.model_identity?.badge ?? task.model_mode} · {task.model_identity?.provider ?? "—"}</dd></div>
+      <div><dt>Context</dt><dd>{formatContextPercent(usage?.context?.percentage, zh)}</dd></div>
+      <div><dt>Tokens</dt><dd>{formatTokens(usage?.total_tokens)}{task.token_budget != null ? ` / ${formatTokens(task.token_budget)}` : ""}</dd></div>
+      <div><dt>{zh ? "运行时间" : "Runtime"}</dt><dd>{formatRuntime(usage?.runtime_ms)}</dd></div>
+    </dl>
+    <details className="inspector-more">
+      <summary>{zh ? "更多详情" : "More details"}</summary>
+      <dl>
+        <div className="inspector-goal-row"><dt>{zh ? "目标" : "Goal"}</dt><dd className="wrap"><div className={`inspector-goal ${goalExpanded ? "expanded" : ""}`}>{task.goal}</div>{goalNeedsToggle && <button className="inspector-goal-toggle" type="button" aria-expanded={goalExpanded} onClick={() => setGoalExpanded((expanded) => !expanded)}>{goalExpanded ? (zh ? "收起目标" : "Show less") : (zh ? "查看完整目标" : "View full goal")}</button>}</dd></div>
+        <div><dt>{zh ? "费用" : "Cost"}</dt><dd>{usage?.cost_total == null ? "Unavailable" : `$${usage.cost_total.toFixed(4)}`}</dd></div>
+        <div><dt>{zh ? "子任务" : "Subtasks"}</dt><dd>{task.subtasks.length}</dd></div>
+        <div><dt>{zh ? "返工" : "Rework"}</dt><dd>{task.rework_count}</dd></div>
+      </dl>
+    </details>
+  </div>;
 }
 
 function FilesTab({ diff, zh }: { diff?: { diff: string; files?: Array<{ path: string; status: string }> }; zh: boolean }) {
