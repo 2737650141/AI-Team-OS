@@ -56,8 +56,13 @@
 - DEPLOY-HOTFIX：VALIDATED（`87d59f4`）
 - SIDECAR_ZERO_BYTE_INCIDENT：CLOSED
 - ATOMIC_SIDECAR_DEPLOYMENT：VALIDATED
+- M7-A1 ADAPTIVE INTELLIGENCE & CAPABILITY FOUNDATION：VALIDATED
+- CapabilityRegistry / AgentRegistry / SkillRegistry / TaskModelRouter / ReasoningPolicy / AgentScope：VALIDATED
+- DeepSeek Harness：Architecture Reference Only；No Cordis dependency；No orchestration migration
+- M7-A1 evidence: CAP/AGENT/SKILL/ROUTE/REASON focused tests pass；configured DeepSeek REAL01–03 pass；fake calls 0；real calls 3
 - UX-03.2 VISUAL POLISH：VALIDATED（`da496af`）
 - 工作区：干净
+
 
 Evidence: real Windows file-lock fail-closed verified; installed sidecar source/install SHA parity verified; installed Desktop cold launch 3/3; sidecar startup 3/3; orphan processes 0.
 

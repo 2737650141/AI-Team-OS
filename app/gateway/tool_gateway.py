@@ -100,8 +100,13 @@ class ToolGateway:
         self._approval_service = approval_service
         self._permission_runtime = permission_runtime
         self._permission_mode = PermissionMode.normalize(permission_mode)
+        self._agent_scope: Any | None = None
         # 并行 Send 共享同一 gateway：invoke 全程加锁，保证"确定性内核"调用顺序可复现（004 二）
         self._lock = threading.Lock()
+
+    def set_agent_scope(self, scope: Any | None) -> None:
+        """Install a narrow runtime tool scope without replacing the permission kernel."""
+        self._agent_scope = scope
 
     @property
     def seen_keys(self) -> set[str]:
@@ -120,7 +125,11 @@ class ToolGateway:
 
     def available_tools(self) -> list[str]:
         """可用工具名（006 十二：研究者工具循环的允许集合）。"""
-        return sorted(self._tools.keys())
+        names = sorted(self._tools.keys())
+        agent_scope = getattr(self, "_agent_scope", None)
+        if agent_scope is not None:
+            names = [name for name in names if name in agent_scope.visible_tools]
+        return names
 
     def audit_event(self, event_type: str, **fields: object) -> None:
         """Sanitized orchestration event; AuditLog applies the shared redactor."""
@@ -277,6 +286,14 @@ class ToolGateway:
         if tool is None:
             self._audit.entry("tool_unknown", task_id=self._task_id, tool=tool_name, role=role)
             return ToolResult(ok=False, error=f"unknown tool: {tool_name}", status="error")
+        agent_scope = getattr(self, "_agent_scope", None)
+        if agent_scope is not None and not agent_scope.can_use_tool(tool_name):
+            self._audit.entry("tool_scope_denied", task_id=self._task_id, tool=tool_name, role=role)
+            return ToolResult(
+                ok=False,
+                error=f"tool {tool_name} not allowed by agent scope",
+                status="blocked",
+            )
 
         # 006 十一 执行流程：角色白名单 → 只读/风险 → 参数 Schema → URL/路径安全 → 配额
         effective_role = role or (ctx.role if ctx else None) or ""
@@ -442,9 +459,7 @@ class ToolGateway:
             # safe to execute a validated read-only tool again; write tools
             # remain strictly non-replayed above.
             self._seen_keys.discard(key)
-            self._audit.entry(
-                "tool_read_replayed", task_id=self._task_id, tool=tool_name, key=key
-            )
+            self._audit.entry("tool_read_replayed", task_id=self._task_id, tool=tool_name, key=key)
 
         if not quota_reserved:
             try:
@@ -593,11 +608,7 @@ class ToolGateway:
             # （如 q/sort/order），直接 **args 展开会让 handler 因 unexpected
             # keyword argument 崩溃。按参数 Schema 的字段白名单过滤后再调用
             # （过滤属防御，不影响 Schema 内合法参数）。
-            data = (
-                tool.handler(**args, ctx=ctx)
-                if tool.accepts_ctx
-                else tool.handler(**args)
-            )
+            data = tool.handler(**args, ctx=ctx) if tool.accepts_ctx else tool.handler(**args)
         except Exception as exc:  # noqa: BLE001
             record["status"] = "error"
             self.tool_calls.append(record)
