@@ -53,8 +53,13 @@
 - 分支：`phase-6p2/desktop-usage-observatory`
 - 024 实现 HEAD：`1eaa69c`（feat: add multi-provider cache intelligence）
 - 024-C MULTI-PROVIDER CACHE INTELLIGENCE：VALIDATED
+- DEPLOY-HOTFIX：VALIDATED（`87d59f4`）
+- SIDECAR_ZERO_BYTE_INCIDENT：CLOSED
+- ATOMIC_SIDECAR_DEPLOYMENT：VALIDATED
 - UX-03.2 VISUAL POLISH：VALIDATED（`da496af`）
 - 工作区：干净
+
+Evidence: real Windows file-lock fail-closed verified; installed sidecar source/install SHA parity verified; installed Desktop cold launch 3/3; sidecar startup 3/3; orphan processes 0.
 
 ## 关键真实门禁
 
