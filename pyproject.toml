@@ -59,6 +59,11 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
+# importorskip 必须出现在 app 导入之前（收集期提前跳过 win32 缺失模块）
+[tool.ruff.lint.per-file-ignores]
+"tests/test_visual_desktop_intelligence.py" = ["E402"]
+"tests/test_windows_action_layer.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.12"
 platform = "win32"  # 产品为 Windows-only：按 win32 平台解析 typeshed（ctypes.windll 等）
@@ -72,3 +77,5 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# 裸 `pytest`（如 CI）不把 CWD 加入 sys.path；tests 包内的跨文件导入需要仓库根
+pythonpath = ["."]

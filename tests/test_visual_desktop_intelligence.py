@@ -4,6 +4,9 @@ import sys
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("mss")  # win32-only：CI(Linux) 上收集期提前跳过
+
 from PIL import Image, ImageDraw
 
 from app.desktop_vision.capture import CaptureError, ScreenCaptureService

@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+pytest.importorskip("mss")  # win32-only：CI(Linux) 上收集期提前跳过
+
 from app.windows_control.backend import AutomationError, WindowsAutomationBackend
 from app.windows_control.gateway import ActionError, ApprovalRequired, WindowsActionGateway
 from app.windows_control.models import (
