@@ -16,8 +16,12 @@ try {
     --hidden-import app.api.server `
     app\desktop_sidecar.py
   if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-  Copy-Item -Force "dist\ai-team-os-sidecar.exe" `
-    (Join-Path $binaryDir "ai-team-os-sidecar-$targetTriple.exe")
+  $builtSidecar = Join-Path $repo "dist\ai-team-os-sidecar.exe"
+  $bundledSidecar = Join-Path $binaryDir "ai-team-os-sidecar-$targetTriple.exe"
+  & (Join-Path $repo "scripts\atomic_deploy_sidecar.ps1") `
+    -Source $builtSidecar `
+    -Destination $bundledSidecar
+  if ($LASTEXITCODE -ne 0) { throw "Sidecar deployment failed" }
 
   Push-Location (Join-Path $repo "web")
   try { npm run build } finally { Pop-Location }

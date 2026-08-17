@@ -170,8 +170,18 @@ fn main() {
             let session_id: String = OsRng.sample_iter(&Alphanumeric).take(16).map(char::from).collect();
             let ready = data_dir.join("desktop-backend-ready.json");
             let _ = fs::remove_file(&ready);
-            let (events, child) = spawn_sidecar(app.handle(), &data_dir, &ready, &token, &session_id)
-                .map_err(std::io::Error::other)?;
+            let (events, child) = match spawn_sidecar(app.handle(), &data_dir, &ready, &token, &session_id) {
+                Ok(value) => value,
+                Err(error) => {
+                    append_desktop_log(
+                        &data_dir,
+                        &session_id,
+                        "sidecar_launch_failed",
+                        &format!("category=SIDECAR_LAUNCH_FAILED sidecar=ai-team-os-sidecar error={error}"),
+                    );
+                    return Err(std::io::Error::other(error).into());
+                }
+            };
             app.manage(DesktopState {
                 session: Mutex::new(DesktopSession { base_url: String::new(), token: token.clone() }),
                 child: Mutex::new(Some(child)),
