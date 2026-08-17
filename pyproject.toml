@@ -61,11 +61,12 @@ select = ["E", "F", "I", "W"]
 
 [tool.mypy]
 python_version = "3.12"
+platform = "win32"  # 产品为 Windows-only：按 win32 平台解析 typeshed（ctypes.windll 等）
 strict = false
 
-# mss 是 ctypes 实现、无类型存根；仅在 win32 安装，CI(Linux) 上必然缺失
+# 以下为 win32-only 第三方模块：无类型存根且 CI(Linux) 上未安装
 [[tool.mypy.overrides]]
-module = "mss"
+module = "mss,pywinauto"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
