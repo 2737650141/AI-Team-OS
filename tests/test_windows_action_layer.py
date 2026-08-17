@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,10 @@ from app.windows_control.models import (
 from app.windows_control.registry import ApplicationRegistry, RegistryError
 from app.windows_control.service import WindowsComputerService
 from app.windows_control.session import DeviceSessionManager, SessionError
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32", reason="Windows action layer is Windows-only"
+)
 
 
 def window(*, active: bool = True, suffix: str = "a") -> WindowInfo:

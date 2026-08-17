@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.api.server as server
 from app.api.server import app
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="desktop sidecar is Windows-only")
 
 
 def _client(tmp_path: Path, monkeypatch) -> TestClient:

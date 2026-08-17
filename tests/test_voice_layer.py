@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 import time
 from pathlib import Path
+
+import pytest
 
 from app.voice.adapters import SileroOnnxVadAdapter
 from app.voice.models import AudioDevice, TranscriptSegment, VoiceSettings, VoiceState
 from app.voice.service import VoiceService
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="voice layer is Windows-only")
 
 
 class FakeDevices:

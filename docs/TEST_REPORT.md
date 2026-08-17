@@ -58,4 +58,4 @@ cd web && npm test                      # 前端单测：55 用例通过（12 �
 - 里程碑验收报告：`docs/acceptance/`（M6A / M6P / M6P2 / PRODUCT01 / PRODUCT02）
 - 评审证据：`docs/review/`、`docs/reviews/`
 - 安全评审：`docs/security/`
-- CI：`.github/workflows/ci.yml`（Python 3.11 / 3.12：ruff + mypy + pytest）
+- CI：`.github/workflows/ci.yml`（Python 3.11 / 3.12：ruff + mypy + pytest；mypy 按 win32 平台检查；Windows 专属测试在 Linux CI 上按 `skipif` 跳过）

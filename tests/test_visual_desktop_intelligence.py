@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,10 @@ from app.desktop_vision.provider import VisionCapabilityRegistry, VisionPolicyEr
 from app.desktop_vision.validator import VisualActionValidator, VisualValidationError
 from app.windows_control.models import AccessibilityElement, Bounds, SessionCapability, WindowInfo
 from app.windows_control.session import DeviceSessionManager
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32", reason="desktop vision is Windows-only"
+)
 
 
 def bounds(left: int, top: int, right: int, bottom: int) -> Bounds:
