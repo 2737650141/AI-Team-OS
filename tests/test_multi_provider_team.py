@@ -26,6 +26,7 @@ from app.gateway.multi_provider import (
     MultiProviderRoutedProvider,
     ProviderBinding,
     ProviderHealthService,
+    ResolvedRuntimeRoute,
     RoleModelRouter,
     SupervisorArbitrator,
     TeamRoutingStore,
@@ -169,9 +170,7 @@ def test_gt_mp04_no_silent_fallback_and_explicit_switch(tmp_path: Path) -> None:
             ),
         },
         store,
-        on_switch=lambda before, after: switches.append(
-            (before.provider_id, after.provider_id)
-        ),
+        on_switch=lambda before, after: switches.append((before.provider_id, after.provider_id)),
     )
     response, decision, switched = gateway.generate(_request())
     assert switched is True
@@ -324,9 +323,7 @@ def test_gt_mp10_provider_health_has_explicit_states() -> None:
         == "WAITING_FOR_PROVIDER_CREDENTIAL"
     )
     assert (
-        ProviderHealthService.status(
-            configured=True, health="healthy", invocation_status="success"
-        )
+        ProviderHealthService.status(configured=True, health="healthy", invocation_status="success")
         == "REAL_READY"
     )
 
@@ -358,11 +355,20 @@ class _RawProvider:
         return ProviderHealth(status="healthy", provider=self.provider_name, model="routed")
 
 
+class _CapturingProvider(_RawProvider):
+    provider_name = "capturing-provider"
+
+    def __init__(self) -> None:
+        self.seen_models: list[str] = []
+
+    def generate(self, request: ModelRequest) -> ModelResponse:
+        self.seen_models.append(request.model)
+        return super().generate(request)
+
+
 def test_gt_mp11_runtime_provider_routes_by_request_role(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    store.set_route(
-        ModelRoute(role="planner", provider_id="p1", model="planner-specialist")
-    )
+    store.set_route(ModelRoute(role="planner", provider_id="p1", model="planner-specialist"))
     provider = MultiProviderRoutedProvider(
         RoleModelRouter(store), {"p1": _RawProvider()}, store, project_id="alpha"
     )
@@ -371,12 +377,58 @@ def test_gt_mp11_runtime_provider_routes_by_request_role(tmp_path: Path) -> None
     assert provider.call_count == 1
 
 
+def test_r1a_runtime_route_resolution_is_immutable_and_role_based(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.set_route(ModelRoute(role="planner", provider_id="p1", model="planner-specialist"))
+    route = RoleModelRouter(store).resolve_route("planner")
+    assert (route.provider_id, route.model_id, route.source) == (
+        "p1",
+        "planner-specialist",
+        "global",
+    )
+    with pytest.raises(Exception):
+        route.model_id = "mutated"  # type: ignore[misc]
+
+
+def test_r1a_executor_consumes_resolved_route_without_reselection(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.set_route(ModelRoute(role="planner", provider_id="p2", model="downstream-default"))
+    selected = _CapturingProvider()
+    conflicting = _CapturingProvider()
+    route = ResolvedRuntimeRoute(
+        provider_id="p1",
+        model_id="semantic-model",
+        source="global",
+        role="planner",
+    )
+    provider = MultiProviderRoutedProvider(
+        RoleModelRouter(store), {"p1": selected, "p2": conflicting}, store, route=route
+    )
+    response = provider.generate(_request("planner"))
+    assert response.provider_id == "p1"
+    assert selected.seen_models == ["semantic-model"]
+    assert conflicting.seen_models == []
+
+
+def test_r1a_unknown_provider_fails_loud_without_fallback(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    route = ResolvedRuntimeRoute(
+        provider_id="missing-provider",
+        model_id="missing-model",
+        source="global",
+        role="planner",
+    )
+    provider = MultiProviderRoutedProvider(RoleModelRouter(store), {}, store, route=route)
+    with pytest.raises(ProviderError) as exc:
+        provider.generate(_request("planner"))
+    assert exc.value.code is ProviderErrorCode.CONFIG_ERROR
+    assert provider.call_count == 0
+
+
 def test_gt_mp12_performance_profile_is_observational_only(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.set_route(ModelRoute(role="reviewer", provider_id="p1", model="review-model"))
-    provider = MultiProviderRoutedProvider(
-        RoleModelRouter(store), {"p1": _RawProvider()}, store
-    )
+    provider = MultiProviderRoutedProvider(RoleModelRouter(store), {"p1": _RawProvider()}, store)
     provider.generate(_request("reviewer"))
     profile = store.performance()[0]
     assert profile.calls == 1
@@ -453,9 +505,7 @@ def test_role_cost_budget_fails_before_provider_call(tmp_path: Path) -> None:
             cost_budget=0.0001,
         )
     )
-    provider = MultiProviderRoutedProvider(
-        RoleModelRouter(store), {"p1": _RawProvider()}, store
-    )
+    provider = MultiProviderRoutedProvider(RoleModelRouter(store), {"p1": _RawProvider()}, store)
     with pytest.raises(ProviderError) as exc:
         provider.generate(_request("planner"))
     assert exc.value.code is ProviderErrorCode.BUDGET_INSUFFICIENT

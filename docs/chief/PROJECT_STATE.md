@@ -60,6 +60,8 @@
 - CapabilityRegistry / AgentRegistry / SkillRegistry / TaskModelRouter / ReasoningPolicy / AgentScope：VALIDATED
 - DeepSeek Harness：Architecture Reference Only；No Cordis dependency；No orchestration migration
 - M7-A1 evidence: CAP/AGENT/SKILL/ROUTE/REASON focused tests pass；configured DeepSeek REAL01–03 pass；fake calls 0；real calls 3
+- M7-A1R1A SEMANTIC ROUTE OWNERSHIP：VALIDATED
+- ModelRouter = semantic provider/model route owner；MultiProviderRoutedProvider = executor only；ResolvedRuntimeRoute = validated
 - UX-03.2 VISUAL POLISH：VALIDATED（`da496af`）
 - 工作区：干净
 

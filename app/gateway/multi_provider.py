@@ -38,6 +38,20 @@ ROLE_MODEL_SLOTS = (
 )
 
 
+@dataclass(frozen=True)
+class ResolvedRuntimeRoute:
+    """Immutable semantic provider/model decision consumed by executors."""
+
+    provider_id: str
+    model_id: str
+    source: str
+    role: str = ""
+    token_budget: int = 4096
+    cost_budget: float | None = None
+    fallback_provider_id: str | None = None
+    fallback_model_id: str | None = None
+
+
 class ModelRoute(BaseModel):
     scope: Literal["global", "project"] = "global"
     scope_id: str = "global"
@@ -61,7 +75,7 @@ class RouteDecision(BaseModel):
     role: str
     provider_id: str
     model: str
-    source: Literal["task", "project", "global"]
+    source: str
     fallback_provider_id: str | None = None
     fallback_model: str | None = None
     token_budget: int = 4096
@@ -340,6 +354,25 @@ class RoleModelRouter:
             cost_budget=route.cost_budget,
         )
 
+    def resolve_route(
+        self,
+        role: str,
+        *,
+        project_id: str | None = None,
+        task_route: ModelRoute | None = None,
+    ) -> ResolvedRuntimeRoute:
+        route = self.resolve(role, project_id=project_id, task_route=task_route)
+        return ResolvedRuntimeRoute(
+            provider_id=route.provider_id,
+            model_id=route.model,
+            source=route.source,
+            role=route.role,
+            token_budget=route.token_budget,
+            cost_budget=route.cost_budget,
+            fallback_provider_id=route.fallback_provider_id,
+            fallback_model_id=route.fallback_model,
+        )
+
 
 class ModelCapabilityRegistry:
     """Conservative capability facts. Unknown fields remain None instead of being fabricated."""
@@ -460,22 +493,29 @@ class MultiProviderRoutedProvider:
         store: TeamRoutingStore,
         *,
         project_id: str | None = None,
+        route: ResolvedRuntimeRoute | None = None,
     ) -> None:
         self.router = router
         self.providers = dict(providers)
         self.store = store
         self.project_id = project_id
+        self.route = route
         self.call_count = 0
 
+    def _route_for_request(self, request: ModelRequest) -> ResolvedRuntimeRoute:
+        if self.route is not None:
+            return self.route
+        return self.router.resolve_route(request.role_type, project_id=self.project_id)
+
     def cache_identity(self, request: ModelRequest) -> dict[str, Any]:
-        """Resolve the selected adapter's non-secret identity before the outer gateway calls it."""
-        decision = self.router.resolve(request.role_type, project_id=self.project_id)
-        provider = self.providers.get(decision.provider_id)
+        """Expose adapter identity without reselecting provider/model semantics."""
+        route = self._route_for_request(request)
+        provider = self.providers.get(route.provider_id)
         if provider is None:
             return {
-                "provider_id": decision.provider_id,
-                "provider_name": decision.provider_id,
-                "selected_model": decision.model,
+                "provider_id": route.provider_id,
+                "provider_name": route.provider_id,
+                "selected_model": route.model_id,
                 "protocol_family": "unknown",
             }
         cache_identity = getattr(provider, "cache_identity", None)
@@ -483,38 +523,47 @@ class MultiProviderRoutedProvider:
         identity = dict(raw) if isinstance(raw, Mapping) else {}
         identity.update(
             {
-                "provider_id": decision.provider_id,
+                "provider_id": route.provider_id,
                 "provider_name": identity.get("provider_name")
-                or getattr(provider, "provider_name", decision.provider_id),
-                "selected_model": decision.model,
+                or getattr(provider, "provider_name", route.provider_id),
+                "selected_model": route.model_id,
             }
         )
         return identity
 
     def estimate_usage(self, request: ModelRequest):
-        decision = self.router.resolve(request.role_type, project_id=self.project_id)
-        provider = self.providers.get(decision.provider_id)
+        route = self._route_for_request(request)
+        provider = self.providers.get(route.provider_id)
         if provider is None:
             from app.gateway.contracts import UsageEstimate
 
             return UsageEstimate()
         routed = request.model_copy(
             update={
-                "model": decision.model,
-                "max_output_tokens": min(request.max_output_tokens, decision.token_budget),
+                "model": route.model_id,
                 "metadata": {
                     **request.metadata,
-                    "provider_id": decision.provider_id,
+                    "provider_id": route.provider_id,
                 },
             }
         )
         return provider.estimate_usage(routed)
 
     def generate(self, request: ModelRequest) -> ModelResponse:
-        decision = self.router.resolve(request.role_type, project_id=self.project_id)
+        route = self._route_for_request(request)
+        decision = RouteDecision(
+            role=route.role or request.role_type,
+            provider_id=route.provider_id,
+            model=route.model_id,
+            source=route.source,
+            fallback_provider_id=route.fallback_provider_id,
+            fallback_model=route.fallback_model_id,
+            token_budget=route.token_budget,
+            cost_budget=route.cost_budget,
+        )
         try:
-            response = self._call(decision, request)
-            response.provider_id = decision.provider_id
+            response = self._call(route, request)
+            response.provider_id = route.provider_id
             self.store.record_call(
                 decision,
                 response,
@@ -524,65 +573,84 @@ class MultiProviderRoutedProvider:
             return response
         except ProviderError:
             self.store.record_call(decision, None, success=False)
-            if not decision.fallback_provider_id or not decision.fallback_model:
+            if not route.fallback_provider_id or not route.fallback_model_id:
                 raise
-            fallback = decision.model_copy(
-                update={
-                    "provider_id": decision.fallback_provider_id,
-                    "model": decision.fallback_model,
-                    "fallback_provider_id": None,
-                    "fallback_model": None,
-                }
+            fallback = ResolvedRuntimeRoute(
+                provider_id=route.fallback_provider_id,
+                model_id=route.fallback_model_id,
+                source=f"{route.source}:fallback",
+                role=route.role,
+                token_budget=route.token_budget,
+                cost_budget=route.cost_budget,
+            )
+            fallback_decision = RouteDecision(
+                role=fallback.role or request.role_type,
+                provider_id=fallback.provider_id,
+                model=fallback.model_id,
+                source=fallback.source,
+                token_budget=fallback.token_budget,
+                cost_budget=fallback.cost_budget,
             )
             response = self._call(fallback, request)
             response.provider_id = fallback.provider_id
             self.store.record_call(
-                fallback,
+                fallback_decision,
                 response,
                 success=True,
                 structured_output_success=response.structured_output is not None,
             )
             return response
 
-    def _call(self, decision: RouteDecision, request: ModelRequest) -> ModelResponse:
-        provider = self.providers.get(decision.provider_id)
+    def _call(self, route: ResolvedRuntimeRoute, request: ModelRequest) -> ModelResponse:
+        provider = self.providers.get(route.provider_id)
         if provider is None:
             raise ProviderError(
                 ProviderErrorCode.CONFIG_ERROR,
                 "WAITING_FOR_PROVIDER_CREDENTIAL",
-                provider=decision.provider_id,
-                model=decision.model,
+                provider=route.provider_id,
+                model=route.model_id,
             )
         routed_metadata = {
             **request.metadata,
-            "provider_id": decision.provider_id,
+            "provider_id": route.provider_id,
         }
         prepared_provider = str(
             (request.metadata.get("cache_intelligence") or {}).get("provider_id", "")
         )
-        if prepared_provider and prepared_provider != decision.provider_id:
+        if prepared_provider and prepared_provider != route.provider_id:
             routed_metadata.pop("cache_provider_payload", None)
             routed_metadata.pop("cache_intelligence", None)
         routed = request.model_copy(
             update={
-                "model": decision.model,
-                "max_output_tokens": min(request.max_output_tokens, decision.token_budget),
+                "model": route.model_id,
+                "max_output_tokens": min(request.max_output_tokens, route.token_budget),
                 "metadata": routed_metadata,
             }
         )
-        self._enforce_role_cost_budget(decision, provider, routed)
+        self._enforce_role_cost_budget(
+            RouteDecision(
+                role=route.role or request.role_type,
+                provider_id=route.provider_id,
+                model=route.model_id,
+                source=route.source,
+                token_budget=route.token_budget,
+                cost_budget=route.cost_budget,
+            ),
+            provider,
+            routed,
+        )
         self.call_count += 1
         response = provider.generate(routed)
-        response.provider_id = decision.provider_id
+        response.provider_id = route.provider_id
         cache_identity = getattr(provider, "cache_identity", None)
         raw_identity = cache_identity(routed) if callable(cache_identity) else {}
         identity = dict(raw_identity) if isinstance(raw_identity, Mapping) else {}
         identity.update(
             {
-                "provider_id": decision.provider_id,
+                "provider_id": route.provider_id,
                 "provider_name": identity.get("provider_name")
-                or getattr(provider, "provider_name", decision.provider_id),
-                "selected_model": decision.model,
+                or getattr(provider, "provider_name", route.provider_id),
+                "selected_model": route.model_id,
             }
         )
         response.provider_identity = identity
