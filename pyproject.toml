@@ -30,6 +30,8 @@ dependencies = [
     # M7-A4A: scheduler lifecycle and durable job persistence.
     "APScheduler>=3.10,<4.0",
     "SQLAlchemy>=2.0,<3.0",
+    # M7-A4C: Windows toast transport; policy and dedup remain project glue.
+    "Windows-Toasts>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]

@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from app.background.scheduler import get_scheduler, shutdown_scheduler
 from app.tools.spec import RiskLevel, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_INSTANCES = 1
 DEFAULT_COALESCE = True
@@ -65,21 +68,109 @@ def execute_background_job(
     """
     from app.runner import run_task
 
-    report = run_task(
-        goal=instruction,
-        token_budget=150_000,
-        cost_budget=0.4,
-        project_id=f"bg-{job_id}",
-        data_dir=Path(data_dir),
-        model_mode="real",
-        max_model_calls=15,
-        routing_intent="EXPLICIT",
-        routing_mode="BALANCED",
-    )
+    try:
+        report = run_task(
+            goal=instruction,
+            token_budget=150_000,
+            cost_budget=0.4,
+            project_id=f"bg-{job_id}",
+            data_dir=Path(data_dir),
+            model_mode="real",
+            max_model_calls=15,
+            routing_intent="EXPLICIT",
+            routing_mode="BALANCED",
+        )
+    except Exception:
+        # Notify the failure, but preserve the original task failure for the
+        # scheduler/runtime caller. Notification failure is observational only.
+        try:
+            _deliver_failure_notification(job_id, instruction, data_dir)
+        except Exception:  # noqa: BLE001 — log marker/transport failure loudly
+            logger.exception("A4C failure notification failed for job %s", job_id)
+        raise
     run_id = report.run_id or ""
     if task_kind == "condition":
-        _condition_check(job_id, report, last_fingerprint, data_dir)
+        condition_status = _condition_check(job_id, report, last_fingerprint, data_dir)
+        try:
+            _deliver_condition_notification(job_id, condition_status, report, data_dir)
+        except Exception:  # noqa: BLE001 — notification cannot change task result
+            logger.exception("A4C condition notification failed for job %s", job_id)
+    else:
+        try:
+            _deliver_one_time_notification(job_id, report, data_dir)
+        except Exception:  # noqa: BLE001 — notification cannot change task result
+            logger.exception("A4C completion notification failed for job %s", job_id)
     return run_id
+
+
+def _deliver_condition_notification(
+    job_id: str, condition_status: str, report: Any, data_dir: str,
+) -> str:
+    """Deliver only CONDITION_TRIGGERED using the persisted current baseline."""
+    from app.notifications import (
+        notification_key,
+        policy_decision,
+        safe_excerpt,
+        send_notification,
+    )
+
+    if policy_decision("condition", condition_status) != "NOTIFY":
+        return "SILENT"
+    job = get_scheduler(data_dir).get_job(job_id)
+    if job is None or not job.kwargs:
+        raise RuntimeError(f"condition notification source job missing: {job_id}")
+    fingerprint = str(job.kwargs.get("last_fingerprint", "") or "")
+    if not fingerprint:
+        raise RuntimeError(f"condition notification fingerprint missing: {job_id}")
+    key = notification_key("condition", job_id, condition_status, fingerprint)
+    state = getattr(report, "state", None)
+    summary = safe_excerpt(str(getattr(state, "final_result", "") or ""), 100)
+    body = f"任务 {job_id} 出现新变化：{summary or '请查看 AI Team OS 获取详情'}"
+    return send_notification(
+        title="后台监控发现变化",
+        body=body,
+        notification_key_value=key,
+        job_id=job_id,
+        run_id=str(getattr(report, "run_id", "") or ""),
+        kind="condition",
+        data_dir=data_dir,
+        dedup_marker=fingerprint,
+    )
+
+
+def _deliver_one_time_notification(job_id: str, report: Any, data_dir: str) -> str:
+    """Deliver a COMPLETED notification keyed by job and run identity."""
+    from app.notifications import notification_key, safe_excerpt, send_notification
+
+    run_id = str(getattr(report, "run_id", "") or "")
+    key = notification_key("one_time", job_id, "COMPLETED", run_id=run_id)
+    state = getattr(report, "state", None)
+    summary = safe_excerpt(str(getattr(state, "final_result", "") or ""), 140)
+    return send_notification(
+        title="后台任务完成",
+        body=f"任务 {job_id} 已完成。{summary or ''}",
+        notification_key_value=key,
+        job_id=job_id,
+        run_id=run_id,
+        kind="one_time",
+        data_dir=data_dir,
+    )
+
+
+def _deliver_failure_notification(job_id: str, instruction: str, data_dir: str) -> str:
+    """Deliver the frozen per-job FAILED notification contract."""
+    from app.notifications import notification_key, send_notification
+
+    key = notification_key("one_time", job_id, "FAILED", run_id="")
+    return send_notification(
+        title="后台任务失败",
+        body=f"任务 {job_id} 执行失败，未生成结果。",
+        notification_key_value=key,
+        job_id=job_id,
+        run_id="",
+        kind="one_time",
+        data_dir=data_dir,
+    )
 
 
 def _condition_check(
