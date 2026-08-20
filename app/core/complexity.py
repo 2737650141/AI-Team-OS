@@ -167,6 +167,15 @@ def classify_task(goal: str) -> TaskComplexity:
     # phrases such as "先给方案再执行" are not flattened to STANDARD.
     if any(marker in text for marker in COMPLEX_MARKERS):
         return TaskComplexity.COMPLEX
+    # M7-A4B: background scheduling is a bounded single-step task-management
+    # request handled by the governed background_job tool.
+    schedule_markers = (
+        "秒后", "分钟后", "小时后", "每天", "每隔", "每30秒", "每1小时",
+        "后台任务", "后台", "提醒我", "定时", "暂停", "继续", "取消", "别再看",
+        "别再检查", "有哪些后台", "schedule", "定时任务", "预约",
+    )
+    if any(marker in text for marker in schedule_markers):
+        return TaskComplexity.SIMPLE
     # 代码类任务：完整编排（可能需要 Executor/Sandbox/审批）。
     # 注意：SIMPLE 只读动词（找/查/看/检查）优先于 CODE 判定——"检查这个
     # Python 文件"是只读研究（researcher 可完成），不应引出让 Executor 失效的编排。

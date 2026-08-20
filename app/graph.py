@@ -175,6 +175,35 @@ def build_graph(
     def _simple_research_plan(goal_text: str, task_token_budget: int) -> Plan:
         """SIMPLE fast path: one bounded Researcher, no Planner or model Reviewer."""
         budget = max(500, min(2000, task_token_budget // 4))
+        text = (goal_text or "").lower()
+        schedule_markers = (
+            "秒后", "分钟后", "小时后", "每天", "每隔", "每30秒", "每1小时",
+            "后台任务", "后台", "提醒我", "定时", "暂停", "继续", "取消", "别再看",
+            "别再检查", "有哪些后台", "schedule", "定时任务", "预约",
+        )
+        if any(marker in text for marker in schedule_markers):
+            return Plan(
+                goal=goal_text,
+                subtasks=[
+                    SubtaskSpec(
+                        subtask_id="st1",
+                        title="管理后台调度任务",
+                        objective=goal_text,
+                        dependencies=[],
+                        assigned_role="researcher",
+                        input_refs=[],
+                        expected_output="后台任务已创建或管理，返回确认信息",
+                        acceptance_criteria=[
+                            "完成用户要求",
+                            "只通过 background_job 工具管理调度",
+                            "回复任务内容、执行时间、重复策略和 job 引用",
+                        ],
+                        required_tools=["background_job"],
+                        token_budget=budget,
+                        tool_call_budget=3,
+                    )
+                ],
+            )
         return Plan(
             goal=goal_text,
             subtasks=[

@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
@@ -56,7 +57,21 @@ from app.usage.context import ContextPolicy
 from app.usage.store import UsageStore
 from app.voice.models import VoiceSettings
 
-app = FastAPI(title="AI Team OS", version="0.3.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """M7-A4B: start one persistent scheduler for the API process."""
+    from app.background.jobs import get_scheduler, shutdown_scheduler
+
+    # Fail loud: a scheduler that cannot start is a runtime integrity failure.
+    get_scheduler()
+    try:
+        yield
+    finally:
+        shutdown_scheduler()
+
+
+app = FastAPI(title="AI Team OS", version="0.3.0", lifespan=_lifespan)
 
 
 @app.middleware("http")

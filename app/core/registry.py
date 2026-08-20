@@ -24,6 +24,7 @@ RESEARCHER_READ_ONLY_TOOLS = [
     "local_read_csv",
     "local_read_pdf",
     "web_fetch",
+    "background_job",
 ]
 
 

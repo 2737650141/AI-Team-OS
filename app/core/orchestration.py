@@ -63,6 +63,14 @@ def classify_task_shape(goal: str) -> TaskShape:
     change_markers = ("修复", "修改", "实施", "直接修", "apply", "patch", "fix")
     windows_markers = ("窗口", "记事本", "桌面", "点击", "输入", "windows")
     research_markers = ("github", "研究", "调研", "搜索", "找 ", "找几个", "对比")
+    # M7-A4B: background scheduling is managed through the governed tool.
+    schedule_markers = (
+        "秒后", "分钟后", "小时后", "每天", "每隔", "每30秒", "每1小时",
+        "后台任务", "后台", "提醒我", "定时", "暂停", "继续", "取消", "别再看",
+        "别再检查", "有哪些后台", "schedule", "定时任务", "预约",
+    )
+    if any(marker in text for marker in schedule_markers):
+        return TaskShape.READ_ONLY_RESEARCH
     if any(marker in text for marker in windows_markers):
         return TaskShape.WINDOWS_ACTION
     if "github" in text and any(marker in text for marker in research_markers):

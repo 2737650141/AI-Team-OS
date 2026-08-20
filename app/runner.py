@@ -438,6 +438,11 @@ def _build_context(
         for spec in build_github_tools(GitHubClient()):
             tool_gateway.register(spec)
         tool_gateway.register(WebFetchTool().spec())
+        # M7-A4B: governed background job management. The tool is sensitive;
+        # ToolGateway confirmation remains the authorization boundary.
+        from app.background.jobs import BackgroundJobTool
+
+        tool_gateway.register(BackgroundJobTool().spec())
     roots = allowed_read_roots(settings)
     local_roots: list = []
     if model_overrides and "project_alias" in model_overrides:
