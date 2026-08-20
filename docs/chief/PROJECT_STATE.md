@@ -37,6 +37,11 @@
   `app/core/task_control.py` + `web/src/pages/Jarvis.tsx` / `JarvisNotifications.tsx` / Usage 页；
   后端 25 测试 + 前端 22 测试全绿。
 - **PRODUCT-01 / PRODUCT-02 真实门禁**：见"关键真实门禁"。
+- **M7-A4 Runtime：COMPLETE**（M7-A0 reconstruction checkpoint）：
+  - A4A Background Runtime Foundation：`1611131`。
+  - A4B Condition Watch Runtime：`8d535905`。
+  - A4C Notification Runtime：`a871ba19`。
+  - checkpoint branch：`rework/m7a0-milestone-split`；当前 A4C HEAD：`a871ba19`。
 
 ## 冻结能力（已验收，不得回退）
 

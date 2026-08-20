@@ -15,6 +15,8 @@
 
 当前为 **Developer Preview 0.1.0**：可安装的 Tauri 桌面应用，内置双语 Control Center、JARVIS 本地语音与桌面视觉、受治理长期记忆、多 Provider 模型路由，以及持久化的 Safe / Standard / Maximum 三档权限模式。
 
+**M7-A4 COMPLETE**：Background Jobs、Condition Watch Runtime、Notification Runtime 已完成稳定实现；A4A/A4B/A4C checkpoint chain 已建立。
+
 ![Control Center](docs/screenshots/home-zh.png)
 
 ## 核心特性

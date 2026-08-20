@@ -8,9 +8,17 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.vscode/
+.idea/
+*.key
+*.pem
+credentials
 
 # 运行数据（审计日志、checkpoint、沙箱工作区）
 data/
+logs/
+cache/
+workspace/
 sandbox/workspace/
 
 # 测试与工具缓存
