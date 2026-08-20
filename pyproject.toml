@@ -27,6 +27,9 @@ dependencies = [
     "mss>=10.0,<11.0; sys_platform == 'win32'",  # M5-B：Windows 多显示器截图（MIT）
     "opencv-python-headless>=4.10,<5.0",  # M5-B：本地确定性 CV（Apache-2.0 / wheel MIT）
     "sounddevice>=0.5.5,<0.6; sys_platform == 'win32'",  # M6-A: audio capture (MIT)
+    # M7-A4A: scheduler lifecycle and durable job persistence.
+    "APScheduler>=3.10,<4.0",
+    "SQLAlchemy>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
