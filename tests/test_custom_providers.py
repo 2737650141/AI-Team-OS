@@ -40,7 +40,7 @@ def _reset_server(tmp_path: Path, monkeypatch) -> None:
 
 def test_custom_provider_crud_test_discover_refresh_and_delete(tmp_path: Path, monkeypatch) -> None:
     _reset_server(tmp_path, monkeypatch)
-    secret = "TEST-TOKEN-custom-test-secret-value"
+    secret = "AI_TEAM_OS_TEST_CUSTOM_PROVIDER"
     body = {
         "provider_name": "M4 Isolated Provider",
         "base_url": "https://third-party-test.invalid/v1",
@@ -230,7 +230,7 @@ def test_model_discovery_safe_error_mapping(
         ).json()
         client.put(
             f"/settings/connections/providers/{provider['provider_id']}/credential",
-            json={"api_key": "TEST-TOKEN-safe-test-credential", "storage_mode": "session"},
+            json={"api_key": "AI_TEAM_OS_TEST_CUSTOM_CREDENTIAL", "storage_mode": "session"},
         )
         result = client.post(
             f"/settings/connections/providers/{provider['provider_id']}/discover-models"

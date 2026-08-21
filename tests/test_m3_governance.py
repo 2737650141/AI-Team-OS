@@ -378,11 +378,11 @@ def test_prompt_version_and_hash() -> None:
 def test_api_key_not_in_audit_or_messages(tmp_path: Path) -> None:
     provider = OpenAICompatibleProvider(
         base_url="https://api.example.com/v1",
-        api_key="sk-super-secret-test-key",
+        api_key="AI_TEAM_OS_TEST_sk-PLACEHOLDER-M3-GOVERNANCE",
         enable_real=True,
         transport=None,  # 不实际调用
     )
-    assert provider._api_key == "sk-super-secret-test-key"
+    assert provider._api_key == "AI_TEAM_OS_TEST_sk-PLACEHOLDER-M3-GOVERNANCE"
     # 请求对象不含 key
     request = _request()
     dumped = json.dumps(request.model_dump())

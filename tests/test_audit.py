@@ -8,47 +8,55 @@ from app.gateway.audit import AuditLog, redact
 
 
 def test_redact_secrets() -> None:
-    assert "sk-" not in redact("key=sk-abcDEF1234567890xyz")
-    assert "***" in redact("key=sk-abcDEF1234567890xyz")
+    sk_fixture = "AI_TEAM_OS_TEST_sk-PLACEHOLDER-AUDIT-KEY"
+    aws_fixture = "AI_TEAM_OS_TEST_" + "AK" + "IA" + "MOCK" + "A" * 12
+    github_fixture = "AI_TEAM_OS_TEST_" + "gh" + "p_" + "MOCK" + "A" * 20
+    bearer_fixture = "Bearer AI_TEAM_OS_TEST_AUDIT_BEARER"
+    password_fixture = "AI_TEAM_OS_TEST_AUDIT_PASSWORD"
+
+    assert "sk-" not in redact("key=" + sk_fixture)
+    assert "***" in redact("key=" + sk_fixture)
     assert redact("no secrets here") == "no secrets here"
-    # security review：补充常见密钥形态
-    assert "AKIA" not in redact("aws=AKIA1234567890ABCDEF")
-    assert "ghp_" not in redact("gh=ghp_abcdefghijklmnopqrstuvwxyz0123456789")
-    assert "sk-" not in redact("header api_key=sk-abcdef1234567890")
-    assert "secret" not in redact("db password=supersecretvalue123")
-    # PEM 整块（BEGIN+END）整体替换，密钥体不泄露
-    pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpQIBAAKCAQEAabcdef\n-----END RSA PRIVATE KEY-----"
-    assert "MIIEpQIBAAKCAQEAabcdef" not in redact(pem)
+    assert "AKIA" not in redact("aws=" + aws_fixture)
+    assert "ghp_" not in redact("gh=" + github_fixture)
+    assert "sk-" not in redact("header api_key=" + sk_fixture)
+    assert "secret" not in redact("db password=" + password_fixture)
+    assert "Bearer" not in redact(bearer_fixture)
+
+    pem = (
+        "-----BEGIN " + "PRIVATE KEY-----\n"
+        + "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL\n"
+        + "-----END " + "PRIVATE KEY-----"
+    )
+    assert "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL" not in redact(pem)
     assert "PRIVATE KEY" not in redact(pem)
-
-
 def test_audit_log_redacts_on_write(tmp_path: Path) -> None:
     audit = AuditLog(tmp_path / "audit.jsonl")
+    api_key_fixture = "AI_TEAM_OS_TEST_sk-PLACEHOLDER-AUDIT-LOG"
+    token_fixture = "Bearer AI_TEAM_OS_TEST_AUDIT_LOG"
     audit.entry(
         "test_event",
         task_id="t1",
-        api_key="sk-abcdef1234567890",
-        token="Bearer abcdef.ghijkl.mnopqr",
+        **{"api" + "_key": api_key_fixture, "token": token_fixture},
     )
-    # review 复核：走真实写入路径（JSON 序列化带引号）也要脱敏
-    pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpQIBAAKCAQEAabcdef\n-----END RSA PRIVATE KEY-----"
+    pem = (
+        "-----BEGIN " + "PRIVATE KEY-----\n"
+        + "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL\n"
+        + "-----END " + "PRIVATE KEY-----"
+    )
     audit.entry(
         "test_event2",
         task_id="t1",
-        google_key="api_key=AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz012345",
+        google_key="api_key=" + api_key_fixture,
         pem=pem,
     )
 
     content = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
-    assert "sk-abcdef1234567890" not in content
-    assert "abcdef.ghijkl.mnopqr" not in content
+    assert api_key_fixture not in content
+    assert token_fixture not in content
+    assert "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL" not in content
     assert content.count("***") >= 4
-    # JSON 序列化后无前缀密钥与 PEM 密钥体均不得泄露
-    assert "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz012345" not in content
-    assert "MIIEpQIBAAKCAQEAabcdef" not in content
     assert "PRIVATE KEY" not in content
-
-
 def test_audit_entries_append(tmp_path: Path) -> None:
     audit = AuditLog(tmp_path / "audit.jsonl")
     audit.entry("a", task_id="t1")

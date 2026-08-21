@@ -27,7 +27,7 @@ def local_root(tmp_path: Path) -> Path:
     (root / "README.md").write_text("# Hello\n", encoding="utf-8")
     (root / "data.json").write_text('{"a": 1, "list": [1, 2, 3]}', encoding="utf-8")
     (root / "data.csv").write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
-    (root / "secret.env").write_text("API_KEY=sk-realsecret1234567890", encoding="utf-8")
+    (root / "secret.env").write_text("API_KEY=AI_TEAM_OS_TEST_sk-PLACEHOLDER-LOCAL", encoding="utf-8")
     (root / "id_rsa").write_text("ssh private key fake", encoding="utf-8")
     (root / "binary.dat").write_bytes(b"\x00\x01\x02binary")
     # 敏感子目录
@@ -211,11 +211,11 @@ def test_evidence_no_credentials(tmp_path: Path) -> None:
         tool_name="t",
         source_type="local",
         source_uri="u",
-        content="api_key=sk-supersecret1234567890 and token",
+        content="api_key=AI_TEAM_OS_TEST_sk-PLACEHOLDER-LOCAL and token",
     )
     snapshot = w.snapshot_path(rec.evidence_id).read_text(encoding="utf-8")
-    assert "sk-supersecret" not in snapshot
-    assert "sk-supersecret" not in rec.summary
+    assert "AI_TEAM_OS_TEST_sk-PLACEHOLDER-LOCAL" not in snapshot
+    assert "AI_TEAM_OS_TEST_sk-PLACEHOLDER-LOCAL" not in rec.summary
 
 
 def test_evidence_quota(tmp_path: Path) -> None:

@@ -91,7 +91,7 @@ describe("Settings · Connections", () => {
     const keyInputs = await screen.findAllByLabelText("API Key");
     const keyInput = keyInputs[0];
     expect(keyInput.getAttribute("type")).toBe("password");
-    await userEvent.type(keyInput, "SK-PLACEHOLDER-test-value");
+    await userEvent.type(keyInput, "AI_TEAM_OS_TEST_SETTINGS_INPUT");
     await userEvent.click(screen.getAllByRole("button", { name: /安全保存/ })[0]);
     await waitFor(() => expect(save).toHaveBeenCalled());
     // 提交后表单清空（不残留 Secret 值）

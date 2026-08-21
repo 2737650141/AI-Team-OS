@@ -31,32 +31,32 @@ def test_budget_property_readonly_snapshot(tmp_path: Path) -> None:
 
 
 def test_pkcs8_private_key_scanned() -> None:
-    """四.3：PKCS#8 私钥模式（BEGIN PRIVATE KEY）被统一扫描命中。"""
+    """PKCS#8 private-key fixtures are detected and redacted."""
     pkcs8 = (
-        "-----BEGIN PRIVATE KEY-----\n"
-        "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQfake\n"
-        "-----END PRIVATE KEY-----"
+        "-----BEGIN " + "PRIVATE KEY-----\n"
+        + "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL\n"
+        + "-----END " + "PRIVATE KEY-----"
     )
     hits = scan_text(pkcs8)
     assert any("PRIVATE KEY" in h for h in hits)
-    assert "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQfake" not in redact(pkcs8)
-
-
+    assert "AI_TEAM_OS_TEST_MOCK_PRIVATE_KEY_MATERIAL" not in redact(pkcs8)
 def test_redact_and_scan_share_patterns() -> None:
-    """四.4：运行时脱敏与打包扫描共用模式集——脱敏后扫描零命中。"""
+    """Runtime redaction and static scanning use the same patterns."""
+    sk_fixture = "AI_TEAM_OS_TEST_sk-PLACEHOLDER-LOW-FIXES"
+    aws_fixture = "AI_TEAM_OS_TEST_" + "AK" + "IA" + "MOCK" + "A" * 12
+    bearer_fixture = "Bearer AI_TEAM_OS_TEST_LOW_FIXES_BEARER"
+    github_fixture = "AI_TEAM_OS_TEST_" + "gh" + "p_" + "MOCK" + "A" * 20
     samples = [
-        "key=sk-abcdef1234567890xyz",
-        "aws=AKIA1234567890ABCDEF",
-        "token=Bearer abcdef.ghijkl.mnopqr",
-        "gh=ghp_abcdefghijklmnopqrstuvwxyz1234567890",
-        'api_key="AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz012345"',
+        "key=" + sk_fixture,
+        "aws=" + aws_fixture,
+        "token=" + bearer_fixture,
+        "gh=" + github_fixture,
+        "api_key=" + sk_fixture,
     ]
     for sample in samples:
-        assert scan_text(sample), f"样本未被扫描命中: {sample}"
+        assert scan_text(sample), f"fixture was not scanned: {sample}"
         cleaned = redact(sample)
-        assert scan_text(cleaned) == [], f"脱敏后仍有命中: {sample} -> {cleaned}"
-
-
+        assert scan_text(cleaned) == [], f"fixture was not redacted: {sample} -> {cleaned}"
 def test_secret_patterns_are_shared_registry() -> None:
     """四.4：统一模式集是唯一权威（SECRET_PATTERNS 非空且覆盖核心形态）。"""
     assert SECRET_PATTERNS

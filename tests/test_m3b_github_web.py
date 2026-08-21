@@ -170,12 +170,12 @@ def test_gh_429() -> None:
 def test_gh_token_not_leaked() -> None:
     """Token 不进入状态/日志（6.2）：调用记录与结果无 Token。"""
     client = GitHubClient(
-        token="ghp_supersecrettoken1234567890", transport=httpx.MockTransport(_github_handler)
+        token="AI_TEAM_OS_TEST_GITHUB_TOKEN", transport=httpx.MockTransport(_github_handler)
     )
     tools = {s.name: s for s in build_github_tools(client)}
     r = tools["github_repo_info"].handler("langchain-ai/langgraph")
     assert r["ok"]
-    assert "ghp_supersecrettoken" not in json.dumps(r)
+    assert "AI_TEAM_OS_TEST_GITHUB_TOKEN" not in json.dumps(r)
 
 
 def test_gh_write_interfaces_unreachable() -> None:

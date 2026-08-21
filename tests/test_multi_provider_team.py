@@ -215,7 +215,7 @@ def test_gt_mp07_team_routing_api_and_test_provider_never_claim_real_ready(
         provider_id = provider["provider_id"]
         client.put(
             f"/settings/connections/providers/{provider_id}/credential",
-            json={"api_key": "TEST-TOKEN-M6-ISOLATED", "storage_mode": "session"},
+            json={"api_key": "AI_TEAM_OS_TEST_M6_ISOLATED", "storage_mode": "session"},
         )
         for role in ("supervisor", "executor", "reviewer"):
             saved = client.put(
@@ -238,7 +238,7 @@ def test_gt_mp07_team_routing_api_and_test_provider_never_claim_real_ready(
         assert result["ready"] == 0
         assert result["status"] == "PARTIAL"
         serialized = str(routing) + str(result)
-        assert "TEST-TOKEN-M6-ISOLATED" not in serialized
+        assert "AI_TEAM_OS_TEST_M6_ISOLATED" not in serialized
 
 
 def test_gt_mp08_project_route_api_overrides_global(tmp_path: Path, monkeypatch) -> None:

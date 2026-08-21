@@ -101,7 +101,7 @@ def test_gt_m02_edit_confirm_supersedes_prior_fact(tmp_path: Path) -> None:
 
 def test_gt_m03_secret_and_sensitive_content_never_persist(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    secret = "SK-PLACEHOLDER-abcdefghijklmnopqrstuvwxyz123456"
+    secret = "AI_TEAM_OS_TEST_sk-PLACEHOLDER-MEMORY"
     proposal, decision = service.propose(
         memory_type="semantic_user",
         subject="credential",

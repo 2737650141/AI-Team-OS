@@ -51,8 +51,9 @@ def test_resolver_priority_session_over_env(monkeypatch) -> None:
     """SecretResolver：Session > Secure > ENV。"""
     monkeypatch.setenv("AI_TEAM_MODEL_API_KEY", "env-key")
     resolver = SecretResolver(session=SessionSecretStore())
-    resolver.set("openai_compatible.api_key", "session-key", "session")
-    assert resolver.resolve("openai_compatible.api_key", ["AI_TEAM_MODEL_API_KEY"]) == "session-key"
+    session_value = "AI_TEAM_OS_TEST_SESSION_VALUE"
+    resolver.set("openai_compatible.api_key", session_value, "session")
+    assert resolver.resolve("openai_compatible.api_key", ["AI_TEAM_MODEL_API_KEY"]) == session_value
     assert resolver.store_mode("openai_compatible.api_key") == "session"
     resolver.delete("openai_compatible.api_key")
     # 删除后回退环境变量
@@ -227,13 +228,13 @@ def test_web_saved_credentials_drive_real_provider(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     resolver = default_resolver(data_dir)
     resolver.set("openai_compatible.base_url", "https://8.8.8.8/v1", "secure")
-    resolver.set("openai_compatible.api_key", "SK-PLACEHOLDER-web-key-123456", "secure")
+    resolver.set("openai_compatible.api_key", "AI_TEAM_OS_TEST_sk-PLACEHOLDER-CONNECTIONS", "secure")
     resolver.set("openai_compatible.default_model", "web-model", "secure")
 
     settings = AppSettings()  # env 未配置（enable_real=False）
     url, key, model = _web_configured_credentials(settings, data_dir)
     assert url == "https://8.8.8.8/v1"
-    assert key == "SK-PLACEHOLDER-web-key-123456"
+    assert key == "AI_TEAM_OS_TEST_sk-PLACEHOLDER-CONNECTIONS"
     assert model == "web-model"
 
     provider = build_provider(settings, data_dir)
@@ -258,7 +259,7 @@ def test_web_saved_credentials_satisfy_real_gate(tmp_path: Path, monkeypatch) ->
     data_dir = tmp_path / "data"
     resolver = default_resolver(data_dir)
     resolver.set("openai_compatible.base_url", "https://8.8.8.8/v1", "secure")
-    resolver.set("openai_compatible.api_key", "SK-PLACEHOLDER-web-key-123456", "secure")
+    resolver.set("openai_compatible.api_key", "AI_TEAM_OS_TEST_sk-PLACEHOLDER-CONNECTIONS", "secure")
 
     state = TaskState(
         task_id="t1",

@@ -322,8 +322,8 @@ def test_output_limited(policy: CommandPolicy, worktree: Path) -> None:
 # ---------- 39. stdout/stderr 脱敏 ----------
 def test_output_redacted(policy: CommandPolicy, worktree: Path) -> None:
     runner = _runner(policy, worktree)
-    redacted = runner._sanitize(b"error: key=sk-abcdef1234567890xyz")
-    assert "sk-abcdef1234567890xyz" not in redacted
+    redacted = runner._sanitize(b"error: key=AI_TEAM_OS_TEST_sk-PLACEHOLDER-SANDBOX")
+    assert "AI_TEAM_OS_TEST_sk-PLACEHOLDER-SANDBOX" not in redacted
     assert "***" in redacted
 
 

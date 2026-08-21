@@ -63,8 +63,7 @@ def test_gitignore_covers_secrets() -> None:
 
 
 def test_env_example_placeholder_exempt() -> None:
-    """MEDIUM（sa_20260808_101606）：.env.example 占位符以 SK-PLACEHOLDER 开头，
-    提交前扫描放行（CI/打包不会因示例文件 fail）。"""
+    """An empty environment-template value is not a secret."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -73,11 +72,11 @@ def test_env_example_placeholder_exempt() -> None:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     text = (ROOT / ".env.example").read_text(encoding="utf-8")
-    assert mod.scan_text(text) == []
+    assert mod.scan_text(text, source_path=".env.example") == []
 
 
-def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
-    """防复发 2.7-2/2.7-6：提交前扫描——测试前缀（SK-PLACEHOLDER）放行、真实模式阻塞。"""
+def test_staged_scan_allows_marked_fixture_and_blocks_real(monkeypatch) -> None:
+    """Only marked tests fixtures are exempt; unmarked values remain blocking."""
     import importlib.util
 
     from app.core.secrets import SECRET_PATTERNS
@@ -88,35 +87,38 @@ def test_staged_scan_allows_placeholder_and_blocks_real(monkeypatch) -> None:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    placeholder = "AI_TEAM_MODEL_API_KEY=SK-PLACEHOLDER-1234567890"
-    real = "AI_TEAM_MODEL_API_KEY=" + "sk-" + "a" * 30  # 拼接避免完整假密钥入 staged diff
-    # 测试前缀豁免 → 放行
-    assert mod.scan_text(placeholder) == []
-    # 冒号形式（sa_20260808_100458 LOW）
-    assert mod.scan_text("token: TEST-TOKEN-abcdefgh123456") == []
-    # 真实 sk- 命中 → 阻塞
-    assert len(mod.scan_text(real)) >= 1
-    # HIGH 修复（sa_20260808_095002）：'# SK-PLACEHOLDER' 注释不得掩护真实密钥
-    sneaky = 'api_key="' + "sk-" + "b" * 30 + '"  # SK-PLACEHOLDER'
-    assert len(mod.scan_text(sneaky)) >= 1
-    # LOW（sa_20260808_100103）：嵌入 SK-PLACEHOLDER 的真实密钥（值不以测试前缀开头）仍阻塞
-    embedded = "sk-" + "a" * 20 + "SK-PLACEHOLDER"
-    assert len(mod.scan_text(embedded)) >= 1
-    # MEDIUM（sa_20260808_095532）：报告只含指纹——不包含真实密钥原文
-    report = mod.scan_text('k = "' + "sk-" + "c" * 30 + '"')
-    assert report and "c" * 30 not in report[0] and "sha256:" in report[0]
-    # MEDIUM：多行 PEM 私钥命中（整段 DOTALL 扫描；拼接避免完整标记入 staged diff）
+    test_path = "tests/test_sec01_incident.py"
+    placeholder = "AI_TEAM_MODEL_API_KEY=AI_TEAM_OS_TEST_sk-PLACEHOLDER-INCIDENT"
+    assert mod.scan_text(placeholder, source_path=test_path) == []
+    assert mod.scan_text("token:AI_TEAM_OS_TEST_INCIDENT_TOKEN", source_path=test_path) == []
+
+    real = "AI_TEAM_MODEL_API_KEY=" + "sk-" + "a" * 30
+    assert len(mod.scan_text(real, source_path=test_path)) >= 1
+
+    # A comment marker and a variable-name marker do not exempt a value.
+    sneaky = 'api_key="' + "sk-" + "b" * 30 + '"  # AI_TEAM_OS_TEST_'
+    assert len(mod.scan_text(sneaky, source_path=test_path)) >= 1
+    named_marker = "AI_TEAM_OS_TEST_API_KEY=" + "sk-" + "c" * 30
+    assert len(mod.scan_text(named_marker, source_path=test_path)) >= 1
+    embedded = "sk-" + "a" * 20 + "AI_TEAM_OS_TEST_"
+    assert len(mod.scan_text(embedded, source_path=test_path)) >= 1
+
+    report = mod.scan_text('k = "' + "sk-" + "d" * 30 + '"')
+    assert report and "d" * 30 not in report[0] and "sha256:" in report[0]
+
     pem = (
-        "-----BEGIN "
+        "AI_TEAM_OS_TEST_"
+        + "-----BEGIN "
         + "PRIVATE KEY-----\n"
-        + "MIIB"
+        + "AI_TEAM_OS_TEST_MOCK_KEY"
         + "A" * 40
         + "\n"
         + "-----END "
         + "PRIVATE KEY-----\n"
     )
-    assert len(mod.scan_text(pem)) >= 1
-    # SECRET_PATTERNS 本身（运行时脱敏）仍覆盖 sk- 假密钥（防御纵深）
+    assert mod.scan_text(pem, source_path=test_path) == []
+    assert len(mod.scan_text(pem)) == 1
+
     assert any(p.search("sk-" + "a" * 20) for p in SECRET_PATTERNS)
 
 

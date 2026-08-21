@@ -20,7 +20,7 @@ def source(tmp_path: Path) -> Path:
     (root / "src").mkdir(parents=True)
     (root / "src" / "main.py").write_text("def main():\n    return 1\n", encoding="utf-8")
     (root / "README.md").write_text("# sample\n", encoding="utf-8")
-    (root / "secret.env").write_text("API_KEY=sk-realsecret1234567890", encoding="utf-8")
+    (root / "secret.env").write_text("API_KEY=AI_TEAM_OS_TEST_sk-PLACEHOLDER-WORKSPACE", encoding="utf-8")
     (root / ".venv").mkdir()
     (root / ".venv" / "x").write_text("venv", encoding="utf-8")
     (root / "node_modules").mkdir()
